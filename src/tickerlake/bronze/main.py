@@ -1,10 +1,11 @@
 """Bronze medallion layer for TickerLake."""
 
 import logging
-from datetime import date
+from datetime import datetime
 from pathlib import PurePath
 
 import polars as pl
+import pytz
 import s3fs
 import structlog
 from polygon import RESTClient
@@ -35,9 +36,14 @@ def store_daily_aggregates(df: pl.DataFrame, date_str: str) -> None:
 
 
 def get_valid_trading_days():
+    # Get current date in New York timezone to ensure consistency with market operations
+    ny_tz = pytz.timezone("America/New_York")
+
+    today_ny = datetime.now(ny_tz).date()
+
     return get_trading_days(
         start_date=settings.data_start_date,
-        end_date=date.today().strftime("%Y-%m-%d"),
+        end_date=today_ny.strftime("%Y-%m-%d"),
     )
 
 
