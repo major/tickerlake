@@ -49,6 +49,10 @@ addopts = [
     "--cov-branch",
     "--color=yes",
 ]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
 # Having problems with tests? Uncomment the following line to see more output.
 # log_cli = false
 # log_level = "DEBUG"
