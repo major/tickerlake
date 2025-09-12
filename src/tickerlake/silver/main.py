@@ -119,6 +119,24 @@ def read_all_etf_holdings() -> pl.DataFrame:
     return etf_membership
 
 
+def add_volume_ratio(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Adds a 'volume_avg_ratio' column to the given DataFrame, representing the ratio of the current 'volume' to its 20-period rolling mean per 'ticker'.
+
+    Parameters:
+        df (pl.DataFrame): Input DataFrame containing at least 'volume' and 'ticker' columns.
+
+    Returns:
+        pl.DataFrame: DataFrame with two additional columns:
+            - 'volume_avg': 20-period rolling mean of 'volume' per 'ticker'.
+            - 'volume_avg_ratio': Ratio of 'volume' to 'volume_avg'.
+    """
+    logger.info("Calculating volume average ratio")
+    return df.with_columns(
+        pl.col("volume").rolling_mean(window_size=20).over("ticker").alias("volume_avg")
+    ).with_columns((pl.col("volume") / pl.col("volume_avg")).alias("volume_avg_ratio"))
+
+
 def read_daily_aggs(valid_tickers: list = []) -> pl.DataFrame:
     """Read daily aggregates from bronze layer for specified tickers.
 
@@ -273,7 +291,11 @@ def main() -> None:
     unadjusted_daily_aggs = read_daily_aggs(valid_tickers)
     adjusted_daily_aggs = apply_splits(unadjusted_daily_aggs, split_details)
 
-    write_daily_aggs(adjusted_daily_aggs)
+    unadjusted_daily_aggs = None
+
+    adjusted_daily_aggs_with_volume_ratio = add_volume_ratio(adjusted_daily_aggs)
+
+    write_daily_aggs(adjusted_daily_aggs_with_volume_ratio)
     write_weekly_aggs(adjusted_daily_aggs)
     write_monthly_aggs(adjusted_daily_aggs)
 
