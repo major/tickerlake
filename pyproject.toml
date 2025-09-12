@@ -42,13 +42,12 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"
 addopts = [
-    "--cov=stocknews",
+    "--cov=tickerlake",
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-report=xml",
     "--cov-branch",
     "--color=yes",
-    "--verbose",
 ]
 # Having problems with tests? Uncomment the following line to see more output.
 # log_cli = false
