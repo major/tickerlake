@@ -6,6 +6,7 @@ readme = "README.md"
 authors = [{ name = "Major Hayden", email = "major@mhtx.net" }]
 requires-python = ">=3.12"
 dependencies = [
+    "fastexcel>=0.15.1",
     "pandas-market-calendars>=5.1.1",
     "polars>=1.33.1",
     "polygon-api-client>=1.15.3",

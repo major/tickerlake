@@ -22,6 +22,31 @@ def build_polygon_client() -> RESTClient:
     return RESTClient(settings.polygon_api_key.get_secret_value())
 
 
+def get_missing_stock_aggs() -> None:
+    """
+    Identifies missing trading days, downloads daily stock aggregates for each missing day,
+    and stores the retrieved data.
+
+    This function performs the following steps:
+    1. Retrieves a list of trading days for which aggregate data is missing.
+    2. Logs the number of missing days found.
+    3. For each missing day:
+        a. Downloads the daily aggregate stock data.
+        b. Stores the downloaded data.
+        c. Logs the completion of data storage for that day.
+
+    Returns:
+        None
+    """
+    missing_days = get_missing_trading_days()
+    logger.info(f"Found {len(missing_days)} missing days.")
+
+    for day in missing_days:
+        daily_aggs = download_daily_aggregates(date_str=day)
+        store_daily_aggregates(daily_aggs, date_str=day)
+        logger.info(f"Stored data for {day}.")
+
+
 def download_daily_aggregates(date_str: str) -> pl.DataFrame:
     """Download daily stock market aggregates from Polygon.io API.
 
@@ -109,6 +134,18 @@ def get_missing_trading_days():
 
 
 def get_ticker_details() -> pl.DataFrame:
+    """
+    Fetches active stock tickers from the Polygon API and returns their details as a Polars DataFrame.
+
+    Returns:
+        pl.DataFrame: A DataFrame containing details of up to 1000 active stock tickers.
+
+    Raises:
+        Any exceptions raised by the Polygon API client during ticker retrieval.
+
+    Note:
+        The function logs the number of tickers fetched.
+    """
     client = build_polygon_client()
 
     tickers = [
@@ -127,25 +164,199 @@ def get_ticker_details() -> pl.DataFrame:
 
 
 def write_ticker_details(df: pl.DataFrame) -> None:
+    """
+    Writes the provided Polars DataFrame containing ticker details to a Parquet file in an S3 bucket.
+
+    Args:
+        df (pl.DataFrame): The DataFrame containing ticker details to be written.
+
+    Returns:
+        None
+
+    Side Effects:
+        Saves the DataFrame as a Parquet file to the specified S3 path using the configured storage options.
+    """
     path = f"s3://{settings.s3_bucket_name}/bronze/tickers/data.parquet"
     df.write_parquet(file=path, storage_options=s3_storage_options)
 
 
-def main():
-    """Download and store missing trading day data.
-
-    Downloads daily aggregates for any missing trading days and stores
-    them in the bronze layer of the data lake.
+def get_split_details() -> pl.DataFrame:
     """
-    missing_days = get_missing_trading_days()
-    logger.info(f"Found {len(missing_days)} missing days.")
+    Fetches recent stock split details from the Polygon API and returns them as a Polars DataFrame.
 
-    for day in missing_days:
-        daily_aggs = download_daily_aggregates(date_str=day)
-        store_daily_aggregates(daily_aggs, date_str=day)
-        logger.info(f"Stored data for {day}.")
+    Returns:
+        pl.DataFrame: A DataFrame containing the fetched split details, with at least an 'id' column of type string.
 
+    Logs:
+        The number of splits fetched.
+    """
+    client = build_polygon_client()
+
+    splits = [
+        s
+        for s in client.list_splits(
+            execution_date_gte=settings.data_start_date,
+            order="asc",
+            sort="execution_date",
+            limit=1000,
+        )
+    ]
+
+    logger.info(f"Fetched {len(splits)} recent splits")
+    return pl.DataFrame(splits, schema={"id": pl.String})
+
+
+def write_split_details(df: pl.DataFrame) -> None:
+    """
+    Writes the provided Polars DataFrame containing split details to a Parquet file in an S3 bucket.
+
+    Args:
+        df (pl.DataFrame): The DataFrame containing split details to be written.
+
+    Returns:
+        None
+
+    Side Effects:
+        Writes the DataFrame to the specified S3 location using the provided storage options.
+    """
+    path = f"s3://{settings.s3_bucket_name}/bronze/splits/data.parquet"
+    df.write_parquet(file=path, storage_options=s3_storage_options)
+
+
+def write_ssga_holdings(source_url: str, etf_ticker: str) -> None:
+    """
+    Reads ETF holdings data from an Excel file, filters for USD-denominated tickers,
+    and writes the sorted list of tickers to a Parquet file in an S3 bucket.
+
+    Args:
+        source_url (str): The URL or path to the Excel file containing holdings data.
+        etf_ticker (str): The ticker symbol of the ETF whose holdings are being processed.
+
+    Returns:
+        None
+    """
+    logger.info(f"Writing {etf_ticker} holdings")
+    df = (
+        pl.read_excel(
+            source_url,
+            sheet_name="holdings",
+            read_options={"header_row": 4},
+        )
+        .rename({"Ticker": "ticker"})
+        .filter((pl.col("Local Currency") == "USD") & (pl.col("ticker") != "-"))
+        .select("ticker")
+        .sort("ticker")
+    )
+    path = f"s3://{settings.s3_bucket_name}/bronze/holdings/{etf_ticker.lower()}/data.parquet"
+    df.write_parquet(file=path, storage_options=s3_storage_options)
+
+
+def write_qqq_holdings() -> None:
+    """
+    Reads QQQ holdings data from a CSV file, processes it to extract and sort ticker symbols,
+    and writes the result as a Parquet file to an S3 bucket.
+
+    The function performs the following steps:
+    1. Reads the source CSV file specified in `settings.qqq_holdings_source`.
+    2. Renames the "Holding Ticker" column to "ticker".
+    3. Selects only the "ticker" column and sorts it.
+    4. Writes the processed DataFrame to the specified S3 path in Parquet format using `s3_storage_options`.
+
+    Returns:
+        None
+    """
+    logger.info("Writing QQQ holdings")
+    df = (
+        pl.read_csv(settings.qqq_holdings_source)
+        .rename({"Holding Ticker": "ticker"})
+        .select(["ticker"])
+        .sort("ticker")
+    )
+    path = f"s3://{settings.s3_bucket_name}/bronze/holdings/qqq/data.parquet"
+    df.write_parquet(file=path, storage_options=s3_storage_options)
+
+
+def write_iwm_holdings() -> None:
+    """
+    Reads IWM holdings data from a CSV file, filters for USD market currency and valid tickers,
+    sorts the tickers, and prepares the DataFrame for further processing.
+
+    The CSV source and column names are specified in the settings.
+    """
+    logger.info("Writing IWM holdings")
+    df = (
+        pl.read_csv(
+            settings.iwm_holdings_source,
+            skip_rows=9,
+            columns=["Ticker", "Market Currency"],
+        )
+        .rename({"Ticker": "ticker"})
+        .filter((pl.col("Market Currency") == "USD") & (pl.col("ticker") != "-"))
+        .select(["ticker"])
+        .sort("ticker")
+    )
+    path = f"s3://{settings.s3_bucket_name}/bronze/holdings/iwm/data.parquet"
+    df.write_parquet(file=path, storage_options=s3_storage_options)
+
+
+def write_spy_holdings() -> None:
+    """
+    Writes the holdings data for the SPY ETF to the target destination.
+
+    This function retrieves SPY holdings from the source specified in the settings
+    and delegates the writing process to the `write_ssga_holdings` function.
+
+    Returns:
+        None
+    """
+    write_ssga_holdings(settings.spy_holdings_source, "SPY")
+
+
+def write_mdy_holdings() -> None:
+    """
+    Writes the holdings data for the MDY fund to the target destination.
+
+    This function retrieves the MDY holdings from the source specified in the settings
+    and writes them using the `write_ssga_holdings` function.
+
+    Returns:
+        None
+    """
+    write_ssga_holdings(settings.mdy_holdings_source, "MDY")
+
+
+def write_spsm_holdings() -> None:
+    """
+    Writes the holdings data for the SPSM fund by invoking the write_ssga_holdings function
+    with the SPSM holdings source and the fund identifier "SPSM".
+
+    Returns:
+        None
+    """
+    write_ssga_holdings(settings.spsm_holdings_source, "SPSM")
+
+
+def main():
+    """
+    Main entry point for processing and writing financial data.
+
+    This function performs the following tasks:
+    1. Retrieves and processes missing stock aggregate data.
+    2. Writes ticker details and split details to storage.
+    3. Writes holdings data for various ETFs including SPY, MDY, SPSM, QQQ, and IWM.
+    """
+
+    # Polygon data
+    get_missing_stock_aggs()
     write_ticker_details(get_ticker_details())
+    write_split_details(get_split_details())
+
+    # ETF data
+    write_spy_holdings()
+    write_mdy_holdings()
+    write_spsm_holdings()
+    write_qqq_holdings()
+    write_iwm_holdings()
 
 
 if __name__ == "__main__":
