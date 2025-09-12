@@ -32,7 +32,8 @@ def is_market_open():
     nyse = mcal.get_calendar("NYSE")
 
     # Get current time in the market's timezone
-    market_tz = pytz.timezone(nyse.tz.zone)
+    # nyse.tz is a ZoneInfo object, get its key for pytz
+    market_tz = pytz.timezone(str(nyse.tz))
     now_market_time = datetime.now(market_tz)
 
     # Get today's trading schedule

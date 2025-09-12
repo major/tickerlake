@@ -17,6 +17,11 @@ logging.basicConfig(level=logging.INFO)
 logger = structlog.get_logger()
 
 
+def build_polygon_client() -> RESTClient:
+    """Build and return a Polygon.io REST client."""
+    return RESTClient(settings.polygon_api_key.get_secret_value())
+
+
 def download_daily_aggregates(date_str: str) -> pl.DataFrame:
     """Download daily stock market aggregates from Polygon.io API.
 
@@ -27,7 +32,7 @@ def download_daily_aggregates(date_str: str) -> pl.DataFrame:
         DataFrame containing daily aggregates sorted by ticker.
 
     """
-    client = RESTClient(settings.polygon_api_key.get_secret_value())
+    client = build_polygon_client()
     grouped = client.get_grouped_daily_aggs(
         date_str,
         adjusted=False,
@@ -45,10 +50,7 @@ def store_daily_aggregates(df: pl.DataFrame, date_str: str) -> None:
 
     """
     path = f"s3://{settings.s3_bucket_name}/bronze/daily/{date_str}/data.parquet"
-    df.write_parquet(
-        file=path,
-        storage_options=s3_storage_options,
-    )
+    df.write_parquet(file=path, storage_options=s3_storage_options)
 
 
 def get_valid_trading_days():
@@ -106,6 +108,29 @@ def get_missing_trading_days():
     return sorted(valid_days - existing_days)
 
 
+def get_ticker_details() -> pl.DataFrame:
+    client = build_polygon_client()
+
+    tickers = [
+        t
+        for t in client.list_tickers(
+            market="stocks",
+            active=True,
+            order="asc",
+            sort="ticker",
+            limit=1000,
+        )
+    ]
+
+    logger.info(f"Fetched {len(tickers)} active tickers")
+    return pl.DataFrame(tickers)
+
+
+def write_ticker_details(df: pl.DataFrame) -> None:
+    path = f"s3://{settings.s3_bucket_name}/bronze/tickers/data.parquet"
+    df.write_parquet(file=path, storage_options=s3_storage_options)
+
+
 def main():
     """Download and store missing trading day data.
 
@@ -114,10 +139,13 @@ def main():
     """
     missing_days = get_missing_trading_days()
     logger.info(f"Found {len(missing_days)} missing days.")
+
     for day in missing_days:
         daily_aggs = download_daily_aggregates(date_str=day)
         store_daily_aggregates(daily_aggs, date_str=day)
         logger.info(f"Stored data for {day}.")
+
+    write_ticker_details(get_ticker_details())
 
 
 if __name__ == "__main__":
