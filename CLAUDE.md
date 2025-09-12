@@ -36,7 +36,7 @@ TickerLake follows a medallion architecture for financial data processing:
 - `is_market_open()`: Real-time market status using pandas_market_calendars
 - Handles timezone conversion automatically (NYSE uses US/Eastern)
 
-**S3 Storage**: 
+**S3 Storage**:
 - Path structure: `s3://bucket/bronze/daily/{YYYY-MM-DD}/data.parquet`
 - Supports custom endpoints via `s3_endpoint_url` setting
 - Uses Polars for efficient Parquet I/O with cloud storage
@@ -49,8 +49,21 @@ TickerLake follows a medallion architecture for financial data processing:
 ### Environment Variables
 ```
 POLYGON_API_KEY=your_api_key
-AWS_ACCESS_KEY_ID=your_access_key  
+AWS_ACCESS_KEY_ID=your_access_key
 AWS_SECRET_ACCESS_KEY=your_secret_key
 ```
 
 The bronze layer automatically identifies and downloads missing trading days on each run, making it safe for scheduled execution.
+
+## Code Standards
+
+### Documentation
+- All functions and classes must have PEP 257 compliant docstrings
+- One-line docstrings should be in imperative mood (e.g., "Get trading days" not "Gets trading days")
+- Multi-line docstrings should include Args and Returns sections where applicable
+- Module-level docstrings are required for all Python modules
+
+### Type Hints
+- All functions must have complete type annotations for parameters and return values
+- Use appropriate types from `typing` module when needed (e.g., `List`, `Dict`, `Optional`)
+- Class attributes should have type hints where possible

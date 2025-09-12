@@ -1,3 +1,5 @@
+"""Configuration settings for TickerLake application."""
+
 from datetime import date, timedelta
 
 from pydantic import SecretStr
@@ -5,6 +7,8 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    """Application configuration settings using Pydantic BaseSettings."""
+
     polygon_api_key: SecretStr = SecretStr("")
 
     s3_bucket_name: str = "tickerlake"
@@ -16,6 +20,8 @@ class Settings(BaseSettings):
     data_start_date: date = date.today() - timedelta(days=5 * 365)
 
     class Config:
+        """Pydantic configuration class."""
+
         env_file = ".env"
 
 

@@ -18,6 +18,15 @@ logger = structlog.get_logger()
 
 
 def download_daily_aggregates(date_str: str) -> pl.DataFrame:
+    """Download daily stock market aggregates from Polygon.io API.
+
+    Args:
+        date_str: Trading day in YYYY-MM-DD format.
+
+    Returns:
+        DataFrame containing daily aggregates sorted by ticker.
+
+    """
     client = RESTClient(settings.polygon_api_key.get_secret_value())
     grouped = client.get_grouped_daily_aggs(
         date_str,
@@ -28,6 +37,13 @@ def download_daily_aggregates(date_str: str) -> pl.DataFrame:
 
 
 def store_daily_aggregates(df: pl.DataFrame, date_str: str) -> None:
+    """Store daily aggregates DataFrame to S3 as Parquet file.
+
+    Args:
+        df: DataFrame containing daily aggregates data.
+        date_str: Trading day in YYYY-MM-DD format for file path.
+
+    """
     path = f"s3://{settings.s3_bucket_name}/bronze/daily/{date_str}/data.parquet"
     df.write_parquet(
         file=path,
@@ -36,6 +52,12 @@ def store_daily_aggregates(df: pl.DataFrame, date_str: str) -> None:
 
 
 def get_valid_trading_days():
+    """Get list of valid trading days from configured start date to today.
+
+    Returns:
+        List of trading days in YYYY-MM-DD format.
+
+    """
     # Get current date in New York timezone to ensure consistency with market operations
     ny_tz = pytz.timezone("America/New_York")
 
@@ -48,6 +70,12 @@ def get_valid_trading_days():
 
 
 def list_bronze_daily_folders():
+    """List existing daily data folders in S3 bronze layer.
+
+    Returns:
+        List of folder names (dates) that exist in S3.
+
+    """
     fs = s3fs.S3FileSystem(
         endpoint_url=settings.s3_endpoint_url,
         key=settings.aws_access_key_id.get_secret_value(),
@@ -59,12 +87,23 @@ def list_bronze_daily_folders():
 
 
 def get_missing_trading_days():
+    """Identify trading days that are missing from the bronze layer.
+
+    Returns:
+        Sorted list of missing trading days in YYYY-MM-DD format.
+
+    """
     valid_days = set(get_valid_trading_days())
     existing_days = set(list_bronze_daily_folders())
     return sorted(valid_days - existing_days)
 
 
 def main():
+    """Download and store missing trading day data.
+
+    Downloads daily aggregates for any missing trading days and stores
+    them in the bronze layer of the data lake.
+    """
     missing_days = get_missing_trading_days()
     logger.info(f"Found {len(missing_days)} missing days.")
     for day in missing_days:

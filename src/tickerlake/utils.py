@@ -1,3 +1,5 @@
+"""Utility functions for trading calendar and market status operations."""
+
 from datetime import datetime
 
 import pandas_market_calendars as mcal
@@ -5,15 +7,15 @@ import pytz
 
 
 def get_trading_days(start_date, end_date):
-    """
-    Get list of trading days between start and end dates.
+    """Get list of trading days between start and end dates.
 
     Args:
-        start_date: Start date (string or date object)
-        end_date: End date (string or date object)
+        start_date: Start date (string or date object).
+        end_date: End date (string or date object).
 
     Returns:
-        list: Trading days in YYYY-MM-DD format
+        Trading days in YYYY-MM-DD format.
+
     """
     calendar = mcal.get_calendar("NYSE")
     trading_days = calendar.valid_days(start_date=start_date, end_date=end_date)
@@ -21,11 +23,11 @@ def get_trading_days(start_date, end_date):
 
 
 def is_market_open():
-    """
-    Check if the market is currently open.
+    """Check if the market is currently open.
 
     Returns:
-        bool: True if market is open, False otherwise
+        True if market is open, False otherwise.
+
     """
     nyse = mcal.get_calendar("NYSE")
 
