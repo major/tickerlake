@@ -164,6 +164,7 @@ class TestStoreDailyAggregates:
             mock_write.assert_called_once_with(
                 file="s3://test-bucket/bronze/daily/2023-01-15/data.parquet",
                 storage_options=mock_storage_options,
+                compression="zstd",
             )
 
 
@@ -215,6 +216,24 @@ class TestListBronzeDailyFolders:
         result = list_bronze_daily_folders()
 
         assert result == ["2023-01-03", "2023-01-04", "2023-01-05"]
+        mock_fs.ls.assert_called_once_with("test-bucket/bronze/daily/")
+
+    @patch("tickerlake.bronze.main.s3fs.S3FileSystem")
+    @patch("tickerlake.bronze.main.settings")
+    def test_list_bronze_daily_folders_file_not_found(self, mock_settings, mock_s3fs):
+        """Test listing bronze daily folders when S3 prefix doesn't exist."""
+        mock_settings.s3_bucket_name = "test-bucket"
+        mock_settings.s3_endpoint_url = "https://s3.test.com"
+        mock_settings.aws_access_key_id.get_secret_value.return_value = "key"
+        mock_settings.aws_secret_access_key.get_secret_value.return_value = "secret"
+
+        mock_fs = MagicMock()
+        mock_s3fs.return_value = mock_fs
+        mock_fs.ls.side_effect = FileNotFoundError("Prefix not found")
+
+        result = list_bronze_daily_folders()
+
+        assert result == []
         mock_fs.ls.assert_called_once_with("test-bucket/bronze/daily/")
 
 
@@ -355,6 +374,7 @@ class TestWriteTickerDetails:
             mock_write.assert_called_once_with(
                 file="s3://test-bucket/bronze/tickers/data.parquet",
                 storage_options=mock_storage_options,
+                compression="zstd",
             )
 
 
@@ -413,7 +433,7 @@ class TestGetSplitDetails:
         result = get_split_details()
 
         mock_client.list_splits.assert_called_once_with(
-            execution_date_gte="2023-01-01",
+            execution_date_gte="2020-01-01",
             order="asc",
             sort="execution_date",
             limit=1000,
@@ -443,6 +463,7 @@ class TestWriteSplitDetails:
             mock_write.assert_called_once_with(
                 file="s3://test-bucket/bronze/splits/data.parquet",
                 storage_options=mock_storage_options,
+                compression="zstd",
             )
 
 
@@ -492,6 +513,7 @@ class TestWriteSSGAHoldings:
         mock_df.write_parquet.assert_called_once_with(
             file=expected_path,
             storage_options=mock_storage_options,
+            compression="zstd",
         )
         mock_logger.info.assert_called_once_with(f"Writing {etf_ticker} holdings")
 
@@ -527,6 +549,7 @@ class TestWriteQQQHoldings:
         mock_df.write_parquet.assert_called_once_with(
             file="s3://test-bucket/bronze/holdings/qqq/data.parquet",
             storage_options=mock_storage_options,
+            compression="zstd",
         )
         mock_logger.info.assert_called_once_with("Writing QQQ holdings")
 
@@ -567,6 +590,7 @@ class TestWriteIWMHoldings:
         mock_df.write_parquet.assert_called_once_with(
             file="s3://test-bucket/bronze/holdings/iwm/data.parquet",
             storage_options=mock_storage_options,
+            compression="zstd",
         )
         mock_logger.info.assert_called_once_with("Writing IWM holdings")
 

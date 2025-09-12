@@ -14,6 +14,11 @@ logger = structlog.get_logger()
 
 
 def read_ticker_details() -> pl.DataFrame:
+    """Read ticker details from bronze layer and filter for stocks and ETFs.
+
+    Returns:
+        pl.DataFrame: DataFrame with ticker and name columns for CS and ETF types.
+    """
     logger.info("Reading ticker details")
     return (
         pl.scan_parquet(
@@ -30,6 +35,11 @@ def read_ticker_details() -> pl.DataFrame:
 
 
 def write_ticker_details(df: pl.DataFrame) -> None:
+    """Write ticker details to silver layer.
+
+    Args:
+        df: DataFrame containing ticker details to write.
+    """
     logger.info("Writing ticker details")
     path = f"s3://{settings.s3_bucket_name}/silver/tickers/data.parquet"
     df.write_parquet(
@@ -40,6 +50,14 @@ def write_ticker_details(df: pl.DataFrame) -> None:
 
 
 def read_split_details(valid_tickers: list = []) -> pl.DataFrame:
+    """Read split details from bronze layer for specified tickers.
+
+    Args:
+        valid_tickers: List of ticker symbols to filter for.
+
+    Returns:
+        pl.DataFrame: DataFrame with split details for valid tickers.
+    """
     logger.info("Reading split details")
     return (
         pl.scan_parquet(
@@ -55,6 +73,11 @@ def read_split_details(valid_tickers: list = []) -> pl.DataFrame:
 
 
 def write_split_details(df: pl.DataFrame) -> None:
+    """Write split details to silver layer.
+
+    Args:
+        df: DataFrame containing split details to write.
+    """
     logger.info("Writing split details")
     path = f"s3://{settings.s3_bucket_name}/silver/splits/data.parquet"
     df.write_parquet(
@@ -65,6 +88,14 @@ def write_split_details(df: pl.DataFrame) -> None:
 
 
 def read_etf_holdings(etf_ticker: str) -> pl.DataFrame:
+    """Read ETF holdings data from bronze layer.
+
+    Args:
+        etf_ticker: ETF ticker symbol to read holdings for.
+
+    Returns:
+        pl.DataFrame: DataFrame with ETF holdings including ticker and weight.
+    """
     path = f"s3://{settings.s3_bucket_name}/bronze/holdings/{etf_ticker.lower()}/data.parquet"
     return (
         pl.read_parquet(path, storage_options=s3_storage_options)
@@ -77,6 +108,11 @@ def read_etf_holdings(etf_ticker: str) -> pl.DataFrame:
 
 
 def read_all_etf_holdings() -> pl.DataFrame:
+    """Read and aggregate holdings for all configured ETFs.
+
+    Returns:
+        pl.DataFrame: DataFrame with ticker and list of ETFs holding each ticker.
+    """
     all_etfs = pl.concat([read_etf_holdings(x) for x in settings.etfs])
 
     etf_membership = all_etfs.group_by("ticker").agg(pl.col("etf").alias("etfs"))
@@ -84,6 +120,14 @@ def read_all_etf_holdings() -> pl.DataFrame:
 
 
 def read_daily_aggs(valid_tickers: list = []) -> pl.DataFrame:
+    """Read daily aggregates from bronze layer for specified tickers.
+
+    Args:
+        valid_tickers: List of ticker symbols to filter for.
+
+    Returns:
+        pl.DataFrame: DataFrame with daily OHLCV data and date column.
+    """
     logger.info("Reading daily aggregates")
     path = f"s3://{settings.s3_bucket_name}/bronze/daily/*/data.parquet"
     df = (
@@ -109,6 +153,15 @@ def read_daily_aggs(valid_tickers: list = []) -> pl.DataFrame:
 
 
 def apply_splits(daily_aggs: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
+    """Apply stock split adjustments to daily aggregate data.
+
+    Args:
+        daily_aggs: DataFrame with daily OHLCV data.
+        splits: DataFrame with split details including execution dates.
+
+    Returns:
+        pl.DataFrame: Split-adjusted daily aggregates.
+    """
     logger.info("Applying splits to daily aggregates")
     result = daily_aggs.join(splits, on="ticker", how="left")
 
@@ -136,6 +189,11 @@ def apply_splits(daily_aggs: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame
 
 
 def write_daily_aggs(df: pl.DataFrame) -> None:
+    """Write daily aggregates to silver layer.
+
+    Args:
+        df: DataFrame containing daily aggregates to write.
+    """
     logger.info(f"Writing daily aggregates ({df.shape[0]:,} rows)")
     path = f"s3://{settings.s3_bucket_name}/silver/daily/data.parquet"
     df.write_parquet(
@@ -147,6 +205,13 @@ def write_daily_aggs(df: pl.DataFrame) -> None:
 
 
 def write_time_aggs(df: pl.DataFrame, period: str, output_dir: str) -> None:
+    """Write time-aggregated data to specified directory.
+
+    Args:
+        df: DataFrame with daily data to aggregate.
+        period: Time period for aggregation (e.g., '1w', '1mo').
+        output_dir: Output directory name in silver layer.
+    """
     higher_timeframe_df = (
         df.group_by_dynamic(
             "date",
@@ -176,14 +241,25 @@ def write_time_aggs(df: pl.DataFrame, period: str, output_dir: str) -> None:
 
 
 def write_weekly_aggs(df: pl.DataFrame) -> None:
+    """Write weekly aggregates to silver layer.
+
+    Args:
+        df: DataFrame containing daily data to aggregate weekly.
+    """
     write_time_aggs(df, "1w", "weekly")
 
 
 def write_monthly_aggs(df: pl.DataFrame) -> None:
+    """Write monthly aggregates to silver layer.
+
+    Args:
+        df: DataFrame containing daily data to aggregate monthly.
+    """
     write_time_aggs(df, "1mo", "monthly")
 
 
 def main() -> None:
+    """Execute silver layer data processing pipeline."""
     ticker_details = read_ticker_details()
     etf_holdings = read_all_etf_holdings()
     ticker_details = ticker_details.join(etf_holdings, on="ticker", how="left")
@@ -202,5 +278,5 @@ def main() -> None:
     write_monthly_aggs(adjusted_daily_aggs)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()
