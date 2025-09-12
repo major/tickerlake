@@ -75,7 +75,11 @@ def store_daily_aggregates(df: pl.DataFrame, date_str: str) -> None:
 
     """
     path = f"s3://{settings.s3_bucket_name}/bronze/daily/{date_str}/data.parquet"
-    df.write_parquet(file=path, storage_options=s3_storage_options)
+    df.write_parquet(
+        file=path,
+        storage_options=s3_storage_options,
+        compression="zstd",
+    )
 
 
 def get_valid_trading_days():
@@ -107,7 +111,10 @@ def list_bronze_daily_folders():
         secret=settings.aws_secret_access_key.get_secret_value(),
     )
     prefix = f"{settings.s3_bucket_name}/bronze/daily/"
-    folders = fs.ls(prefix)
+    try:
+        folders = fs.ls(prefix)
+    except FileNotFoundError:
+        return []
     return [PurePath(folder).name for folder in folders if fs.isdir(folder)]
 
 
@@ -177,7 +184,11 @@ def write_ticker_details(df: pl.DataFrame) -> None:
         Saves the DataFrame as a Parquet file to the specified S3 path using the configured storage options.
     """
     path = f"s3://{settings.s3_bucket_name}/bronze/tickers/data.parquet"
-    df.write_parquet(file=path, storage_options=s3_storage_options)
+    df.write_parquet(
+        file=path,
+        storage_options=s3_storage_options,
+        compression="zstd",
+    )
 
 
 def get_split_details() -> pl.DataFrame:
@@ -193,17 +204,29 @@ def get_split_details() -> pl.DataFrame:
     client = build_polygon_client()
 
     splits = [
-        s
+        {
+            "ticker": s.ticker,  # type: ignore
+            "execution_date": datetime.strptime(s.execution_date, "%Y-%m-%d").date(),  # type: ignore
+            "split_from": s.split_from,  # type: ignore
+            "split_to": s.split_to,  # type: ignore
+        }
         for s in client.list_splits(
-            execution_date_gte=settings.data_start_date,
+            execution_date_gte="2020-01-01",
             order="asc",
             sort="execution_date",
             limit=1000,
         )
     ]
 
+    schema = {
+        "ticker": pl.Categorical,
+        "execution_date": pl.Date,
+        "split_from": pl.Float32,
+        "split_to": pl.Float32,
+    }
+
     logger.info(f"Fetched {len(splits)} recent splits")
-    return pl.DataFrame(splits, schema={"id": pl.String})
+    return pl.DataFrame(splits, schema_overrides=schema)
 
 
 def write_split_details(df: pl.DataFrame) -> None:
@@ -220,7 +243,11 @@ def write_split_details(df: pl.DataFrame) -> None:
         Writes the DataFrame to the specified S3 location using the provided storage options.
     """
     path = f"s3://{settings.s3_bucket_name}/bronze/splits/data.parquet"
-    df.write_parquet(file=path, storage_options=s3_storage_options)
+    df.write_parquet(
+        file=path,
+        storage_options=s3_storage_options,
+        compression="zstd",
+    )
 
 
 def write_ssga_holdings(source_url: str, etf_ticker: str) -> None:
@@ -248,7 +275,11 @@ def write_ssga_holdings(source_url: str, etf_ticker: str) -> None:
         .sort("ticker")
     )
     path = f"s3://{settings.s3_bucket_name}/bronze/holdings/{etf_ticker.lower()}/data.parquet"
-    df.write_parquet(file=path, storage_options=s3_storage_options)
+    df.write_parquet(
+        file=path,
+        storage_options=s3_storage_options,
+        compression="zstd",
+    )
 
 
 def write_qqq_holdings() -> None:
@@ -273,7 +304,11 @@ def write_qqq_holdings() -> None:
         .sort("ticker")
     )
     path = f"s3://{settings.s3_bucket_name}/bronze/holdings/qqq/data.parquet"
-    df.write_parquet(file=path, storage_options=s3_storage_options)
+    df.write_parquet(
+        file=path,
+        storage_options=s3_storage_options,
+        compression="zstd",
+    )
 
 
 def write_iwm_holdings() -> None:
@@ -296,7 +331,11 @@ def write_iwm_holdings() -> None:
         .sort("ticker")
     )
     path = f"s3://{settings.s3_bucket_name}/bronze/holdings/iwm/data.parquet"
-    df.write_parquet(file=path, storage_options=s3_storage_options)
+    df.write_parquet(
+        file=path,
+        storage_options=s3_storage_options,
+        compression="zstd",
+    )
 
 
 def write_spy_holdings() -> None:

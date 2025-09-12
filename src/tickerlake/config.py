@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     data_start_date: date = date.today() - timedelta(days=5 * 365)
 
     # Index holdings data source URLs
+    etfs: list = ["SPY", "MDY", "SPSM", "QQQ", "IWM"]
     spy_holdings_source: str = "https://www.ssga.com/us/en/individual/library-content/products/fund-data/etfs/us/holdings-daily-us-en-spy.xlsx"
     mdy_holdings_source: str = "https://www.ssga.com/us/en/individual/library-content/products/fund-data/etfs/us/holdings-daily-us-en-mdy.xlsx"
     spsm_holdings_source: str = "https://www.ssga.com/us/en/individual/library-content/products/fund-data/etfs/us/holdings-daily-us-en-spsm.xlsx"
