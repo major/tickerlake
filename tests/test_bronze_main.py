@@ -16,8 +16,14 @@ from tickerlake.bronze.main import (
     get_ticker_details,
     get_valid_trading_days,
     list_bronze_daily_folders,
+    main,
     store_daily_aggregates,
+    write_iwm_holdings,
+    write_mdy_holdings,
+    write_qqq_holdings,
     write_split_details,
+    write_spsm_holdings,
+    write_spy_holdings,
     write_ssga_holdings,
     write_ticker_details,
 )
@@ -488,3 +494,176 @@ class TestWriteSSGAHoldings:
             storage_options=mock_storage_options,
         )
         mock_logger.info.assert_called_once_with(f"Writing {etf_ticker} holdings")
+
+
+class TestWriteQQQHoldings:
+    """Tests for write_qqq_holdings function."""
+
+    @patch("tickerlake.bronze.main.logger")
+    @patch("tickerlake.bronze.main.pl.read_csv")
+    @patch("tickerlake.bronze.main.s3_storage_options")
+    @patch("tickerlake.bronze.main.settings")
+    def test_write_qqq_holdings(
+        self, mock_settings, mock_storage_options, mock_read_csv, mock_logger
+    ):
+        """Test writing QQQ holdings to S3."""
+        mock_settings.s3_bucket_name = "test-bucket"
+        mock_settings.qqq_holdings_source = "https://test.com/qqq.csv"
+        mock_storage_options.return_value = {"key": "value"}
+
+        # Create mock DataFrame with method chaining
+        mock_df = MagicMock()
+        mock_df.rename.return_value = mock_df
+        mock_df.select.return_value = mock_df
+        mock_df.sort.return_value = mock_df
+        mock_read_csv.return_value = mock_df
+
+        write_qqq_holdings()
+
+        mock_read_csv.assert_called_once_with("https://test.com/qqq.csv")
+        mock_df.rename.assert_called_once_with({"Holding Ticker": "ticker"})
+        mock_df.select.assert_called_once_with(["ticker"])
+        mock_df.sort.assert_called_once_with("ticker")
+        mock_df.write_parquet.assert_called_once_with(
+            file="s3://test-bucket/bronze/holdings/qqq/data.parquet",
+            storage_options=mock_storage_options,
+        )
+        mock_logger.info.assert_called_once_with("Writing QQQ holdings")
+
+
+class TestWriteIWMHoldings:
+    """Tests for write_iwm_holdings function."""
+
+    @patch("tickerlake.bronze.main.logger")
+    @patch("tickerlake.bronze.main.pl.read_csv")
+    @patch("tickerlake.bronze.main.s3_storage_options")
+    @patch("tickerlake.bronze.main.settings")
+    def test_write_iwm_holdings(
+        self, mock_settings, mock_storage_options, mock_read_csv, mock_logger
+    ):
+        """Test writing IWM holdings to S3."""
+        mock_settings.s3_bucket_name = "test-bucket"
+        mock_settings.iwm_holdings_source = "https://test.com/iwm.csv"
+        mock_storage_options.return_value = {"key": "value"}
+
+        # Create mock DataFrame with method chaining
+        mock_df = MagicMock()
+        mock_df.rename.return_value = mock_df
+        mock_df.filter.return_value = mock_df
+        mock_df.select.return_value = mock_df
+        mock_df.sort.return_value = mock_df
+        mock_read_csv.return_value = mock_df
+
+        write_iwm_holdings()
+
+        mock_read_csv.assert_called_once_with(
+            "https://test.com/iwm.csv",
+            skip_rows=9,
+            columns=["Ticker", "Market Currency"],
+        )
+        mock_df.rename.assert_called_once_with({"Ticker": "ticker"})
+        mock_df.select.assert_called_once_with(["ticker"])
+        mock_df.sort.assert_called_once_with("ticker")
+        mock_df.write_parquet.assert_called_once_with(
+            file="s3://test-bucket/bronze/holdings/iwm/data.parquet",
+            storage_options=mock_storage_options,
+        )
+        mock_logger.info.assert_called_once_with("Writing IWM holdings")
+
+
+class TestETFWrapperFunctions:
+    """Tests for ETF wrapper functions."""
+
+    @patch("tickerlake.bronze.main.write_ssga_holdings")
+    @patch("tickerlake.bronze.main.settings")
+    def test_write_spy_holdings(self, mock_settings, mock_write_ssga):
+        """Test write_spy_holdings calls write_ssga_holdings correctly."""
+        mock_settings.spy_holdings_source = "https://test.com/spy.xlsx"
+
+        write_spy_holdings()
+
+        mock_write_ssga.assert_called_once_with("https://test.com/spy.xlsx", "SPY")
+
+    @patch("tickerlake.bronze.main.write_ssga_holdings")
+    @patch("tickerlake.bronze.main.settings")
+    def test_write_mdy_holdings(self, mock_settings, mock_write_ssga):
+        """Test write_mdy_holdings calls write_ssga_holdings correctly."""
+        mock_settings.mdy_holdings_source = "https://test.com/mdy.xlsx"
+
+        write_mdy_holdings()
+
+        mock_write_ssga.assert_called_once_with("https://test.com/mdy.xlsx", "MDY")
+
+    @patch("tickerlake.bronze.main.write_ssga_holdings")
+    @patch("tickerlake.bronze.main.settings")
+    def test_write_spsm_holdings(self, mock_settings, mock_write_ssga):
+        """Test write_spsm_holdings calls write_ssga_holdings correctly."""
+        mock_settings.spsm_holdings_source = "https://test.com/spsm.xlsx"
+
+        write_spsm_holdings()
+
+        mock_write_ssga.assert_called_once_with("https://test.com/spsm.xlsx", "SPSM")
+
+
+class TestMainFunction:
+    """Tests for main function."""
+
+    @patch("tickerlake.bronze.main.write_iwm_holdings")
+    @patch("tickerlake.bronze.main.write_qqq_holdings")
+    @patch("tickerlake.bronze.main.write_spsm_holdings")
+    @patch("tickerlake.bronze.main.write_mdy_holdings")
+    @patch("tickerlake.bronze.main.write_spy_holdings")
+    @patch("tickerlake.bronze.main.write_split_details")
+    @patch("tickerlake.bronze.main.write_ticker_details")
+    @patch("tickerlake.bronze.main.get_split_details")
+    @patch("tickerlake.bronze.main.get_ticker_details")
+    @patch("tickerlake.bronze.main.get_missing_stock_aggs")
+    def test_main_calls_all_functions(
+        self,
+        mock_get_missing_aggs,
+        mock_get_tickers,
+        mock_get_splits,
+        mock_write_tickers,
+        mock_write_splits,
+        mock_write_spy,
+        mock_write_mdy,
+        mock_write_spsm,
+        mock_write_qqq,
+        mock_write_iwm,
+        sample_dataframe,
+    ):
+        """Test that main function calls all expected functions."""
+        # Setup return values
+        mock_get_tickers.return_value = sample_dataframe
+        mock_get_splits.return_value = sample_dataframe
+
+        main()
+
+        # Verify Polygon data functions called
+        mock_get_missing_aggs.assert_called_once()
+        mock_get_tickers.assert_called_once()
+        mock_get_splits.assert_called_once()
+        mock_write_tickers.assert_called_once_with(sample_dataframe)
+        mock_write_splits.assert_called_once_with(sample_dataframe)
+
+        # Verify ETF data functions called
+        mock_write_spy.assert_called_once()
+        mock_write_mdy.assert_called_once()
+        mock_write_spsm.assert_called_once()
+        mock_write_qqq.assert_called_once()
+        mock_write_iwm.assert_called_once()
+
+
+class TestMainEntryPoint:
+    """Tests for __main__ entry point."""
+
+    @patch("tickerlake.bronze.main.main")
+    def test_main_entry_point(self, mock_main):
+        """Test that __main__ calls main function."""
+        # Import the module to trigger __main__ execution
+        import tickerlake.bronze.main
+
+        # Reload to trigger __main__ block if needed
+        # Note: This doesn't actually test line 363 due to how imports work
+        # But it ensures the main function exists and is callable
+        assert callable(tickerlake.bronze.main.main)

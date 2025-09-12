@@ -359,5 +359,5 @@ def main():
     write_iwm_holdings()
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()
