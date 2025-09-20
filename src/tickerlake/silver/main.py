@@ -144,7 +144,7 @@ def add_volume_ratio(df: pl.DataFrame) -> pl.DataFrame:
     ).with_columns((pl.col("volume") / pl.col("volume_avg")).alias("volume_avg_ratio"))
 
 
-def read_daily_aggs(valid_tickers: list = [], ticker_details: pl.DataFrame = None) -> pl.DataFrame:
+def read_daily_aggs(valid_tickers: list = [], ticker_details: pl.DataFrame | None = None) -> pl.DataFrame:
     """Read daily aggregates from bronze layer for specified tickers.
 
     Args:
@@ -178,7 +178,9 @@ def read_daily_aggs(valid_tickers: list = [], ticker_details: pl.DataFrame = Non
     # Join with ticker details to add ticker_type
     if ticker_details is not None:
         df = df.join(
-            ticker_details.select(["ticker", "ticker_type"]),
+            ticker_details.select(["ticker", "ticker_type"]).with_columns(
+                pl.col("ticker").cast(pl.Categorical)
+            ),
             on="ticker",
             how="left"
         )
