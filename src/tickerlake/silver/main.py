@@ -17,7 +17,7 @@ def read_ticker_details() -> pl.DataFrame:
     """Read ticker details from bronze layer and filter for stocks and ETFs.
 
     Returns:
-        pl.DataFrame: DataFrame with ticker and name columns for CS and ETF types.
+        pl.DataFrame: DataFrame with ticker, name, and ticker_type columns for CS and ETF types.
     """
     logger.info("Reading ticker details")
     return (
@@ -28,8 +28,11 @@ def read_ticker_details() -> pl.DataFrame:
         .select(["ticker", "name", "type"])
         .filter(pl.col("type").is_in(["CS", "ETF"]))
         .collect()
-        .select(["ticker", "name"])
-        .with_columns(pl.col("ticker").cast(pl.Categorical))
+        .select(["ticker", "name", pl.col("type").alias("ticker_type")])
+        .with_columns(
+            pl.col("ticker").cast(pl.Categorical),
+            pl.col("ticker_type").cast(pl.Categorical)
+        )
         .sort("ticker")
     )
 
@@ -141,14 +144,15 @@ def add_volume_ratio(df: pl.DataFrame) -> pl.DataFrame:
     ).with_columns((pl.col("volume") / pl.col("volume_avg")).alias("volume_avg_ratio"))
 
 
-def read_daily_aggs(valid_tickers: list = []) -> pl.DataFrame:
+def read_daily_aggs(valid_tickers: list = [], ticker_details: pl.DataFrame | None = None) -> pl.DataFrame:
     """Read daily aggregates from bronze layer for specified tickers.
 
     Args:
         valid_tickers: List of ticker symbols to filter for.
+        ticker_details: DataFrame with ticker details including ticker_type.
 
     Returns:
-        pl.DataFrame: DataFrame with daily OHLCV data and date column.
+        pl.DataFrame: DataFrame with daily OHLCV data, date column, and ticker_type.
     """
     logger.info("Reading daily aggregates")
     path = f"s3://{settings.s3_bucket_name}/bronze/daily/*/data.parquet"
@@ -170,6 +174,16 @@ def read_daily_aggs(valid_tickers: list = []) -> pl.DataFrame:
         )
         .sort(["date", "ticker"])
     )
+
+    # Join with ticker details to add ticker_type
+    if ticker_details is not None:
+        df = df.join(
+            ticker_details.select(["ticker", "ticker_type"]).with_columns(
+                pl.col("ticker").cast(pl.Categorical)
+            ),
+            on="ticker",
+            how="left"
+        )
 
     return df
 
@@ -194,8 +208,13 @@ def apply_splits(daily_aggs: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame
         .alias("adjustment_factor")
     )
 
+    # Include ticker_type in group_by if it exists
+    group_cols = ["ticker", "date", "open", "high", "low", "close", "volume"]
+    if "ticker_type" in daily_aggs.columns:
+        group_cols.append("ticker_type")
+
     result = result.group_by(
-        ["ticker", "date", "open", "high", "low", "close", "volume"],
+        group_cols,
         maintain_order=True,
     ).agg(pl.col("adjustment_factor").product().alias("total_adjustment"))
 
@@ -292,7 +311,7 @@ def main() -> None:
     split_details = read_split_details(valid_tickers)
     write_split_details(split_details)
 
-    unadjusted_daily_aggs = read_daily_aggs(valid_tickers)
+    unadjusted_daily_aggs = read_daily_aggs(valid_tickers, ticker_details)
     adjusted_daily_aggs = apply_splits(unadjusted_daily_aggs, split_details)
 
     unadjusted_daily_aggs = None
