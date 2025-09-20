@@ -51,14 +51,14 @@ jobs:
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
 
       - name: 🥇 Update gold data
-        run: |
-          uv run gold
-          ls -al
-          find . -name hvcs.db
+        run: uv run gold
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+
+      - name: Inspect the database for datasette
+        run: uv run datasette inspect --inspect-file inspect-data.json hvcs.db
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3
