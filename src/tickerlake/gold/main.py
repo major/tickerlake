@@ -59,7 +59,7 @@ def get_high_volume_closes() -> pl.DataFrame:
             ),
         )
         .collect()
-        .sort(["date", "ticker"])
+        .sort(["date", "ticker"], descending=[True, False])
     )
 
     # Get latest closing prices for each ticker
