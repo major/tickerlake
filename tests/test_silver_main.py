@@ -92,6 +92,9 @@ class TestTickerDetails:
             storage_options=mock_s3_storage,
         )
         assert isinstance(result, pl.DataFrame)
+        # Check that ticker_type column is included
+        assert "ticker_type" in result.columns
+        assert result["ticker_type"].dtype == pl.Categorical
 
     @patch("polars.DataFrame.write_parquet")
     def test_write_ticker_details(
@@ -202,6 +205,24 @@ class TestDailyAggregates:
         )
         assert isinstance(result, pl.DataFrame)
 
+    @patch("tickerlake.silver.main.pl.scan_parquet")
+    def test_read_daily_aggs_with_ticker_details(
+        self, mock_scan, sample_daily_data, sample_ticker_data, mock_s3_storage, mock_settings
+    ):
+        """Test reading daily aggregates with ticker details for ticker_type."""
+        mock_scan.return_value.filter.return_value.select.return_value.collect.return_value = sample_daily_data
+
+        from tickerlake.silver.main import read_daily_aggs
+
+        # Create ticker details with ticker_type
+        ticker_details = sample_ticker_data.select(["ticker", pl.col("type").alias("ticker_type")])
+        valid_tickers = ["AAPL", "MSFT"]
+        result = read_daily_aggs(valid_tickers, ticker_details)
+
+        assert isinstance(result, pl.DataFrame)
+        # Check that ticker_type column is added
+        assert "ticker_type" in result.columns
+
     def test_apply_splits(self, sample_daily_data, sample_split_data):
         """Test applying split adjustments to daily data."""
         from tickerlake.silver.main import apply_splits
@@ -218,6 +239,28 @@ class TestDailyAggregates:
         assert isinstance(result, pl.DataFrame)
         assert "date" in result.columns
         assert "ticker" in result.columns
+
+    def test_apply_splits_with_ticker_type(self, sample_daily_data, sample_split_data, sample_ticker_data):
+        """Test applying split adjustments preserves ticker_type column."""
+        from tickerlake.silver.main import apply_splits
+
+        # Add date and ticker_type columns to daily data
+        daily_with_date_and_type = sample_daily_data.with_columns(
+            pl.from_epoch(pl.col("timestamp"), time_unit="ms")
+            .cast(pl.Date)
+            .alias("date")
+        ).join(
+            sample_ticker_data.select(["ticker", pl.col("type").alias("ticker_type")]),
+            on="ticker",
+            how="left"
+        )
+
+        result = apply_splits(daily_with_date_and_type, sample_split_data)
+
+        assert isinstance(result, pl.DataFrame)
+        assert "date" in result.columns
+        assert "ticker" in result.columns
+        assert "ticker_type" in result.columns
 
     @patch("polars.DataFrame.write_parquet")
     def test_write_daily_aggs(
@@ -328,7 +371,10 @@ class TestMainFunction:
     ):
         """Test complete silver layer pipeline execution."""
         # Setup mocks
-        mock_read_ticker.return_value = sample_ticker_data[["ticker", "name"]]
+        mock_ticker_details = sample_ticker_data.select([
+            "ticker", "name", pl.col("type").alias("ticker_type")
+        ])
+        mock_read_ticker.return_value = mock_ticker_details
         mock_read_etf.return_value = pl.DataFrame({
             "ticker": ["AAPL", "MSFT"],
             "etfs": [["spy", "qqq"], ["spy"]],
