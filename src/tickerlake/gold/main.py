@@ -68,6 +68,26 @@ def get_high_volume_closes() -> pl.DataFrame:
     # Join the latest prices to the high volume DataFrame
     df_with_latest = df.join(latest_prices, on="ticker", how="left")
 
+    # Add columns to indicate if latest close is within or near the high volume channel
+    df_with_latest = df_with_latest.with_columns(
+        (
+            (pl.col("latest_close") >= pl.col("low"))
+            & (pl.col("latest_close") <= pl.col("high"))
+        ).alias("in_hvc_channel"),
+        (
+            (
+                # Above high but within 5% of high
+                (pl.col("latest_close") > pl.col("high"))
+                & (pl.col("latest_close") <= pl.col("high") * 1.05)
+            )
+            | (
+                # Below low but within 5% of low
+                (pl.col("latest_close") < pl.col("low"))
+                & (pl.col("latest_close") >= pl.col("low") * 0.95)
+            )
+        ).alias("near_hvc_channel"),
+    )
+
     return df_with_latest
 
 
@@ -84,6 +104,8 @@ def main():
         "volume_avg_ratio",
         "volume",
         "volume_avg",
+        "in_hvc_channel",
+        "near_hvc_channel",
     ])
     logger.info(f"Extracted {hvcs.height} high volume close records")
 
