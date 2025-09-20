@@ -19,6 +19,7 @@ def get_latest_closing_prices() -> pl.DataFrame:
     Returns:
         pl.DataFrame: DataFrame with ticker and latest_close columns.
     """
+    logger.info("Fetching latest closing prices for each ticker")
     path = f"s3://{settings.s3_bucket_name}/silver/daily/data.parquet"
     latest_prices = (
         pl.scan_parquet(path, storage_options=s3_storage_options)
@@ -41,13 +42,21 @@ def get_high_volume_closes() -> pl.DataFrame:
         pl.DataFrame: DataFrame with ticker, date, close, volume, volume_avg_ratio,
                      and latest_close columns.
     """
+    logger.info("Extracting high volume closes from daily data")
     path = f"s3://{settings.s3_bucket_name}/silver/daily/data.parquet"
+
     df = (
         pl.scan_parquet(path, storage_options=s3_storage_options)
         .filter(
             pl.col("volume_avg_ratio") >= 3,
-            pl.col("volume_avg") >= 200000,
-            pl.col("close") >= 5,
+            (
+                (
+                    (pl.col("ticker_type") == "CS")
+                    & (pl.col("volume_avg") >= 200000)
+                    & (pl.col("close") >= 5)
+                )
+                | ((pl.col("ticker_type") == "ETF") & (pl.col("volume_avg") >= 50000))
+            ),
         )
         .collect()
         .sort(["date", "ticker"])
@@ -63,17 +72,31 @@ def get_high_volume_closes() -> pl.DataFrame:
 
 
 def main():
+    logger.info("Starting high volume closes extraction")
     df = get_high_volume_closes()
 
-    print(
-        df.filter(pl.col("date") == pl.col("date").max())
-        .with_columns(pl.col("volume_avg_ratio").round(2).alias("volume_avg_ratio"))
-        .select([
-            "ticker",
-            "volume",
-            "volume_avg",
-            "volume_avg_ratio",
-        ])
+    hvcs = df.with_columns(
+        pl.col("volume_avg_ratio").round(2).alias("volume_avg_ratio")
+    ).select([
+        "date",
+        "ticker",
+        "ticker_type",
+        "volume_avg_ratio",
+        "volume",
+        "volume_avg",
+    ])
+    logger.info(f"Extracted {hvcs.height} high volume close records")
+
+    logger.info("Writing high volume closes to SQLite database")
+    hvcs.filter(pl.col("ticker_type") == "CS").drop("ticker_type").write_database(
+        table_name="high_volume_closes_stocks",
+        connection="sqlite:///hvcs.db",
+        if_table_exists="replace",
+    )
+    hvcs.filter(pl.col("ticker_type") == "ETF").drop("ticker_type").write_database(
+        table_name="high_volume_closes_etfs",
+        connection="sqlite:///hvcs.db",
+        if_table_exists="replace",
     )
 
 
