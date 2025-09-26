@@ -31,7 +31,7 @@ def read_ticker_details() -> pl.DataFrame:
         .select(["ticker", "name", pl.col("type").alias("ticker_type")])
         .with_columns(
             pl.col("ticker").cast(pl.Categorical),
-            pl.col("ticker_type").cast(pl.Categorical)
+            pl.col("ticker_type").cast(pl.Categorical),
         )
         .sort("ticker")
     )
@@ -144,7 +144,9 @@ def add_volume_ratio(df: pl.DataFrame) -> pl.DataFrame:
     ).with_columns((pl.col("volume") / pl.col("volume_avg")).alias("volume_avg_ratio"))
 
 
-def read_daily_aggs(valid_tickers: list = [], ticker_details: pl.DataFrame | None = None) -> pl.DataFrame:
+def read_daily_aggs(
+    valid_tickers: list = [], ticker_details: pl.DataFrame | None = None
+) -> pl.DataFrame:
     """Read daily aggregates from bronze layer for specified tickers.
 
     Args:
@@ -159,7 +161,6 @@ def read_daily_aggs(valid_tickers: list = [], ticker_details: pl.DataFrame | Non
     df = (
         pl.scan_parquet(path, storage_options=s3_storage_options)
         .filter(pl.col("ticker").is_in(valid_tickers))
-        .select(["ticker", "timestamp", "open", "high", "low", "close", "volume"])
         .collect()
         .with_columns(
             pl.from_epoch(pl.col("timestamp"), time_unit="ms")
@@ -171,6 +172,7 @@ def read_daily_aggs(valid_tickers: list = [], ticker_details: pl.DataFrame | Non
             pl.col("close").cast(pl.Float64),
             pl.col("high").cast(pl.Float64),
             pl.col("low").cast(pl.Float64),
+            pl.col("transactions").cast(pl.UInt64),
         )
         .sort(["date", "ticker"])
     )
@@ -182,7 +184,7 @@ def read_daily_aggs(valid_tickers: list = [], ticker_details: pl.DataFrame | Non
                 pl.col("ticker").cast(pl.Categorical)
             ),
             on="ticker",
-            how="left"
+            how="left",
         )
 
     return df
@@ -209,7 +211,16 @@ def apply_splits(daily_aggs: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame
     )
 
     # Include ticker_type in group_by if it exists
-    group_cols = ["ticker", "date", "open", "high", "low", "close", "volume"]
+    group_cols = [
+        "ticker",
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "transactions",
+    ]
     if "ticker_type" in daily_aggs.columns:
         group_cols.append("ticker_type")
 
@@ -313,6 +324,8 @@ def main() -> None:
 
     unadjusted_daily_aggs = read_daily_aggs(valid_tickers, ticker_details)
     adjusted_daily_aggs = apply_splits(unadjusted_daily_aggs, split_details)
+
+    print(adjusted_daily_aggs.schema)
 
     unadjusted_daily_aggs = None
 
