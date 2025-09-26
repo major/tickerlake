@@ -39,6 +39,7 @@ def sample_daily_data():
         "low": [149.0, 150.0, 298.0, 299.0],
         "close": [151.0, 152.0, 302.0, 303.0],
         "volume": [50000000, 48000000, 30000000, 32000000],
+        "transactions": [1500, 1400, 1200, 1300],
     })
 
 
@@ -192,7 +193,9 @@ class TestDailyAggregates:
         self, mock_scan, sample_daily_data, mock_s3_storage, mock_settings
     ):
         """Test reading daily aggregates with ticker filtering."""
-        mock_scan.return_value.filter.return_value.select.return_value.collect.return_value = sample_daily_data
+        mock_scan.return_value.filter.return_value.collect.return_value = (
+            sample_daily_data
+        )
 
         from tickerlake.silver.main import read_daily_aggs
 
@@ -207,15 +210,25 @@ class TestDailyAggregates:
 
     @patch("tickerlake.silver.main.pl.scan_parquet")
     def test_read_daily_aggs_with_ticker_details(
-        self, mock_scan, sample_daily_data, sample_ticker_data, mock_s3_storage, mock_settings
+        self,
+        mock_scan,
+        sample_daily_data,
+        sample_ticker_data,
+        mock_s3_storage,
+        mock_settings,
     ):
         """Test reading daily aggregates with ticker details for ticker_type."""
-        mock_scan.return_value.filter.return_value.select.return_value.collect.return_value = sample_daily_data
+        mock_scan.return_value.filter.return_value.collect.return_value = (
+            sample_daily_data
+        )
 
         from tickerlake.silver.main import read_daily_aggs
 
         # Create ticker details with ticker_type
-        ticker_details = sample_ticker_data.select(["ticker", pl.col("type").alias("ticker_type")])
+        ticker_details = sample_ticker_data.select([
+            "ticker",
+            pl.col("type").alias("ticker_type"),
+        ])
         valid_tickers = ["AAPL", "MSFT"]
         result = read_daily_aggs(valid_tickers, ticker_details)
 
@@ -240,7 +253,9 @@ class TestDailyAggregates:
         assert "date" in result.columns
         assert "ticker" in result.columns
 
-    def test_apply_splits_with_ticker_type(self, sample_daily_data, sample_split_data, sample_ticker_data):
+    def test_apply_splits_with_ticker_type(
+        self, sample_daily_data, sample_split_data, sample_ticker_data
+    ):
         """Test applying split adjustments preserves ticker_type column."""
         from tickerlake.silver.main import apply_splits
 
@@ -252,7 +267,7 @@ class TestDailyAggregates:
         ).join(
             sample_ticker_data.select(["ticker", pl.col("type").alias("ticker_type")]),
             on="ticker",
-            how="left"
+            how="left",
         )
 
         result = apply_splits(daily_with_date_and_type, sample_split_data)
@@ -372,7 +387,9 @@ class TestMainFunction:
         """Test complete silver layer pipeline execution."""
         # Setup mocks
         mock_ticker_details = sample_ticker_data.select([
-            "ticker", "name", pl.col("type").alias("ticker_type")
+            "ticker",
+            "name",
+            pl.col("type").alias("ticker_type"),
         ])
         mock_read_ticker.return_value = mock_ticker_details
         mock_read_etf.return_value = pl.DataFrame({
