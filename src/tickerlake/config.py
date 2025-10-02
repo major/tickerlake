@@ -12,12 +12,11 @@ class Settings(BaseSettings):
     polygon_api_key: SecretStr = SecretStr("")
 
     s3_bucket_name: str = "tickerlake"
-    s3_endpoint_url: str = "https://s3.us-west-001.backblazeb2.com"
     aws_access_key_id: SecretStr = SecretStr("")
     aws_secret_access_key: SecretStr = SecretStr("")
-    aws_region: str = "us-west-001"
+    aws_region: str = "us-east-1"
 
-    data_start_date: date = date.today() - timedelta(days=5 * 365)
+    data_start_date: date = date.today() - timedelta(days=10 * 365)
 
     # Index holdings data source URLs
     etfs: list = ["SPY", "MDY", "SPSM", "QQQ", "IWM"]
@@ -38,6 +37,5 @@ settings = Settings()
 s3_storage_options = {
     "aws_access_key_id": settings.aws_access_key_id.get_secret_value(),
     "aws_secret_access_key": settings.aws_secret_access_key.get_secret_value(),
-    "endpoint_url": settings.s3_endpoint_url,
-    "region_name": settings.aws_region,
+    "aws_region": settings.aws_region,
 }

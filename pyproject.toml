@@ -7,6 +7,7 @@ authors = [{ name = "Major Hayden", email = "major@mhtx.net" }]
 requires-python = ">=3.12"
 dependencies = [
     "datasette>=0.65.1",
+    "deltalake>=0.23.1",
     "fastexcel>=0.15.1",
     "pandas-market-calendars>=5.1.1",
     "polars>=1.33.1",

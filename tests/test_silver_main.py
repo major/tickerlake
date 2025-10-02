@@ -95,21 +95,25 @@ class TestTickerDetails:
         assert isinstance(result, pl.DataFrame)
         # Check that ticker_type column is included
         assert "ticker_type" in result.columns
-        assert result["ticker_type"].dtype == pl.Categorical
 
-    @patch("polars.DataFrame.write_parquet")
+    @patch("tickerlake.silver.main.write_delta_table")
+    @patch("tickerlake.silver.main.delta_table_exists")
     def test_write_ticker_details(
-        self, mock_write, sample_ticker_data, mock_s3_storage, mock_settings
+        self,
+        mock_exists,
+        mock_write_delta,
+        sample_ticker_data,
+        mock_s3_storage,
+        mock_settings,
     ):
-        """Test writing ticker details to S3."""
+        """Test writing ticker details to Delta table."""
         from tickerlake.silver.main import write_ticker_details
 
+        # Test overwrite mode when table doesn't exist
+        mock_exists.return_value = False
         write_ticker_details(sample_ticker_data)
-
-        mock_write.assert_called_once_with(
-            file="s3://test-bucket/silver/tickers/data.parquet",
-            storage_options=mock_s3_storage,
-            compression="zstd",
+        mock_write_delta.assert_called_once_with(
+            sample_ticker_data, "tickers", mode="overwrite"
         )
 
 
@@ -134,19 +138,24 @@ class TestSplitDetails:
         )
         assert isinstance(result, pl.DataFrame)
 
-    @patch("polars.DataFrame.write_parquet")
+    @patch("tickerlake.silver.main.write_delta_table")
+    @patch("tickerlake.silver.main.delta_table_exists")
     def test_write_split_details(
-        self, mock_write, sample_split_data, mock_s3_storage, mock_settings
+        self,
+        mock_exists,
+        mock_write_delta,
+        sample_split_data,
+        mock_s3_storage,
+        mock_settings,
     ):
-        """Test writing split details to S3."""
+        """Test writing split details to Delta table."""
         from tickerlake.silver.main import write_split_details
 
+        # Test overwrite mode when table doesn't exist
+        mock_exists.return_value = False
         write_split_details(sample_split_data)
-
-        mock_write.assert_called_once_with(
-            file="s3://test-bucket/silver/splits/data.parquet",
-            storage_options=mock_s3_storage,
-            compression="zstd",
+        mock_write_delta.assert_called_once_with(
+            sample_split_data, "splits", mode="overwrite"
         )
 
 
@@ -277,20 +286,16 @@ class TestDailyAggregates:
         assert "ticker" in result.columns
         assert "ticker_type" in result.columns
 
-    @patch("polars.DataFrame.write_parquet")
+    @patch("tickerlake.silver.main.write_delta_table")
     def test_write_daily_aggs(
-        self, mock_write, sample_daily_data, mock_s3_storage, mock_settings
+        self, mock_write_delta, sample_daily_data, mock_s3_storage, mock_settings
     ):
-        """Test writing daily aggregates to S3."""
+        """Test writing daily aggregates to Delta table."""
         from tickerlake.silver.main import write_daily_aggs
 
-        write_daily_aggs(sample_daily_data)
-
-        mock_write.assert_called_once_with(
-            file="s3://test-bucket/silver/daily/data.parquet",
-            storage_options=mock_s3_storage,
-            compression="zstd",
-            row_group_size=100_000,
+        write_daily_aggs(sample_daily_data, mode="overwrite")
+        mock_write_delta.assert_called_once_with(
+            sample_daily_data, "daily", mode="overwrite"
         )
 
 
@@ -298,24 +303,24 @@ class TestTimeAggregates:
     """Test time-based aggregate functions."""
 
     @pytest.mark.parametrize(
-        "period,output_dir,function_name",
+        "period,table_name,function_name",
         [
             ("1w", "weekly", "write_weekly_aggs"),
             ("1mo", "monthly", "write_monthly_aggs"),
         ],
     )
-    @patch("polars.DataFrame.write_parquet")
+    @patch("tickerlake.silver.main.write_delta_table")
     def test_write_time_aggregates(
         self,
-        mock_write,
+        mock_write_delta,
         sample_daily_data,
         mock_s3_storage,
         mock_settings,
         period,
-        output_dir,
+        table_name,
         function_name,
     ):
-        """Test writing weekly and monthly aggregates."""
+        """Test writing weekly and monthly aggregates to Delta tables."""
         from tickerlake.silver import main
 
         # Add date column required for aggregation
@@ -329,13 +334,14 @@ class TestTimeAggregates:
         write_function = getattr(main, function_name)
         write_function(daily_with_date)
 
-        # Verify write was called with correct path
-        call_args = mock_write.call_args
-        assert f"s3://test-bucket/silver/{output_dir}/data.parquet" in str(call_args)
+        # Verify write_delta_table was called with correct table name
+        assert mock_write_delta.called
+        call_args = mock_write_delta.call_args
+        assert table_name in str(call_args)
 
-    @patch("polars.DataFrame.write_parquet")
+    @patch("tickerlake.silver.main.write_delta_table")
     def test_write_time_aggs_direct(
-        self, mock_write, sample_daily_data, mock_s3_storage, mock_settings
+        self, mock_write_delta, sample_daily_data, mock_s3_storage, mock_settings
     ):
         """Test write_time_aggs function directly."""
         from tickerlake.silver.main import write_time_aggs
@@ -349,9 +355,9 @@ class TestTimeAggregates:
 
         write_time_aggs(daily_with_date, "1w", "weekly")
 
-        mock_write.assert_called_once()
-        call_args = mock_write.call_args
-        assert "s3://test-bucket/silver/weekly/data.parquet" in str(call_args)
+        mock_write_delta.assert_called_once()
+        call_args = mock_write_delta.call_args
+        assert "weekly" in str(call_args)
 
 
 class TestMainFunction:
@@ -360,6 +366,7 @@ class TestMainFunction:
     @patch("tickerlake.silver.main.write_monthly_aggs")
     @patch("tickerlake.silver.main.write_weekly_aggs")
     @patch("tickerlake.silver.main.write_daily_aggs")
+    @patch("tickerlake.silver.main.add_volume_ratio")
     @patch("tickerlake.silver.main.apply_splits")
     @patch("tickerlake.silver.main.read_daily_aggs")
     @patch("tickerlake.silver.main.write_split_details")
@@ -367,8 +374,10 @@ class TestMainFunction:
     @patch("tickerlake.silver.main.write_ticker_details")
     @patch("tickerlake.silver.main.read_all_etf_holdings")
     @patch("tickerlake.silver.main.read_ticker_details")
-    def test_main_pipeline(
+    @patch("tickerlake.silver.main.delta_table_exists")
+    def test_main_pipeline_full_rebuild(
         self,
+        mock_delta_exists,
         mock_read_ticker,
         mock_read_etf,
         mock_write_ticker,
@@ -376,6 +385,7 @@ class TestMainFunction:
         mock_write_split,
         mock_read_daily,
         mock_apply_splits,
+        mock_add_volume,
         mock_write_daily,
         mock_write_weekly,
         mock_write_monthly,
@@ -384,8 +394,9 @@ class TestMainFunction:
         sample_daily_data,
         sample_etf_holdings,
     ):
-        """Test complete silver layer pipeline execution."""
+        """Test complete silver layer pipeline execution in full rebuild mode."""
         # Setup mocks
+        mock_delta_exists.return_value = False  # Force full rebuild
         mock_ticker_details = sample_ticker_data.select([
             "ticker",
             "name",
@@ -397,16 +408,18 @@ class TestMainFunction:
             "etfs": [["spy", "qqq"], ["spy"]],
         })
         mock_read_split.return_value = sample_split_data
-        mock_read_daily.return_value = sample_daily_data.with_columns(
+        daily_with_date = sample_daily_data.with_columns(
             pl.from_epoch(pl.col("timestamp"), time_unit="ms")
             .cast(pl.Date)
             .alias("date")
         )
-        mock_apply_splits.return_value = mock_read_daily.return_value
+        mock_read_daily.return_value = daily_with_date
+        mock_apply_splits.return_value = daily_with_date
+        mock_add_volume.return_value = daily_with_date
 
         from tickerlake.silver.main import main
 
-        main()
+        main(full_rebuild=True)
 
         # Verify all steps were called
         mock_read_ticker.assert_called_once()
@@ -416,6 +429,7 @@ class TestMainFunction:
         mock_write_split.assert_called_once()
         mock_read_daily.assert_called_once()
         mock_apply_splits.assert_called_once()
+        mock_add_volume.assert_called_once()
         mock_write_daily.assert_called_once()
         mock_write_weekly.assert_called_once()
         mock_write_monthly.assert_called_once()
@@ -441,7 +455,6 @@ class TestDataTransformations:
             pl.from_epoch(pl.col("timestamp"), time_unit="ms")
             .cast(pl.Date)
             .alias("date"),
-            pl.col("ticker").cast(pl.Categorical),
             pl.col("volume").cast(pl.UInt64),
             pl.col("open").cast(pl.Float64),
             pl.col("close").cast(pl.Float64),
@@ -450,6 +463,6 @@ class TestDataTransformations:
         )
 
         assert result["date"].dtype == pl.Date
-        assert result["ticker"].dtype == pl.Categorical
+        assert result["ticker"].dtype == pl.String
         assert result["volume"].dtype == pl.UInt64
         assert result["open"].dtype == pl.Float64

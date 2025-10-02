@@ -6,8 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Development
 - `uv sync` - Install all dependencies
-- `uv run tickerlake` - Run the main application
-- `uv run python src/tickerlake/bronze/main.py` - Run the bronze layer data pipeline directly
+- `uv run bronze` - Run the bronze layer (data ingestion)
+- `uv run silver` - Run the silver layer (incremental processing by default)
+- `uv run gold` - Run the gold layer (analytics and exports)
+
+### Silver Layer Modes
+- **Incremental mode** (default): Processes only new data since last run
+  - Checks max date in Delta table
+  - Only reads new bronze data
+  - Appends to existing Delta tables
+  - Rebuilds weekly/monthly aggregates from full dataset
+
+- **Full rebuild mode**: Reprocesses all data from scratch
+  - Use when schema changes or data corrections needed
+  - Add `full_rebuild=True` parameter to `main()` function
 
 ### GitHub Actions
 - Workflow runs on push/PR to main branch
@@ -23,6 +35,19 @@ TickerLake follows a medallion architecture for financial data processing:
   - Stores data as Parquet files in S3-compatible storage
   - Implements incremental loading by checking existing vs. required trading days
 
+- **Silver Layer** (`src/tickerlake/silver/`): Cleaned and enriched data using Delta Lake
+  - Uses Delta tables for ACID transactions and efficient incremental updates
+  - Applies split adjustments to historical price data
+  - Calculates volume ratios and technical indicators
+  - Incremental mode: Only processes new data since last run
+  - Full rebuild mode: Reprocesses all data from bronze layer
+  - Automatically generates weekly and monthly aggregates
+
+- **Gold Layer** (`src/tickerlake/gold/`): Business-level aggregates and analytics
+  - Identifies high-volume trading days for pattern analysis
+  - Reads from silver Delta tables for optimal performance
+  - Exports to SQLite for easy querying and visualization
+
 ### Configuration Management
 - Uses Pydantic Settings with `.env` file support (`src/tickerlake/config.py`)
 - All sensitive credentials handled as `SecretStr` types
@@ -37,9 +62,18 @@ TickerLake follows a medallion architecture for financial data processing:
 - Handles timezone conversion automatically (NYSE uses US/Eastern)
 
 **S3 Storage**:
-- Path structure: `s3://bucket/bronze/daily/{YYYY-MM-DD}/data.parquet`
-- Supports custom endpoints via `s3_endpoint_url` setting
-- Uses Polars for efficient Parquet I/O with cloud storage
+- Bronze path structure: `s3://bucket/bronze/daily/{YYYY-MM-DD}/data.parquet`
+- Silver path structure: `s3://bucket/silver/{table_name}/_delta_log/...`
+- Uses Polars for efficient Parquet/Delta I/O with cloud storage
+
+**Delta Lake Integration** (`src/tickerlake/delta_utils.py`):
+- `write_delta_table()`: Write DataFrames to Delta tables with overwrite/append modes
+- `read_delta_table()`: Read Delta tables into Polars DataFrames
+- `scan_delta_table()`: Lazy scanning for query optimization
+- `merge_to_delta_table()`: Upsert operations for reference data
+- `get_max_date_from_delta()`: Track incremental processing state
+- `optimize_delta_table()`: Compact small files for better performance
+- `vacuum_delta_table()`: Clean up old file versions
 
 ### Data Sources
 - **Polygon.io**: Primary source for US stock market data

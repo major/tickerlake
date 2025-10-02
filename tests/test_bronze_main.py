@@ -35,7 +35,6 @@ def mock_settings():
     settings = MagicMock()
     settings.polygon_api_key.get_secret_value.return_value = "test_api_key"
     settings.s3_bucket_name = "test-bucket"
-    settings.s3_endpoint_url = "https://s3.test.com"
     settings.aws_access_key_id.get_secret_value.return_value = "test_access_key"
     settings.aws_secret_access_key.get_secret_value.return_value = "test_secret"
     settings.data_start_date = "2020-01-01"
@@ -200,7 +199,6 @@ class TestListBronzeDailyFolders:
     def test_list_bronze_daily_folders(self, mock_settings, mock_s3fs):
         """Test listing bronze daily folders from S3."""
         mock_settings.s3_bucket_name = "test-bucket"
-        mock_settings.s3_endpoint_url = "https://s3.test.com"
         mock_settings.aws_access_key_id.get_secret_value.return_value = "key"
         mock_settings.aws_secret_access_key.get_secret_value.return_value = "secret"
 
@@ -223,7 +221,6 @@ class TestListBronzeDailyFolders:
     def test_list_bronze_daily_folders_file_not_found(self, mock_settings, mock_s3fs):
         """Test listing bronze daily folders when S3 prefix doesn't exist."""
         mock_settings.s3_bucket_name = "test-bucket"
-        mock_settings.s3_endpoint_url = "https://s3.test.com"
         mock_settings.aws_access_key_id.get_secret_value.return_value = "key"
         mock_settings.aws_secret_access_key.get_secret_value.return_value = "secret"
 

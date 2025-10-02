@@ -1,11 +1,11 @@
-"""Silver medallion layer for TickerLake."""
+"""Gold medallion layer for TickerLake."""
 
 import logging
 
 import polars as pl
 import structlog
 
-from tickerlake.config import s3_storage_options, settings
+from tickerlake.delta_utils import scan_delta_table
 
 pl.Config(tbl_rows=-1, tbl_cols=-1, fmt_float="full")
 
@@ -14,15 +14,14 @@ logger = structlog.get_logger()
 
 
 def get_latest_closing_prices() -> pl.DataFrame:
-    """Get the latest closing price for each ticker.
+    """Get the latest closing price for each ticker from Delta table.
 
     Returns:
         pl.DataFrame: DataFrame with ticker and latest_close columns.
     """
     logger.info("Fetching latest closing prices for each ticker")
-    path = f"s3://{settings.s3_bucket_name}/silver/daily/data.parquet"
     latest_prices = (
-        pl.scan_parquet(path, storage_options=s3_storage_options)
+        scan_delta_table("daily")
         .group_by("ticker")
         .agg(
             pl.col("close").last().alias("latest_close"),
@@ -36,17 +35,16 @@ def get_latest_closing_prices() -> pl.DataFrame:
 
 
 def get_high_volume_closes() -> pl.DataFrame:
-    """Get days with unusually high trading volume and join latest closing prices.
+    """Get days with unusually high trading volume from Delta table and join latest closing prices.
 
     Returns:
         pl.DataFrame: DataFrame with ticker, date, close, volume, volume_avg_ratio,
                      and latest_close columns.
     """
     logger.info("Extracting high volume closes from daily data")
-    path = f"s3://{settings.s3_bucket_name}/silver/daily/data.parquet"
 
     df = (
-        pl.scan_parquet(path, storage_options=s3_storage_options)
+        scan_delta_table("daily")
         .filter(
             pl.col("volume_avg_ratio") >= 3,
             (

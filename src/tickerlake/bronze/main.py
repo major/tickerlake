@@ -106,7 +106,6 @@ def list_bronze_daily_folders():
 
     """
     fs = s3fs.S3FileSystem(
-        endpoint_url=settings.s3_endpoint_url,
         key=settings.aws_access_key_id.get_secret_value(),
         secret=settings.aws_secret_access_key.get_secret_value(),
     )
@@ -219,7 +218,7 @@ def get_split_details() -> pl.DataFrame:
     ]
 
     schema = {
-        "ticker": pl.Categorical,
+        "ticker": pl.String,
         "execution_date": pl.Date,
         "split_from": pl.Float32,
         "split_to": pl.Float32,

@@ -1,11 +1,20 @@
 """Silver medallion layer for TickerLake."""
 
 import logging
+from datetime import date
+from typing import Literal
 
 import polars as pl
 import structlog
 
 from tickerlake.config import s3_storage_options, settings
+from tickerlake.delta_utils import (
+    delta_table_exists,
+    get_max_date_from_delta,
+    merge_to_delta_table,
+    scan_delta_table,
+    write_delta_table,
+)
 
 pl.Config(tbl_rows=-1, tbl_cols=-1, fmt_float="full")
 
@@ -29,27 +38,21 @@ def read_ticker_details() -> pl.DataFrame:
         .filter(pl.col("type").is_in(["CS", "ETF"]))
         .collect()
         .select(["ticker", "name", pl.col("type").alias("ticker_type")])
-        .with_columns(
-            pl.col("ticker").cast(pl.Categorical),
-            pl.col("ticker_type").cast(pl.Categorical),
-        )
         .sort("ticker")
     )
 
 
 def write_ticker_details(df: pl.DataFrame) -> None:
-    """Write ticker details to silver layer.
+    """Write ticker details to silver layer Delta table.
 
     Args:
         df: DataFrame containing ticker details to write.
     """
-    logger.info("Writing ticker details")
-    path = f"s3://{settings.s3_bucket_name}/silver/tickers/data.parquet"
-    df.write_parquet(
-        file=path,
-        storage_options=s3_storage_options,
-        compression="zstd",
-    )
+    logger.info("Writing ticker details to Delta table")
+    if delta_table_exists("tickers"):
+        merge_to_delta_table(df, "tickers", merge_keys=["ticker"])
+    else:
+        write_delta_table(df, "tickers", mode="overwrite")
 
 
 def read_split_details(valid_tickers: list = []) -> pl.DataFrame:
@@ -70,24 +73,21 @@ def read_split_details(valid_tickers: list = []) -> pl.DataFrame:
         .filter(pl.col("ticker").is_in(valid_tickers))
         .select(["ticker", "execution_date", "split_from", "split_to"])
         .collect()
-        .with_columns(pl.col("ticker").cast(pl.Categorical))
         .sort("execution_date")
     )
 
 
 def write_split_details(df: pl.DataFrame) -> None:
-    """Write split details to silver layer.
+    """Write split details to silver layer Delta table.
 
     Args:
         df: DataFrame containing split details to write.
     """
-    logger.info("Writing split details")
-    path = f"s3://{settings.s3_bucket_name}/silver/splits/data.parquet"
-    df.write_parquet(
-        file=path,
-        storage_options=s3_storage_options,
-        compression="zstd",
-    )
+    logger.info("Writing split details to Delta table")
+    if delta_table_exists("splits"):
+        merge_to_delta_table(df, "splits", merge_keys=["ticker", "execution_date"])
+    else:
+        write_delta_table(df, "splits", mode="overwrite")
 
 
 def read_etf_holdings(etf_ticker: str) -> pl.DataFrame:
@@ -105,7 +105,6 @@ def read_etf_holdings(etf_ticker: str) -> pl.DataFrame:
         .sort("ticker")
         .with_columns(
             pl.lit(etf_ticker.lower()).alias("etf"),
-            pl.col("ticker").cast(pl.Categorical),
         )
     )
 
@@ -145,18 +144,25 @@ def add_volume_ratio(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def read_daily_aggs(
-    valid_tickers: list = [], ticker_details: pl.DataFrame | None = None
+    valid_tickers: list = [],
+    ticker_details: pl.DataFrame | None = None,
+    start_date: date | None = None,
 ) -> pl.DataFrame:
     """Read daily aggregates from bronze layer for specified tickers.
 
     Args:
         valid_tickers: List of ticker symbols to filter for.
         ticker_details: DataFrame with ticker details including ticker_type.
+        start_date: Optional start date to filter data (for incremental loading).
 
     Returns:
         pl.DataFrame: DataFrame with daily OHLCV data, date column, and ticker_type.
     """
-    logger.info("Reading daily aggregates")
+    if start_date:
+        logger.info(f"Reading daily aggregates from {start_date}")
+    else:
+        logger.info("Reading all daily aggregates")
+
     path = f"s3://{settings.s3_bucket_name}/bronze/daily/*/data.parquet"
     df = (
         pl.scan_parquet(path, storage_options=s3_storage_options)
@@ -166,7 +172,6 @@ def read_daily_aggs(
             pl.from_epoch(pl.col("timestamp"), time_unit="ms")
             .cast(pl.Date)
             .alias("date"),
-            pl.col("ticker").cast(pl.Categorical),
             pl.col("volume").cast(pl.UInt64),
             pl.col("open").cast(pl.Float64),
             pl.col("close").cast(pl.Float64),
@@ -174,15 +179,18 @@ def read_daily_aggs(
             pl.col("low").cast(pl.Float64),
             pl.col("transactions").cast(pl.UInt64),
         )
-        .sort(["date", "ticker"])
     )
+
+    # Filter by start_date if provided (incremental mode)
+    if start_date:
+        df = df.filter(pl.col("date") > start_date)
+
+    df = df.sort(["date", "ticker"])
 
     # Join with ticker details to add ticker_type
     if ticker_details is not None:
         df = df.join(
-            ticker_details.select(["ticker", "ticker_type"]).with_columns(
-                pl.col("ticker").cast(pl.Categorical)
-            ),
+            ticker_details.select(["ticker", "ticker_type"]),
             on="ticker",
             how="left",
         )
@@ -201,6 +209,14 @@ def apply_splits(daily_aggs: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame
         pl.DataFrame: Split-adjusted daily aggregates.
     """
     logger.info("Applying splits to daily aggregates")
+
+    # Ensure ticker columns have the same dtype for joining
+    # Convert both to strings to avoid categorical/string mismatch
+    if splits["ticker"].dtype == pl.Categorical:
+        splits = splits.with_columns(pl.col("ticker").cast(pl.String))
+    if daily_aggs["ticker"].dtype == pl.Categorical:
+        daily_aggs = daily_aggs.with_columns(pl.col("ticker").cast(pl.String))
+
     result = daily_aggs.join(splits, on="ticker", how="left")
 
     result = result.with_columns(
@@ -240,29 +256,26 @@ def apply_splits(daily_aggs: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame
     return result
 
 
-def write_daily_aggs(df: pl.DataFrame) -> None:
-    """Write daily aggregates to silver layer.
+def write_daily_aggs(
+    df: pl.DataFrame, mode: Literal["error", "append", "overwrite", "ignore"] = "overwrite"
+) -> None:
+    """Write daily aggregates to silver layer Delta table.
 
     Args:
         df: DataFrame containing daily aggregates to write.
+        mode: Write mode - 'overwrite' for full rebuild or 'append' for incremental.
     """
-    logger.info(f"Writing daily aggregates ({df.shape[0]:,} rows)")
-    path = f"s3://{settings.s3_bucket_name}/silver/daily/data.parquet"
-    df.write_parquet(
-        file=path,
-        storage_options=s3_storage_options,
-        compression="zstd",
-        row_group_size=100_000,
-    )
+    logger.info(f"Writing daily aggregates ({df.shape[0]:,} rows) in {mode} mode")
+    write_delta_table(df, "daily", mode=mode)
 
 
-def write_time_aggs(df: pl.DataFrame, period: str, output_dir: str) -> None:
-    """Write time-aggregated data to specified directory.
+def write_time_aggs(df: pl.DataFrame, period: str, table_name: str) -> None:
+    """Write time-aggregated data to Delta table.
 
     Args:
         df: DataFrame with daily data to aggregate.
         period: Time period for aggregation (e.g., '1w', '1mo').
-        output_dir: Output directory name in silver layer.
+        table_name: Delta table name (e.g., 'weekly', 'monthly').
     """
     higher_timeframe_df = (
         df.group_by_dynamic(
@@ -283,17 +296,11 @@ def write_time_aggs(df: pl.DataFrame, period: str, output_dir: str) -> None:
     )
 
     logger.info(f"Writing {period} aggregates ({higher_timeframe_df.shape[0]:,} rows)")
-    path = f"s3://{settings.s3_bucket_name}/silver/{output_dir}/data.parquet"
-    higher_timeframe_df.write_parquet(
-        file=path,
-        storage_options=s3_storage_options,
-        compression="zstd",
-        row_group_size=100_000,
-    )
+    write_delta_table(higher_timeframe_df, table_name, mode="overwrite")
 
 
 def write_weekly_aggs(df: pl.DataFrame) -> None:
-    """Write weekly aggregates to silver layer.
+    """Write weekly aggregates to silver layer Delta table.
 
     Args:
         df: DataFrame containing daily data to aggregate weekly.
@@ -302,7 +309,7 @@ def write_weekly_aggs(df: pl.DataFrame) -> None:
 
 
 def write_monthly_aggs(df: pl.DataFrame) -> None:
-    """Write monthly aggregates to silver layer.
+    """Write monthly aggregates to silver layer Delta table.
 
     Args:
         df: DataFrame containing daily data to aggregate monthly.
@@ -310,8 +317,13 @@ def write_monthly_aggs(df: pl.DataFrame) -> None:
     write_time_aggs(df, "1mo", "monthly")
 
 
-def main() -> None:
-    """Execute silver layer data processing pipeline."""
+def main(full_rebuild: bool = False) -> None:
+    """Execute silver layer data processing pipeline.
+
+    Args:
+        full_rebuild: If True, rebuild all data from scratch. If False, process incrementally.
+    """
+    # Always update ticker details and splits (reference data)
     ticker_details = read_ticker_details()
     etf_holdings = read_all_etf_holdings()
     ticker_details = ticker_details.join(etf_holdings, on="ticker", how="left")
@@ -322,18 +334,57 @@ def main() -> None:
     split_details = read_split_details(valid_tickers)
     write_split_details(split_details)
 
-    unadjusted_daily_aggs = read_daily_aggs(valid_tickers, ticker_details)
-    adjusted_daily_aggs = apply_splits(unadjusted_daily_aggs, split_details)
+    # Determine if we should process incrementally
+    incremental_mode = not full_rebuild and delta_table_exists("daily")
 
-    print(adjusted_daily_aggs.schema)
+    if incremental_mode:
+        # Get the last processed date from Delta table
+        last_processed_date = get_max_date_from_delta("daily")
 
-    unadjusted_daily_aggs = None
+        if last_processed_date:
+            logger.info(
+                f"Incremental mode: processing data after {last_processed_date}"
+            )
+            # Read only new data from bronze layer
+            unadjusted_daily_aggs = read_daily_aggs(
+                valid_tickers, ticker_details, start_date=last_processed_date
+            )
 
-    adjusted_daily_aggs_with_volume_ratio = add_volume_ratio(adjusted_daily_aggs)
+            if unadjusted_daily_aggs.height == 0:
+                logger.info("No new data to process")
+                return
 
-    write_daily_aggs(adjusted_daily_aggs_with_volume_ratio)
-    write_weekly_aggs(adjusted_daily_aggs)
-    write_monthly_aggs(adjusted_daily_aggs)
+            logger.info(f"Processing {unadjusted_daily_aggs.height:,} new rows")
+            adjusted_daily_aggs = apply_splits(unadjusted_daily_aggs, split_details)
+            adjusted_daily_aggs_with_volume_ratio = add_volume_ratio(
+                adjusted_daily_aggs
+            )
+
+            # Append new data to Delta table
+            write_daily_aggs(adjusted_daily_aggs_with_volume_ratio, mode="append")
+
+            # For weekly/monthly, we need to rebuild from the full dataset
+            # since aggregations span multiple days
+            logger.info("Rebuilding weekly and monthly aggregates from full dataset")
+            full_daily_data = scan_delta_table("daily").collect()
+            write_weekly_aggs(full_daily_data)
+            write_monthly_aggs(full_daily_data)
+        else:
+            logger.info("Delta table exists but is empty, performing full rebuild")
+            full_rebuild = True
+
+    if not incremental_mode or full_rebuild:
+        logger.info("Full rebuild mode: processing all data")
+        unadjusted_daily_aggs = read_daily_aggs(valid_tickers, ticker_details)
+        adjusted_daily_aggs = apply_splits(unadjusted_daily_aggs, split_details)
+
+        unadjusted_daily_aggs = None
+
+        adjusted_daily_aggs_with_volume_ratio = add_volume_ratio(adjusted_daily_aggs)
+
+        write_daily_aggs(adjusted_daily_aggs_with_volume_ratio, mode="overwrite")
+        write_weekly_aggs(adjusted_daily_aggs)
+        write_monthly_aggs(adjusted_daily_aggs)
 
 
 if __name__ == "__main__":  # pragma: no cover
