@@ -242,7 +242,6 @@ def apply_splits(daily_aggs: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame
 
     result = result.group_by(
         group_cols,
-        maintain_order=True,
     ).agg(pl.col("adjustment_factor").product().alias("total_adjustment"))
 
     result = result.with_columns(
