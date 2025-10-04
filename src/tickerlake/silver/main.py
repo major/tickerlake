@@ -136,7 +136,7 @@ def add_volume_ratio(df: pl.DataFrame) -> pl.DataFrame:
     logger.info("Calculating volume average ratio")
     return df.with_columns(
         pl.col("volume")
-        .rolling_mean(window_size=20, min_periods=1)
+        .rolling_mean(window_size=20)
         .over("ticker")
         .cast(pl.UInt64)
         .alias("volume_avg")
