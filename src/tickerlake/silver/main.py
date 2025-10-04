@@ -136,11 +136,16 @@ def add_volume_ratio(df: pl.DataFrame) -> pl.DataFrame:
     logger.info("Calculating volume average ratio")
     return df.with_columns(
         pl.col("volume")
-        .rolling_mean(window_size=20)
+        .rolling_mean(window_size=20, min_periods=1)
         .over("ticker")
         .cast(pl.UInt64)
         .alias("volume_avg")
-    ).with_columns((pl.col("volume") / pl.col("volume_avg")).alias("volume_avg_ratio"))
+    ).with_columns(
+        pl.when(pl.col("volume_avg").is_not_null())
+        .then(pl.col("volume") / pl.col("volume_avg"))
+        .otherwise(None)
+        .alias("volume_avg_ratio")
+    )
 
 
 def read_daily_aggs(
