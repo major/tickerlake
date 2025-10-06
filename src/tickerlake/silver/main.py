@@ -282,7 +282,8 @@ def write_time_aggs(df: pl.DataFrame, period: str, table_name: str) -> None:
         table_name: Delta table name (e.g., 'weekly', 'monthly').
     """
     higher_timeframe_df = (
-        df.group_by_dynamic(
+        df.sort(["ticker", "date"])
+        .group_by_dynamic(
             "date",
             every=period,
             group_by="ticker",
