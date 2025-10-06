@@ -282,24 +282,20 @@ def write_ssga_holdings(source_url: str, etf_ticker: str) -> None:
 
 
 def write_qqq_holdings() -> None:
-    """
-    Reads QQQ holdings data from a CSV file, processes it to extract and sort ticker symbols,
-    and writes the result as a Parquet file to an S3 bucket.
+    """Write QQQ holdings to bronze layer.
 
-    The function performs the following steps:
-    1. Reads the source CSV file specified in `settings.qqq_holdings_source`.
-    2. Renames the "Holding Ticker" column to "ticker".
-    3. Selects only the "ticker" column and sorts it.
-    4. Writes the processed DataFrame to the specified S3 path in Parquet format using `s3_storage_options`.
+    Reads QQQ holdings data from Direxion CSV, extracts ticker symbols,
+    and writes to S3 as Parquet.
 
     Returns:
         None
     """
     logger.info("Writing QQQ holdings")
     df = (
-        pl.read_csv(settings.qqq_holdings_source)
-        .rename({"Holding Ticker": "ticker"})
+        pl.read_csv(settings.qqq_holdings_source, skip_rows=5)
+        .rename({"StockTicker": "ticker"})
         .select(["ticker"])
+        .filter(pl.col("ticker").is_not_null())
         .sort("ticker")
     )
     path = f"s3://{settings.s3_bucket_name}/bronze/holdings/qqq/data.parquet"
