@@ -534,13 +534,14 @@ class TestWriteQQQHoldings:
         mock_df = MagicMock()
         mock_df.rename.return_value = mock_df
         mock_df.select.return_value = mock_df
+        mock_df.filter.return_value = mock_df
         mock_df.sort.return_value = mock_df
         mock_read_csv.return_value = mock_df
 
         write_qqq_holdings()
 
-        mock_read_csv.assert_called_once_with("https://test.com/qqq.csv")
-        mock_df.rename.assert_called_once_with({"Holding Ticker": "ticker"})
+        mock_read_csv.assert_called_once_with("https://test.com/qqq.csv", skip_rows=5)
+        mock_df.rename.assert_called_once_with({"StockTicker": "ticker"})
         mock_df.select.assert_called_once_with(["ticker"])
         mock_df.sort.assert_called_once_with("ticker")
         mock_df.write_parquet.assert_called_once_with(
