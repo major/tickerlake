@@ -130,10 +130,10 @@ class TestDownloadDailyAggregates:
         mock_build_client.return_value = mock_client
         mock_client.get_grouped_daily_aggs.return_value = []
 
-        # Mock empty DataFrame that handles sort
+        # Mock empty DataFrame that returns early without sorting
         mock_df = MagicMock()
         mock_df.__len__ = lambda self: 0
-        mock_df.sort.return_value = mock_df
+        mock_df.is_empty.return_value = True
         mock_dataframe.return_value = mock_df
 
         result = download_daily_aggregates("2023-03-10")
@@ -142,7 +142,8 @@ class TestDownloadDailyAggregates:
             "2023-03-10", adjusted=False, include_otc=False
         )
         assert len(result) == 0
-        mock_df.sort.assert_called_once_with("ticker")
+        # Verify sort was NOT called (early return for empty DataFrame)
+        mock_df.sort.assert_not_called()
 
 
 class TestStoreDailyAggregates:
@@ -238,29 +239,29 @@ class TestGetMissingTradingDays:
     """Tests for get_missing_trading_days function."""
 
     @pytest.mark.parametrize(
-        "market_open,expected_missing",
+        "data_available,expected_missing",
         [
-            (True, ["2023-01-04", "2023-01-05"]),  # Market open, exclude today
+            (False, ["2023-01-04", "2023-01-05"]),  # Data not available, exclude today
             (
-                False,
+                True,
                 ["2023-01-04", "2023-01-05", "2023-01-06"],
-            ),  # Market closed, include today
+            ),  # Data available, include today
         ],
     )
     @patch("tickerlake.bronze.main.datetime")
-    @patch("tickerlake.bronze.main.is_market_open")
+    @patch("tickerlake.bronze.main.is_data_available_for_today")
     @patch("tickerlake.bronze.main.list_bronze_daily_folders")
     @patch("tickerlake.bronze.main.get_valid_trading_days")
     def test_get_missing_trading_days_market_status(
         self,
         mock_get_valid,
         mock_list_folders,
-        mock_is_open,
+        mock_is_data_available,
         mock_datetime,
-        market_open,
+        data_available,
         expected_missing,
     ):
-        """Test getting missing trading days with different market statuses."""
+        """Test getting missing trading days with different data availability statuses."""
         mock_get_valid.return_value = [
             "2023-01-03",
             "2023-01-04",
@@ -268,7 +269,7 @@ class TestGetMissingTradingDays:
             "2023-01-06",
         ]
         mock_list_folders.return_value = ["2023-01-03"]  # Only one day exists
-        mock_is_open.return_value = market_open
+        mock_is_data_available.return_value = data_available
 
         ny_tz = pytz.timezone("America/New_York")
         mock_datetime.now.return_value = ny_tz.localize(datetime(2023, 1, 6, 14, 0))
