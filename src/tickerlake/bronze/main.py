@@ -63,7 +63,11 @@ def download_daily_aggregates(date_str: str) -> pl.DataFrame:
         adjusted=False,
         include_otc=False,
     )
-    return pl.DataFrame(grouped).sort("ticker")
+    df = pl.DataFrame(grouped)
+    if df.is_empty():
+        logger.warning(f"No data returned for {date_str}")
+        return df
+    return df.sort("ticker")
 
 
 def store_daily_aggregates(df: pl.DataFrame, date_str: str) -> None:
