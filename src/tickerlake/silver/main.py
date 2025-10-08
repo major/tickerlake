@@ -361,12 +361,28 @@ def main(full_rebuild: bool = False) -> None:
 
             logger.info(f"Processing {unadjusted_daily_aggs.height:,} new rows")
             adjusted_daily_aggs = apply_splits(unadjusted_daily_aggs, split_details)
-            adjusted_daily_aggs_with_volume_ratio = add_volume_ratio(
+
+            # For volume ratios, we need full history to calculate 20-day rolling average
+            # Read existing data and combine with new data
+            logger.info("Reading existing data to calculate volume ratios")
+            existing_daily_data = scan_delta_table("daily").collect()
+
+            # Combine existing and new data, sort by ticker and date
+            combined_data = pl.concat([
+                existing_daily_data.drop(["volume_avg", "volume_avg_ratio"]),
                 adjusted_daily_aggs
+            ]).sort(["ticker", "date"])
+
+            # Calculate volume ratios on full dataset
+            combined_with_volume_ratio = add_volume_ratio(combined_data)
+
+            # Filter to only the new rows we want to append
+            new_rows_with_ratio = combined_with_volume_ratio.filter(
+                pl.col("date") > last_processed_date
             )
 
             # Append new data to Delta table
-            write_daily_aggs(adjusted_daily_aggs_with_volume_ratio, mode="append")
+            write_daily_aggs(new_rows_with_ratio, mode="append")
 
             # For weekly/monthly, we need to rebuild from the full dataset
             # since aggregations span multiple days
