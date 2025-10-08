@@ -43,14 +43,20 @@ jobs:
 
           # Direct prompt for automated review (no @claude mention needed)
           direct_prompt: |
-            Please review this pull request and provide feedback on:
-            - Code quality and best practices
-            - Potential bugs or issues
-            - Performance considerations
-            - Security concerns
-            - Test coverage
-            
-            Be constructive and helpful in your feedback.
+            Review this PR and report ONLY issues that should be fixed before merging.
+
+            Focus exclusively on:
+            - Bugs or correctness issues
+            - Security vulnerabilities
+            - Breaking changes or compatibility issues
+            - Missing required tests for new functionality
+
+            Do NOT comment on:
+            - Code style (unless it causes bugs)
+            - Things that are already working correctly
+            - General praise or positive observations
+
+            Be concise. If there are no blocking issues, simply say "No blocking issues found."
 
           # Optional: Use sticky comments to make Claude reuse the same comment on subsequent pushes to the same PR
           # use_sticky_comment: true
