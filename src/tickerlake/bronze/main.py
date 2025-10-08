@@ -11,7 +11,7 @@ import structlog
 from polygon import RESTClient
 
 from tickerlake.config import s3_storage_options, settings
-from tickerlake.utils import get_trading_days, is_market_open
+from tickerlake.utils import get_trading_days, is_data_available_for_today
 
 logging.basicConfig(level=logging.INFO)
 logger = structlog.get_logger()
@@ -128,13 +128,13 @@ def get_missing_trading_days():
     Returns:
         list: A sorted list of dates (as strings in 'YYYY-MM-DD' format) representing
               valid trading days that do not have corresponding bronze daily folders.
-              If the market is currently open, today's date is excluded from the list
-              of valid trading days.
+              Today's date is excluded unless sufficient time has passed since market
+              close for the data to be available.
     """
     valid_days = set(get_valid_trading_days())
 
-    # If market is currently open, exclude today from valid days
-    if is_market_open():
+    # Exclude today unless data is available (market closed + 30min processing time)
+    if not is_data_available_for_today():
         ny_tz = pytz.timezone("America/New_York")
         today_str = datetime.now(ny_tz).strftime("%Y-%m-%d")
         valid_days.discard(today_str)

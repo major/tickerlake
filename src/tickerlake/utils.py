@@ -1,6 +1,6 @@
 """Utility functions for trading calendar and market status operations."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas_market_calendars as mcal
 import pytz
@@ -50,3 +50,39 @@ def is_market_open():
 
     # Check if current time is between market open and close
     return market_open <= now_market_time <= market_close
+
+
+def is_data_available_for_today():
+    """Check if today's market data should be available from the API.
+
+    Returns:
+        True if today's data should be available, False otherwise.
+
+    Note:
+        Data is considered available if the market is closed and at least
+        30 minutes have passed since market close to allow for data processing.
+
+    """
+    nyse = mcal.get_calendar("NYSE")
+    market_tz = pytz.timezone(str(nyse.tz))
+    now_market_time = datetime.now(market_tz)
+
+    # Get today's trading schedule
+    schedule = nyse.schedule(
+        start_date=now_market_time.date(), end_date=now_market_time.date()
+    )
+
+    # Not a trading day
+    if schedule.empty:
+        return False
+
+    # Market is still open
+    if is_market_open():
+        return False
+
+    # Check if enough time has passed since market close
+    market_close = schedule.iloc[0]["market_close"].tz_convert(market_tz)
+    time_since_close = now_market_time - market_close
+
+    # Wait at least 30 minutes after close for data to be processed
+    return time_since_close >= timedelta(minutes=30)
