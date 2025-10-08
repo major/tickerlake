@@ -9,6 +9,11 @@
         {
             "matchManagers": ["github-actions"],
             "automerge": true
+        },
+        {
+            "matchManagers": ["dockerfile", "pep621"],
+            "matchPackageNames": ["python"],
+            "enabled": false
         }
     ]
 }
