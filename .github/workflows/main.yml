@@ -80,6 +80,7 @@ jobs:
           find . -name inspect-data.json
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
         with:
           platforms: linux/amd64
@@ -91,26 +92,28 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
-      - name: Extract new image digest
-        id: digest
-        run: |
-          # Get the digest of the image we just pushed
-          DIGEST=$(docker inspect ghcr.io/major/tickerlake:latest --format='{{index .RepoDigests 0}}' | cut -d'@' -f2)
-          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
-
       - name: Update deployment in selfhosted repo
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Clone the selfhosted repo
-          git clone https://x-access-token:${{ secrets.SELFHOSTED_PAT }}@github.com/major/selfhosted.git
+          # Clone the selfhosted repo (shallow clone for speed)
+          git clone --depth 1 https://x-access-token:${{ secrets.SELFHOSTED_PAT }}@github.com/major/selfhosted.git
           cd selfhosted
 
+          # Extract short digest for commit message
+          SHORT_DIGEST=$(echo "${{ steps.build.outputs.digest }}" | cut -c1-12)
+
           # Update the image digest in the deployment
-          sed -i "s|image: ghcr.io/major/tickerlake:latest@sha256:.*|image: ghcr.io/major/tickerlake:latest@${{ steps.digest.outputs.digest }}|" apps/base/tickerlake/deployment.yaml
+          sed -i "s|image: ghcr.io/major/tickerlake:latest@sha256:.*|image: ghcr.io/major/tickerlake:latest@${{ steps.build.outputs.digest }}|" apps/base/tickerlake/deployment.yaml
+
+          # Check if there are changes to commit
+          if git diff --quiet apps/base/tickerlake/deployment.yaml; then
+            echo "No changes to deployment.yaml, skipping commit"
+            exit 0
+          fi
 
           # Commit and push
           git add apps/base/tickerlake/deployment.yaml
-          git commit -m "Update tickerlake image to ${{ steps.digest.outputs.digest }}"
+          git commit -m "Update tickerlake image to sha256:${SHORT_DIGEST}"
           git push
