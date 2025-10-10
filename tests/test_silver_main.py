@@ -363,76 +363,26 @@ class TestTimeAggregates:
 class TestMainFunction:
     """Test main pipeline function."""
 
-    @patch("tickerlake.silver.main.write_monthly_aggs")
-    @patch("tickerlake.silver.main.write_weekly_aggs")
-    @patch("tickerlake.silver.main.write_daily_aggs")
-    @patch("tickerlake.silver.main.add_volume_ratio")
-    @patch("tickerlake.silver.main.apply_splits")
-    @patch("tickerlake.silver.main.read_daily_aggs")
-    @patch("tickerlake.silver.main.write_split_details")
-    @patch("tickerlake.silver.main.read_split_details")
-    @patch("tickerlake.silver.main.write_ticker_details")
-    @patch("tickerlake.silver.main.read_all_etf_holdings")
-    @patch("tickerlake.silver.main.read_ticker_details")
-    @patch("tickerlake.silver.main.delta_table_exists")
+    @patch("tickerlake.silver.main.SilverLayer")
     def test_main_pipeline_full_rebuild(
         self,
-        mock_delta_exists,
-        mock_read_ticker,
-        mock_read_etf,
-        mock_write_ticker,
-        mock_read_split,
-        mock_write_split,
-        mock_read_daily,
-        mock_apply_splits,
-        mock_add_volume,
-        mock_write_daily,
-        mock_write_weekly,
-        mock_write_monthly,
+        mock_silver_layer_class,
         sample_ticker_data,
         sample_split_data,
         sample_daily_data,
         sample_etf_holdings,
     ):
         """Test complete silver layer pipeline execution in full rebuild mode."""
-        # Setup mocks
-        mock_delta_exists.return_value = False  # Force full rebuild
-        mock_ticker_details = sample_ticker_data.select([
-            "ticker",
-            "name",
-            pl.col("type").alias("ticker_type"),
-        ])
-        mock_read_ticker.return_value = mock_ticker_details
-        mock_read_etf.return_value = pl.DataFrame({
-            "ticker": ["AAPL", "MSFT"],
-            "etfs": [["spy", "qqq"], ["spy"]],
-        })
-        mock_read_split.return_value = sample_split_data
-        daily_with_date = sample_daily_data.with_columns(
-            pl.from_epoch(pl.col("timestamp"), time_unit="ms")
-            .cast(pl.Date)
-            .alias("date")
-        )
-        mock_read_daily.return_value = daily_with_date
-        mock_apply_splits.return_value = daily_with_date
-        mock_add_volume.return_value = daily_with_date
+        # Create a mock instance
+        mock_silver_instance = mock_silver_layer_class.return_value
 
         from tickerlake.silver.main import main
 
         main(full_rebuild=True)
 
-        # Verify all steps were called
-        mock_read_ticker.assert_called_once()
-        mock_read_etf.assert_called_once()
-        mock_write_ticker.assert_called_once()
-        mock_read_split.assert_called_once()
-        mock_write_split.assert_called_once()
-        mock_read_daily.assert_called_once()
-        mock_apply_splits.assert_called_once()
-        mock_add_volume.assert_called_once()
-        mock_write_daily.assert_called_once()
-        mock_write_weekly.assert_called_once()
-        mock_write_monthly.assert_called_once()
+        # Verify SilverLayer was instantiated and run was called with full_rebuild=True
+        mock_silver_layer_class.assert_called_once()
+        mock_silver_instance.run.assert_called_once_with(full_rebuild=True)
 
 
 class TestDataTransformations:

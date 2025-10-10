@@ -10,11 +10,17 @@ import structlog
 from tickerlake.config import s3_storage_options, settings
 from tickerlake.delta_utils import (
     delta_table_exists,
-    get_max_date_from_delta,
     merge_to_delta_table,
     scan_delta_table,
     write_delta_table,
 )
+from tickerlake.schemas import (
+    validate_daily_aggregates,
+    validate_etf_holdings,
+    validate_splits,
+    validate_ticker_details,
+)
+from tickerlake.silver.layer import SilverLayer
 
 pl.Config(tbl_rows=-1, tbl_cols=-1, fmt_float="full")
 
@@ -29,7 +35,7 @@ def read_ticker_details() -> pl.DataFrame:
         pl.DataFrame: DataFrame with ticker, name, and ticker_type columns for CS and ETF types.
     """
     logger.info("Reading ticker details")
-    return (
+    df = (
         pl.scan_parquet(
             f"s3://{settings.s3_bucket_name}/bronze/tickers/data.parquet",
             storage_options=s3_storage_options,
@@ -40,6 +46,7 @@ def read_ticker_details() -> pl.DataFrame:
         .select(["ticker", "name", pl.col("type").alias("ticker_type")])
         .sort("ticker")
     )
+    return validate_ticker_details(df)
 
 
 def write_ticker_details(df: pl.DataFrame) -> None:
@@ -65,7 +72,7 @@ def read_split_details(valid_tickers: list = []) -> pl.DataFrame:
         pl.DataFrame: DataFrame with split details for valid tickers.
     """
     logger.info("Reading split details")
-    return (
+    df = (
         pl.scan_parquet(
             f"s3://{settings.s3_bucket_name}/bronze/splits/data.parquet",
             storage_options=s3_storage_options,
@@ -75,6 +82,7 @@ def read_split_details(valid_tickers: list = []) -> pl.DataFrame:
         .collect()
         .sort("execution_date")
     )
+    return validate_splits(df)
 
 
 def write_split_details(df: pl.DataFrame) -> None:
@@ -100,13 +108,14 @@ def read_etf_holdings(etf_ticker: str) -> pl.DataFrame:
         pl.DataFrame: DataFrame with ETF holdings including ticker and weight.
     """
     path = f"s3://{settings.s3_bucket_name}/bronze/holdings/{etf_ticker.lower()}/data.parquet"
-    return (
+    df = (
         pl.read_parquet(path, storage_options=s3_storage_options)
         .sort("ticker")
         .with_columns(
             pl.lit(etf_ticker.lower()).alias("etf"),
         )
     )
+    return validate_etf_holdings(df)
 
 
 def read_all_etf_holdings() -> pl.DataFrame:
@@ -134,7 +143,7 @@ def add_volume_ratio(df: pl.DataFrame) -> pl.DataFrame:
             - 'volume_avg_ratio': Ratio of 'volume' to 'volume_avg'.
     """
     logger.info("Calculating volume average ratio")
-    return df.with_columns(
+    result = df.with_columns(
         pl.col("volume")
         .rolling_mean(window_size=20)
         .over("ticker")
@@ -146,6 +155,7 @@ def add_volume_ratio(df: pl.DataFrame) -> pl.DataFrame:
         .otherwise(None)
         .alias("volume_avg_ratio")
     )
+    return validate_daily_aggregates(result, include_volume_ratio=True)
 
 
 def read_daily_aggs(
@@ -200,7 +210,7 @@ def read_daily_aggs(
             how="left",
         )
 
-    return df
+    return validate_daily_aggregates(df)
 
 
 def apply_splits(daily_aggs: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
@@ -257,7 +267,7 @@ def apply_splits(daily_aggs: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame
         (pl.col("volume") / pl.col("total_adjustment")).cast(pl.UInt64).alias("volume"),
     ).drop("total_adjustment")
 
-    return result
+    return validate_daily_aggregates(result)
 
 
 def write_daily_aggs(
@@ -429,24 +439,8 @@ def main(full_rebuild: bool = False) -> None:
     Args:
         full_rebuild: If True, rebuild all data from scratch. If False, process incrementally.
     """
-    # Always update ticker details and splits (reference data)
-    ticker_details, valid_tickers, split_details = _process_reference_data()
-
-    # Determine if we should process incrementally
-    incremental_mode = not full_rebuild and delta_table_exists("daily")
-
-    if incremental_mode:
-        last_processed_date = get_max_date_from_delta("daily")
-
-        if last_processed_date:
-            _process_incremental_data(
-                valid_tickers, ticker_details, split_details, last_processed_date
-            )
-        else:
-            logger.info("Delta table exists but is empty, performing full rebuild")
-            _process_full_rebuild(valid_tickers, ticker_details, split_details)
-    else:
-        _process_full_rebuild(valid_tickers, ticker_details, split_details)
+    silver = SilverLayer()
+    silver.run(full_rebuild=full_rebuild)
 
 
 if __name__ == "__main__":  # pragma: no cover

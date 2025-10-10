@@ -631,50 +631,21 @@ class TestETFWrapperFunctions:
 class TestMainFunction:
     """Tests for main function."""
 
-    @patch("tickerlake.bronze.main.write_iwm_holdings")
-    @patch("tickerlake.bronze.main.write_qqq_holdings")
-    @patch("tickerlake.bronze.main.write_spsm_holdings")
-    @patch("tickerlake.bronze.main.write_mdy_holdings")
-    @patch("tickerlake.bronze.main.write_spy_holdings")
-    @patch("tickerlake.bronze.main.write_split_details")
-    @patch("tickerlake.bronze.main.write_ticker_details")
-    @patch("tickerlake.bronze.main.get_split_details")
-    @patch("tickerlake.bronze.main.get_ticker_details")
-    @patch("tickerlake.bronze.main.get_missing_stock_aggs")
+    @patch("tickerlake.bronze.main.BronzeLayer")
     def test_main_calls_all_functions(
         self,
-        mock_get_missing_aggs,
-        mock_get_tickers,
-        mock_get_splits,
-        mock_write_tickers,
-        mock_write_splits,
-        mock_write_spy,
-        mock_write_mdy,
-        mock_write_spsm,
-        mock_write_qqq,
-        mock_write_iwm,
+        mock_bronze_layer_class,
         sample_dataframe,
     ):
         """Test that main function calls all expected functions."""
-        # Setup return values
-        mock_get_tickers.return_value = sample_dataframe
-        mock_get_splits.return_value = sample_dataframe
+        # Create a mock instance
+        mock_bronze_instance = mock_bronze_layer_class.return_value
 
         main()
 
-        # Verify Polygon data functions called
-        mock_get_missing_aggs.assert_called_once()
-        mock_get_tickers.assert_called_once()
-        mock_get_splits.assert_called_once()
-        mock_write_tickers.assert_called_once_with(sample_dataframe)
-        mock_write_splits.assert_called_once_with(sample_dataframe)
-
-        # Verify ETF data functions called
-        mock_write_spy.assert_called_once()
-        mock_write_mdy.assert_called_once()
-        mock_write_spsm.assert_called_once()
-        mock_write_qqq.assert_called_once()
-        mock_write_iwm.assert_called_once()
+        # Verify BronzeLayer was instantiated and run was called
+        mock_bronze_layer_class.assert_called_once()
+        mock_bronze_instance.run.assert_called_once()
 
 
 class TestMainEntryPoint:
