@@ -283,15 +283,9 @@ class SilverLayer:
         logger.info(f"Writing daily aggregates ({df.shape[0]:,} rows) in {mode} mode")
         write_delta_table(df, "daily", mode=mode)
 
-    def write_time_aggs(self, df: pl.DataFrame, period: str, table_name: str) -> None:
-        """Write time-aggregated data to Delta table.
-
-        Args:
-            df: DataFrame with daily data to aggregate.
-            period: Time period for aggregation (e.g., '1w', '1mo').
-            table_name: Delta table name (e.g., 'weekly', 'monthly').
-        """
-        higher_timeframe_df = (
+    def compute_time_aggs(self, df: pl.DataFrame, period: str) -> pl.DataFrame:
+        """Aggregate daily data to a higher timeframe."""
+        return (
             df.sort(["ticker", "date"])
             .group_by_dynamic(
                 "date",
@@ -300,34 +294,53 @@ class SilverLayer:
                 label="left",
                 start_by="monday",
             )
-            .agg([
-                pl.col("open").first().alias("open"),
-                pl.col("high").max().alias("high"),
-                pl.col("low").min().alias("low"),
-                pl.col("close").last().alias("close"),
-                pl.col("volume").sum().alias("volume"),
-            ])
+            .agg(
+                [
+                    pl.col("open").first().alias("open"),
+                    pl.col("high").max().alias("high"),
+                    pl.col("low").min().alias("low"),
+                    pl.col("close").last().alias("close"),
+                    pl.col("volume").sum().alias("volume"),
+                ]
+            )
             .sort(["date", "ticker"])
         )
 
-        logger.info(f"Writing {period} aggregates ({higher_timeframe_df.shape[0]:,} rows)")
-        write_delta_table(higher_timeframe_df, table_name, mode="overwrite")
+    def write_time_aggs(
+        self,
+        df: pl.DataFrame,
+        period: str,
+        table_name: str,
+        incremental: bool = False,
+    ) -> None:
+        """Write or upsert time-aggregated data to Delta table."""
+        higher_timeframe_df = self.compute_time_aggs(df, period)
 
-    def write_weekly_aggs(self, df: pl.DataFrame) -> None:
+        logger.info(
+            f"Writing {period} aggregates ({higher_timeframe_df.shape[0]:,} rows)",
+            incremental=incremental,
+        )
+
+        if incremental and delta_table_exists(table_name):
+            merge_to_delta_table(higher_timeframe_df, table_name, merge_keys=["ticker", "date"])
+        else:
+            write_delta_table(higher_timeframe_df, table_name, mode="overwrite")
+
+    def write_weekly_aggs(self, df: pl.DataFrame, incremental: bool = False) -> None:
         """Write weekly aggregates to silver layer Delta table.
 
         Args:
             df: DataFrame containing daily data to aggregate weekly.
         """
-        self.write_time_aggs(df, "1w", "weekly")
+        self.write_time_aggs(df, "1w", "weekly", incremental=incremental)
 
-    def write_monthly_aggs(self, df: pl.DataFrame) -> None:
+    def write_monthly_aggs(self, df: pl.DataFrame, incremental: bool = False) -> None:
         """Write monthly aggregates to silver layer Delta table.
 
         Args:
             df: DataFrame containing daily data to aggregate monthly.
         """
-        self.write_time_aggs(df, "1mo", "monthly")
+        self.write_time_aggs(df, "1mo", "monthly", incremental=incremental)
 
     def process_reference_data(self) -> tuple[pl.DataFrame, list[str], pl.DataFrame]:
         """Load and process ticker and split reference data.
@@ -455,12 +468,27 @@ class SilverLayer:
         # Append new data to Delta table
         self.write_daily_aggs(new_rows_with_ratio, mode="append")
 
-        # For weekly/monthly, we need to rebuild from the full dataset
-        # OPTIMIZATION: Reuse existing_daily_data instead of re-reading from Delta table
-        logger.info("Rebuilding weekly and monthly aggregates from full dataset")
-        full_daily_data = pl.concat([existing_daily_data, new_rows_with_ratio]).sort(["ticker", "date"])
-        self.write_weekly_aggs(full_daily_data)
-        self.write_monthly_aggs(full_daily_data)
+        # Rebuild only the affected weekly and monthly windows
+        min_new_date = new_rows_with_ratio["date"].min()
+        if min_new_date is None:
+            logger.warning("No new dates found after filtering; skipping aggregate refresh")
+            return
+
+        weekly_start = min_new_date - timedelta(days=min_new_date.weekday())
+        monthly_start = min_new_date.replace(day=1)
+        aggregate_start = weekly_start if weekly_start <= monthly_start else monthly_start
+
+        historical_for_aggs = pl.DataFrame()
+        if existing_daily_data.height > 0:
+            historical_for_aggs = existing_daily_data.filter(pl.col("date") >= aggregate_start)
+
+        aggregate_source = pl.concat([historical_for_aggs, adjusted_daily_aggs]).sort(["ticker", "date"])
+
+        weekly_source = aggregate_source.filter(pl.col("date") >= weekly_start)
+        monthly_source = aggregate_source.filter(pl.col("date") >= monthly_start)
+
+        self.write_time_aggs(weekly_source, "1w", "weekly", incremental=True)
+        self.write_time_aggs(monthly_source, "1mo", "monthly", incremental=True)
 
     def process_full_rebuild(
         self,
