@@ -322,13 +322,12 @@ def write_monthly_aggs(df: pl.DataFrame) -> None:
     write_time_aggs(df, "1mo", "monthly")
 
 
-def main(full_rebuild: bool = False) -> None:
-    """Execute silver layer data processing pipeline.
+def _process_reference_data() -> tuple[pl.DataFrame, list[str], pl.DataFrame]:
+    """Load and process ticker and split reference data.
 
-    Args:
-        full_rebuild: If True, rebuild all data from scratch. If False, process incrementally.
+    Returns:
+        Tuple of (ticker_details, valid_tickers, split_details).
     """
-    # Always update ticker details and splits (reference data)
     ticker_details = read_ticker_details()
     etf_holdings = read_all_etf_holdings()
     ticker_details = ticker_details.join(etf_holdings, on="ticker", how="left")
@@ -339,73 +338,109 @@ def main(full_rebuild: bool = False) -> None:
     split_details = read_split_details(valid_tickers)
     write_split_details(split_details)
 
+    return ticker_details, valid_tickers, split_details
+
+
+def _process_incremental_data(
+    valid_tickers: list[str],
+    ticker_details: pl.DataFrame,
+    split_details: pl.DataFrame,
+    last_processed_date: date,
+) -> None:
+    """Process new data incrementally and update Delta tables.
+
+    Args:
+        valid_tickers: List of valid ticker symbols.
+        ticker_details: DataFrame with ticker details.
+        split_details: DataFrame with split details.
+        last_processed_date: Last date already processed in Delta table.
+    """
+    logger.info(f"Incremental mode: processing data after {last_processed_date}")
+
+    # Read only new data from bronze layer
+    unadjusted_daily_aggs = read_daily_aggs(
+        valid_tickers, ticker_details, start_date=last_processed_date
+    )
+
+    if unadjusted_daily_aggs.height == 0:
+        logger.info("No new data to process")
+        return
+
+    logger.info(f"Processing {unadjusted_daily_aggs.height:,} new rows")
+    adjusted_daily_aggs = apply_splits(unadjusted_daily_aggs, split_details)
+
+    # For volume ratios, we need full history to calculate 20-day rolling average
+    logger.info("Reading existing data to calculate volume ratios")
+    existing_daily_data = scan_delta_table("daily").collect()
+
+    # Combine existing and new data, sort by ticker and date
+    combined_data = pl.concat(
+        [existing_daily_data.drop(["volume_avg", "volume_avg_ratio"]), adjusted_daily_aggs]
+    ).sort(["ticker", "date"])
+
+    # Calculate volume ratios on full dataset
+    combined_with_volume_ratio = add_volume_ratio(combined_data)
+
+    # Filter to only the new rows we want to append
+    new_rows_with_ratio = combined_with_volume_ratio.filter(pl.col("date") > last_processed_date)
+
+    # Append new data to Delta table
+    write_daily_aggs(new_rows_with_ratio, mode="append")
+
+    # For weekly/monthly, we need to rebuild from the full dataset
+    logger.info("Rebuilding weekly and monthly aggregates from full dataset")
+    full_daily_data = scan_delta_table("daily").collect()
+    write_weekly_aggs(full_daily_data)
+    write_monthly_aggs(full_daily_data)
+
+
+def _process_full_rebuild(
+    valid_tickers: list[str],
+    ticker_details: pl.DataFrame,
+    split_details: pl.DataFrame,
+) -> None:
+    """Process all data from scratch and overwrite Delta tables.
+
+    Args:
+        valid_tickers: List of valid ticker symbols.
+        ticker_details: DataFrame with ticker details.
+        split_details: DataFrame with split details.
+    """
+    logger.info("Full rebuild mode: processing all data")
+    unadjusted_daily_aggs = read_daily_aggs(valid_tickers, ticker_details)
+    adjusted_daily_aggs = apply_splits(unadjusted_daily_aggs, split_details)
+
+    adjusted_daily_aggs_with_volume_ratio = add_volume_ratio(adjusted_daily_aggs)
+
+    write_daily_aggs(adjusted_daily_aggs_with_volume_ratio, mode="overwrite")
+    write_weekly_aggs(adjusted_daily_aggs)
+    write_monthly_aggs(adjusted_daily_aggs)
+
+
+def main(full_rebuild: bool = False) -> None:
+    """Execute silver layer data processing pipeline.
+
+    Args:
+        full_rebuild: If True, rebuild all data from scratch. If False, process incrementally.
+    """
+    # Always update ticker details and splits (reference data)
+    ticker_details, valid_tickers, split_details = _process_reference_data()
+
     # Determine if we should process incrementally
     incremental_mode = not full_rebuild and delta_table_exists("daily")
 
     if incremental_mode:
-        # Get the last processed date from Delta table
         last_processed_date = get_max_date_from_delta("daily")
 
         if last_processed_date:
-            logger.info(
-                f"Incremental mode: processing data after {last_processed_date}"
+            _process_incremental_data(
+                valid_tickers, ticker_details, split_details, last_processed_date
             )
-            # Read only new data from bronze layer
-            unadjusted_daily_aggs = read_daily_aggs(
-                valid_tickers, ticker_details, start_date=last_processed_date
-            )
-
-            if unadjusted_daily_aggs.height == 0:
-                logger.info("No new data to process")
-                return
-
-            logger.info(f"Processing {unadjusted_daily_aggs.height:,} new rows")
-            adjusted_daily_aggs = apply_splits(unadjusted_daily_aggs, split_details)
-
-            # For volume ratios, we need full history to calculate 20-day rolling average
-            # Read existing data and combine with new data
-            logger.info("Reading existing data to calculate volume ratios")
-            existing_daily_data = scan_delta_table("daily").collect()
-
-            # Combine existing and new data, sort by ticker and date
-            combined_data = pl.concat([
-                existing_daily_data.drop(["volume_avg", "volume_avg_ratio"]),
-                adjusted_daily_aggs
-            ]).sort(["ticker", "date"])
-
-            # Calculate volume ratios on full dataset
-            combined_with_volume_ratio = add_volume_ratio(combined_data)
-
-            # Filter to only the new rows we want to append
-            new_rows_with_ratio = combined_with_volume_ratio.filter(
-                pl.col("date") > last_processed_date
-            )
-
-            # Append new data to Delta table
-            write_daily_aggs(new_rows_with_ratio, mode="append")
-
-            # For weekly/monthly, we need to rebuild from the full dataset
-            # since aggregations span multiple days
-            logger.info("Rebuilding weekly and monthly aggregates from full dataset")
-            full_daily_data = scan_delta_table("daily").collect()
-            write_weekly_aggs(full_daily_data)
-            write_monthly_aggs(full_daily_data)
         else:
             logger.info("Delta table exists but is empty, performing full rebuild")
-            full_rebuild = True
-
-    if not incremental_mode or full_rebuild:
-        logger.info("Full rebuild mode: processing all data")
-        unadjusted_daily_aggs = read_daily_aggs(valid_tickers, ticker_details)
-        adjusted_daily_aggs = apply_splits(unadjusted_daily_aggs, split_details)
-
-        unadjusted_daily_aggs = None
-
-        adjusted_daily_aggs_with_volume_ratio = add_volume_ratio(adjusted_daily_aggs)
-
-        write_daily_aggs(adjusted_daily_aggs_with_volume_ratio, mode="overwrite")
-        write_weekly_aggs(adjusted_daily_aggs)
-        write_monthly_aggs(adjusted_daily_aggs)
+            _process_full_rebuild(valid_tickers, ticker_details, split_details)
+    else:
+        _process_full_rebuild(valid_tickers, ticker_details, split_details)
 
 
 if __name__ == "__main__":  # pragma: no cover
