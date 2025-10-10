@@ -6,9 +6,9 @@
       "title": "High Volume Close Database",
       "description": "Analytics database containing high volume trading days and institutional accumulation patterns.",
       "tables": {
-        "high_volume_closes_stocks": {
-          "title": "Stock High Volume Closes",
-          "description": "Individual trading days where stocks experienced unusually high volume (3x+ average). These events often indicate institutional activity, earnings releases, or significant news events. Limited to the past 5 years.",
+        "daily_high_volume_closes_stocks": {
+          "title": "Stock Daily High Volume Closes",
+          "description": "Individual trading days where stocks experienced unusually high volume (3x+ 20-day average). These events often indicate institutional activity, earnings releases, or significant news events. Limited to the past 5 years.",
           "sort_desc": "date",
           "columns": {
             "date": {
@@ -36,9 +36,9 @@
             ]
           }
         },
-        "high_volume_closes_etfs": {
-          "title": "ETF High Volume Closes",
-          "description": "Individual trading days where ETFs experienced unusually high volume (3x+ average). ETF HVCs often indicate sector rotation or broad market moves.",
+        "daily_high_volume_closes_etfs": {
+          "title": "ETF Daily High Volume Closes",
+          "description": "Individual trading days where ETFs experienced unusually high volume (3x+ 20-day average). ETF HVCs often indicate sector rotation or broad market moves.",
           "sort_desc": "date",
           "columns": {
             "date": {
@@ -116,6 +116,66 @@
             },
             "volume_avg": {
               "description": "20-week average volume for comparison",
+              "label": "Average Volume"
+            }
+          },
+          "metadata": {
+            "filter_by": [
+              "ticker",
+              "date"
+            ]
+          }
+        },
+        "monthly_high_volume_closes_stocks": {
+          "title": "Stock Monthly High Volume Closes",
+          "description": "Individual trading months where stocks experienced unusually high volume (3x+ 20-month average). Monthly HVCs are extremely significant and often indicate major corporate events, multi-month campaigns, or structural changes. Limited to the past 5 years.",
+          "sort_desc": "date",
+          "columns": {
+            "date": {
+              "description": "Month starting date (first day of month) of the high volume event"
+            },
+            "ticker": {
+              "description": "Stock ticker symbol"
+            },
+            "volume_avg_ratio": {
+              "description": "Ratio of actual monthly volume to 20-month average volume (e.g., 3.5 means 3.5x normal monthly volume)",
+              "label": "Volume Ratio"
+            },
+            "volume": {
+              "description": "Total shares traded during this month"
+            },
+            "volume_avg": {
+              "description": "20-month average volume for comparison",
+              "label": "Average Volume"
+            }
+          },
+          "metadata": {
+            "filter_by": [
+              "ticker",
+              "date"
+            ]
+          }
+        },
+        "monthly_high_volume_closes_etfs": {
+          "title": "ETF Monthly High Volume Closes",
+          "description": "Individual trading months where ETFs experienced unusually high volume (3x+ 20-month average). Monthly ETF HVCs often indicate major long-term sector rotation or sustained market trends.",
+          "sort_desc": "date",
+          "columns": {
+            "date": {
+              "description": "Month starting date (first day of month) of the high volume event"
+            },
+            "ticker": {
+              "description": "ETF ticker symbol"
+            },
+            "volume_avg_ratio": {
+              "description": "Ratio of actual monthly volume to 20-month average volume",
+              "label": "Volume Ratio"
+            },
+            "volume": {
+              "description": "Total shares traded during this month"
+            },
+            "volume_avg": {
+              "description": "20-month average volume for comparison",
               "label": "Average Volume"
             }
           },
@@ -393,6 +453,128 @@
               "still_trending"
             ]
           }
+        },
+        "falling_down_stairs_summary_stocks": {
+          "title": "Falling Down Stairs Summary (Stocks)",
+          "description": "One row per stock showing their falling down stairs pattern (consecutive HVCs with declining prices). Indicates sustained institutional distribution or selling pressure - useful for identifying potential shorts or stocks to avoid.",
+          "sort_desc": "steps",
+          "columns": {
+            "ticker": {
+              "description": "Stock ticker symbol"
+            },
+            "steps": {
+              "description": "Number of consecutive descending HVCs (e.g., 5 means 5 HVCs in a row, each lower than the last)",
+              "label": "# Steps"
+            },
+            "first_hvc": {
+              "description": "Date when the falling pattern started (first HVC)",
+              "label": "Started"
+            },
+            "last_hvc": {
+              "description": "Date of the most recent HVC in the pattern",
+              "label": "Ended"
+            },
+            "top_price": {
+              "description": "Closing price at the first HVC (top of the pattern)",
+              "label": "Top $"
+            },
+            "bottom_price": {
+              "description": "Closing price at the last HVC (bottom of the pattern)",
+              "label": "Bottom $"
+            },
+            "loss_pct": {
+              "description": "Percentage loss from top to bottom of the pattern (negative value)",
+              "label": "Loss %"
+            },
+            "latest_close": {
+              "description": "Current closing price",
+              "label": "Current $"
+            },
+            "change_since_pct": {
+              "description": "Percentage change from pattern bottom to current price (negative = continued decline)",
+              "label": "Since %"
+            },
+            "days_since_pattern": {
+              "description": "Days since the pattern completed",
+              "label": "Days Ago"
+            },
+            "still_trending": {
+              "description": "Whether current price is below the pattern bottom (indicates continued weakness)",
+              "label": "Still Falling"
+            }
+          },
+          "metadata": {
+            "filter_by": [
+              "ticker",
+              "steps",
+              "still_trending"
+            ],
+            "facets": [
+              "steps",
+              "still_trending"
+            ]
+          }
+        },
+        "falling_down_stairs_summary_etfs": {
+          "title": "Falling Down Stairs Summary (ETFs)",
+          "description": "One row per ETF showing their falling down stairs pattern. ETF falling patterns often indicate sector-wide weakness or major market trends.",
+          "sort_desc": "steps",
+          "columns": {
+            "ticker": {
+              "description": "ETF ticker symbol"
+            },
+            "steps": {
+              "description": "Number of consecutive descending HVCs",
+              "label": "# Steps"
+            },
+            "first_hvc": {
+              "description": "Date when the pattern started",
+              "label": "Started"
+            },
+            "last_hvc": {
+              "description": "Date of the most recent HVC",
+              "label": "Ended"
+            },
+            "top_price": {
+              "description": "Closing price at the first HVC",
+              "label": "Top $"
+            },
+            "bottom_price": {
+              "description": "Closing price at the last HVC",
+              "label": "Bottom $"
+            },
+            "loss_pct": {
+              "description": "Percentage loss from top to bottom (negative value)",
+              "label": "Loss %"
+            },
+            "latest_close": {
+              "description": "Current closing price",
+              "label": "Current $"
+            },
+            "change_since_pct": {
+              "description": "Percentage change since pattern ended",
+              "label": "Since %"
+            },
+            "days_since_pattern": {
+              "description": "Days since the pattern completed",
+              "label": "Days Ago"
+            },
+            "still_trending": {
+              "description": "Whether current price is below the pattern bottom",
+              "label": "Still Falling"
+            }
+          },
+          "metadata": {
+            "filter_by": [
+              "ticker",
+              "steps",
+              "still_trending"
+            ],
+            "facets": [
+              "steps",
+              "still_trending"
+            ]
+          }
         }
       },
       "queries": {
@@ -414,7 +596,7 @@
         "recent_hvcs": {
           "title": "Recent High Volume Closes",
           "description": "Most recent high volume trading days across all stocks",
-          "sql": "SELECT date, ticker, volume_avg_ratio as vol_ratio, volume FROM high_volume_closes_stocks ORDER BY date DESC LIMIT 100"
+          "sql": "SELECT date, ticker, volume_avg_ratio as vol_ratio, volume FROM daily_high_volume_closes_stocks ORDER BY date DESC LIMIT 100"
         },
         "strongest_stairstepping_stocks": {
           "title": "Strongest Stair-Stepping Stocks",
@@ -445,6 +627,51 @@
           "title": "Strongest Weekly HVCs (ETFs)",
           "description": "ETFs with the highest weekly volume ratios - extreme market or sector flows",
           "sql": "SELECT ticker, date, volume_avg_ratio as vol_ratio, volume, close FROM weekly_high_volume_closes_etfs ORDER BY volume_avg_ratio DESC LIMIT 50"
+        },
+        "recent_monthly_hvcs_stocks": {
+          "title": "Recent Monthly HVCs (Stocks)",
+          "description": "Most recent high volume months across all stocks - these are EXTREMELY significant indicating major institutional campaigns or structural changes",
+          "sql": "SELECT date, ticker, volume_avg_ratio as vol_ratio, volume FROM monthly_high_volume_closes_stocks ORDER BY date DESC LIMIT 100"
+        },
+        "recent_monthly_hvcs_etfs": {
+          "title": "Recent Monthly HVCs (ETFs)",
+          "description": "Most recent high volume months across all ETFs - indicates major long-term sector or market trends",
+          "sql": "SELECT date, ticker, volume_avg_ratio as vol_ratio, volume FROM monthly_high_volume_closes_etfs ORDER BY date DESC LIMIT 100"
+        },
+        "strongest_monthly_hvcs_stocks": {
+          "title": "Strongest Monthly HVCs (Stocks)",
+          "description": "Stocks with the highest monthly volume ratios - extreme long-term institutional interest",
+          "sql": "SELECT ticker, date, volume_avg_ratio as vol_ratio, volume, close FROM monthly_high_volume_closes_stocks ORDER BY volume_avg_ratio DESC LIMIT 50"
+        },
+        "strongest_monthly_hvcs_etfs": {
+          "title": "Strongest Monthly HVCs (ETFs)",
+          "description": "ETFs with the highest monthly volume ratios - extreme long-term market or sector flows",
+          "sql": "SELECT ticker, date, volume_avg_ratio as vol_ratio, volume, close FROM monthly_high_volume_closes_etfs ORDER BY volume_avg_ratio DESC LIMIT 50"
+        },
+        "strongest_falling_stocks": {
+          "title": "Strongest Falling Down Stairs Stocks",
+          "description": "Stocks with the most consecutive descending HVCs (worst pattern per ticker) - potential shorts or stocks to avoid",
+          "sql": "SELECT ticker, steps, first_hvc, last_hvc, top_price, bottom_price, loss_pct, latest_close, change_since_pct, still_trending FROM falling_down_stairs_summary_stocks ORDER BY steps DESC, last_hvc DESC LIMIT 50"
+        },
+        "still_falling_stocks": {
+          "title": "Stocks Still Falling (Below Pattern Low)",
+          "description": "Stocks where price is still below the pattern bottom (continued weakness)",
+          "sql": "SELECT ticker, steps, last_hvc, bottom_price, latest_close, change_since_pct, days_since_pattern FROM falling_down_stairs_summary_stocks WHERE still_trending = 1 ORDER BY steps DESC, change_since_pct ASC"
+        },
+        "recent_falling_patterns": {
+          "title": "Recent Falling Patterns (3+ Steps)",
+          "description": "Falling down stairs patterns with 3+ consecutive HVCs that completed in the last 60 days",
+          "sql": "SELECT ticker, steps, last_hvc as ended, top_price, bottom_price, loss_pct, latest_close, change_since_pct, still_trending FROM falling_down_stairs_summary_stocks WHERE days_since_pattern <= 60 AND steps >= 3 ORDER BY last_hvc DESC"
+        },
+        "worst_falling_patterns": {
+          "title": "Worst Loss Patterns",
+          "description": "Top 20 falling down stairs patterns by total loss percentage",
+          "sql": "SELECT ticker, steps, top_price, bottom_price, loss_pct, first_hvc as started, last_hvc as ended FROM falling_down_stairs_summary_stocks ORDER BY loss_pct ASC LIMIT 20"
+        },
+        "falling_vs_stairstepping": {
+          "title": "Market Sentiment: Falling vs Rising",
+          "description": "Compare count of falling patterns vs stair-stepping patterns to gauge market sentiment",
+          "sql": "SELECT 'Falling' as pattern_type, COUNT(*) as count, AVG(steps) as avg_steps FROM falling_down_stairs_summary_stocks UNION ALL SELECT 'Rising' as pattern_type, COUNT(*) as count, AVG(steps) as avg_steps FROM stairstepping_summary_stocks"
         }
       }
     }
