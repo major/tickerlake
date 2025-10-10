@@ -373,6 +373,12 @@ def _process_incremental_data(
     logger.info("Reading existing data to calculate volume ratios")
     existing_daily_data = scan_delta_table("daily").collect()
 
+    # Cast existing data to match new data types (UInt64 for volume/transactions)
+    existing_daily_data = existing_daily_data.with_columns(
+        pl.col("volume").cast(pl.UInt64),
+        pl.col("transactions").cast(pl.UInt64),
+    )
+
     # Combine existing and new data, sort by ticker and date
     combined_data = pl.concat(
         [existing_daily_data.drop(["volume_avg", "volume_avg_ratio"]), adjusted_daily_aggs]
