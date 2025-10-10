@@ -1,7 +1,7 @@
 """Silver medallion layer for TickerLake."""
 
 import logging
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Literal
 
 import polars as pl
@@ -385,19 +385,69 @@ def _process_incremental_data(
     adjusted_daily_aggs = apply_splits(unadjusted_daily_aggs, split_details)
 
     # For volume ratios, we need full history to calculate 20-day rolling average
-    logger.info("Reading existing data to calculate volume ratios")
-    existing_daily_data = scan_delta_table("daily").collect()
+    required_tickers = adjusted_daily_aggs["ticker"].unique().to_list()
+    history_buffer_days = 40
+    history_start = last_processed_date - timedelta(days=history_buffer_days)
 
-    # Cast existing data to match new data types (UInt64 for volume/transactions)
-    existing_daily_data = existing_daily_data.with_columns(
-        pl.col("volume").cast(pl.UInt64),
-        pl.col("transactions").cast(pl.UInt64),
+    logger.info(
+        "Reading existing data to calculate volume ratios",
+        history_start=history_start,
+        tickers=len(required_tickers),
     )
 
-    # Combine existing and new data, sort by ticker and date
-    combined_data = pl.concat(
-        [existing_daily_data.drop(["volume_avg", "volume_avg_ratio"]), adjusted_daily_aggs]
-    ).sort(["ticker", "date"])
+    lazy_existing = (
+        scan_delta_table("daily")
+        .filter(pl.col("ticker").is_in(required_tickers))
+        .filter(pl.col("date") >= pl.lit(history_start))
+        .filter(pl.col("date") <= pl.lit(last_processed_date))
+    )
+
+    existing_daily_data = lazy_existing.select(
+        ["ticker", "date", "open", "high", "low", "close", "volume", "transactions"]
+    ).collect()
+
+    insufficient_history = (
+        existing_daily_data.group_by("ticker")
+        .count()
+        .filter(pl.col("count") < 20)
+        .get_column("ticker")
+        .to_list()
+        if existing_daily_data.height > 0
+        else []
+    )
+
+    if insufficient_history:
+        logger.info(
+            "Fetching additional history for tickers with sparse data",
+            tickers=insufficient_history,
+        )
+        extra_history = (
+            scan_delta_table("daily")
+            .filter(pl.col("ticker").is_in(insufficient_history))
+            .filter(pl.col("date") < pl.lit(history_start))
+            .select(["ticker", "date", "open", "high", "low", "close", "volume", "transactions"])
+            .collect()
+        )
+
+        if extra_history.height > 0:
+            extra_history = (
+                extra_history.sort(["ticker", "date"])
+                .group_by("ticker")
+                .tail(20)
+            )
+            existing_daily_data = pl.concat([existing_daily_data, extra_history])
+
+    if existing_daily_data.height > 0:
+        existing_daily_data = existing_daily_data.with_columns(
+            pl.col("volume").cast(pl.UInt64),
+            pl.col("transactions").cast(pl.UInt64),
+        )
+
+    combined_parts = [adjusted_daily_aggs]
+    if existing_daily_data.height > 0:
+        combined_parts.insert(0, existing_daily_data.sort(["ticker", "date"]))
+
+    combined_data = pl.concat(combined_parts).sort(["ticker", "date"])
 
     # Calculate volume ratios on full dataset
     combined_with_volume_ratio = add_volume_ratio(combined_data)
