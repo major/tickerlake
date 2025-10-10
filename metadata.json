@@ -1,0 +1,378 @@
+{
+  "title": "TickerLake - High Volume Close Analytics",
+  "description": "Real-time analysis of institutional trading patterns through High Volume Close (HVC) detection and stair-stepping pattern identification. Data limited to the past 5 years for optimal performance and relevance.",
+  "databases": {
+    "hvcs": {
+      "title": "High Volume Close Database",
+      "description": "Analytics database containing high volume trading days and institutional accumulation patterns.",
+      "tables": {
+        "high_volume_closes_stocks": {
+          "title": "Stock High Volume Closes",
+          "description": "Individual trading days where stocks experienced unusually high volume (3x+ average). These events often indicate institutional activity, earnings releases, or significant news events. Limited to the past 5 years.",
+          "sort_desc": "date",
+          "columns": {
+            "date": {
+              "description": "Trading date of the high volume event"
+            },
+            "ticker": {
+              "description": "Stock ticker symbol"
+            },
+            "volume_avg_ratio": {
+              "description": "Ratio of actual volume to 20-day average volume (e.g., 3.5 means 3.5x normal volume)",
+              "label": "Volume Ratio"
+            },
+            "volume": {
+              "description": "Total shares traded on this day"
+            },
+            "volume_avg": {
+              "description": "20-day average volume for comparison",
+              "label": "Average Volume"
+            }
+          },
+          "metadata": {
+            "filter_by": [
+              "ticker",
+              "date"
+            ]
+          }
+        },
+        "high_volume_closes_etfs": {
+          "title": "ETF High Volume Closes",
+          "description": "Individual trading days where ETFs experienced unusually high volume (3x+ average). ETF HVCs often indicate sector rotation or broad market moves.",
+          "sort_desc": "date",
+          "columns": {
+            "date": {
+              "description": "Trading date of the high volume event"
+            },
+            "ticker": {
+              "description": "ETF ticker symbol"
+            },
+            "volume_avg_ratio": {
+              "description": "Ratio of actual volume to 20-day average volume",
+              "label": "Volume Ratio"
+            },
+            "volume": {
+              "description": "Total shares traded on this day"
+            },
+            "volume_avg": {
+              "description": "20-day average volume for comparison",
+              "label": "Average Volume"
+            }
+          },
+          "metadata": {
+            "filter_by": [
+              "ticker",
+              "date"
+            ]
+          }
+        },
+        "stairstepping_hvcs_stocks": {
+          "title": "Stock Stair-Stepping Patterns",
+          "description": "Stocks showing consecutive HVCs with progressively higher closing prices. This pattern indicates sustained institutional accumulation and is often a bullish signal. Each row represents a complete pattern sequence. Limited to the past 5 years.",
+          "sort_desc": "pattern_end_date",
+          "columns": {
+            "ticker": {
+              "description": "Stock ticker symbol"
+            },
+            "pattern_start_date": {
+              "description": "Date of the first HVC in the stair-stepping sequence",
+              "label": "Pattern Start"
+            },
+            "pattern_end_date": {
+              "description": "Date of the most recent HVC in the sequence",
+              "label": "Pattern End"
+            },
+            "hvc_count": {
+              "description": "Number of consecutive HVCs in the pattern (minimum 3)",
+              "label": "# of Steps"
+            },
+            "first_close": {
+              "description": "Closing price at the start of the pattern",
+              "label": "Starting Price"
+            },
+            "last_close": {
+              "description": "Closing price at the end of the pattern",
+              "label": "Pattern High"
+            },
+            "pattern_gain_pct": {
+              "description": "Percentage gain from first to last HVC in the pattern",
+              "label": "Pattern Gain %"
+            },
+            "latest_close": {
+              "description": "Current closing price (as of most recent data)",
+              "label": "Current Price"
+            },
+            "price_change_since_pct": {
+              "description": "Percentage change from pattern end to current price (positive = continued uptrend)",
+              "label": "Change Since %"
+            },
+            "days_since_pattern": {
+              "description": "Number of trading days since the pattern completed",
+              "label": "Days Ago"
+            },
+            "above_pattern_high": {
+              "description": "Whether the current price is above the pattern's highest close (indicates continued strength)",
+              "label": "Still Trending"
+            },
+            "dates_str": {
+              "description": "Comma-separated list of all HVC dates in the pattern",
+              "label": "HVC Dates"
+            },
+            "closes_str": {
+              "description": "Comma-separated list of closing prices for each HVC (shows the stair-stepping progression)",
+              "label": "Price Progression"
+            },
+            "volume_ratios_str": {
+              "description": "Comma-separated list of volume ratios for each HVC (e.g., '3.5, 4.2, 3.8')",
+              "label": "Volume Ratios"
+            }
+          },
+          "metadata": {
+            "filter_by": [
+              "ticker",
+              "hvc_count",
+              "above_pattern_high"
+            ],
+            "facets": [
+              "hvc_count",
+              "above_pattern_high"
+            ]
+          }
+        },
+        "stairstepping_hvcs_etfs": {
+          "title": "ETF Stair-Stepping Patterns",
+          "description": "ETFs showing consecutive HVCs with progressively higher closing prices. ETF patterns often indicate sector-wide or market-wide institutional flows.",
+          "sort_desc": "pattern_end_date",
+          "columns": {
+            "ticker": {
+              "description": "ETF ticker symbol"
+            },
+            "pattern_start_date": {
+              "description": "Date of the first HVC in the pattern",
+              "label": "Pattern Start"
+            },
+            "pattern_end_date": {
+              "description": "Date of the most recent HVC in the pattern",
+              "label": "Pattern End"
+            },
+            "hvc_count": {
+              "description": "Number of consecutive HVCs in the pattern",
+              "label": "# of Steps"
+            },
+            "first_close": {
+              "description": "Closing price at the start of the pattern",
+              "label": "Starting Price"
+            },
+            "last_close": {
+              "description": "Closing price at the end of the pattern",
+              "label": "Pattern High"
+            },
+            "pattern_gain_pct": {
+              "description": "Percentage gain from first to last HVC",
+              "label": "Pattern Gain %"
+            },
+            "latest_close": {
+              "description": "Current closing price",
+              "label": "Current Price"
+            },
+            "price_change_since_pct": {
+              "description": "Percentage change from pattern end to current price",
+              "label": "Change Since %"
+            },
+            "days_since_pattern": {
+              "description": "Number of days since the pattern completed",
+              "label": "Days Ago"
+            },
+            "above_pattern_high": {
+              "description": "Whether current price is above the pattern's highest close",
+              "label": "Still Trending"
+            },
+            "dates_str": {
+              "description": "Comma-separated list of HVC dates",
+              "label": "HVC Dates"
+            },
+            "closes_str": {
+              "description": "Comma-separated list of closing prices",
+              "label": "Price Progression"
+            },
+            "volume_ratios_str": {
+              "description": "Comma-separated list of volume ratios",
+              "label": "Volume Ratios"
+            }
+          },
+          "metadata": {
+            "filter_by": [
+              "ticker",
+              "hvc_count",
+              "above_pattern_high"
+            ],
+            "facets": [
+              "hvc_count",
+              "above_pattern_high"
+            ]
+          }
+        },
+        "stairstepping_summary_stocks": {
+          "title": "Stair-Stepping Summary (Stocks)",
+          "description": "One row per stock showing their best stair-stepping pattern (most steps). Perfect for quickly identifying which stocks have shown the strongest institutional accumulation patterns.",
+          "sort_desc": "steps",
+          "columns": {
+            "ticker": {
+              "description": "Stock ticker symbol"
+            },
+            "steps": {
+              "description": "Number of consecutive ascending HVCs (e.g., 5 means 5 HVCs in a row, each higher than the last)",
+              "label": "# Steps"
+            },
+            "first_hvc": {
+              "description": "Date when the stair-stepping pattern started (first HVC)",
+              "label": "Started"
+            },
+            "last_hvc": {
+              "description": "Date of the most recent HVC in the pattern",
+              "label": "Ended"
+            },
+            "bottom_price": {
+              "description": "Closing price at the first HVC (bottom of the pattern)",
+              "label": "Bottom $"
+            },
+            "top_price": {
+              "description": "Closing price at the last HVC (top of the pattern)",
+              "label": "Top $"
+            },
+            "gain_pct": {
+              "description": "Percentage gain from bottom to top of the pattern",
+              "label": "Gain %"
+            },
+            "latest_close": {
+              "description": "Current closing price",
+              "label": "Current $"
+            },
+            "change_since_pct": {
+              "description": "Percentage change from pattern top to current price",
+              "label": "Since %"
+            },
+            "days_since_pattern": {
+              "description": "Days since the pattern completed",
+              "label": "Days Ago"
+            },
+            "still_trending": {
+              "description": "Whether current price is above the pattern top (indicates continued strength)",
+              "label": "Trending"
+            }
+          },
+          "metadata": {
+            "filter_by": [
+              "ticker",
+              "steps",
+              "still_trending"
+            ],
+            "facets": [
+              "steps",
+              "still_trending"
+            ]
+          }
+        },
+        "stairstepping_summary_etfs": {
+          "title": "Stair-Stepping Summary (ETFs)",
+          "description": "One row per ETF showing their best stair-stepping pattern (most steps).",
+          "sort_desc": "steps",
+          "columns": {
+            "ticker": {
+              "description": "ETF ticker symbol"
+            },
+            "steps": {
+              "description": "Number of consecutive ascending HVCs",
+              "label": "# Steps"
+            },
+            "first_hvc": {
+              "description": "Date when the pattern started",
+              "label": "Started"
+            },
+            "last_hvc": {
+              "description": "Date of the most recent HVC",
+              "label": "Ended"
+            },
+            "bottom_price": {
+              "description": "Closing price at the first HVC",
+              "label": "Bottom $"
+            },
+            "top_price": {
+              "description": "Closing price at the last HVC",
+              "label": "Top $"
+            },
+            "gain_pct": {
+              "description": "Percentage gain from bottom to top",
+              "label": "Gain %"
+            },
+            "latest_close": {
+              "description": "Current closing price",
+              "label": "Current $"
+            },
+            "change_since_pct": {
+              "description": "Percentage change since pattern ended",
+              "label": "Since %"
+            },
+            "days_since_pattern": {
+              "description": "Days since the pattern completed",
+              "label": "Days Ago"
+            },
+            "still_trending": {
+              "description": "Whether current price is above the pattern top",
+              "label": "Trending"
+            }
+          },
+          "metadata": {
+            "filter_by": [
+              "ticker",
+              "steps",
+              "still_trending"
+            ],
+            "facets": [
+              "steps",
+              "still_trending"
+            ]
+          }
+        }
+      },
+      "queries": {
+        "recent_strong_patterns": {
+          "title": "Recent Strong Patterns (4+ Steps)",
+          "description": "Stair-stepping patterns with 4+ consecutive HVCs that completed in the last 30 days",
+          "sql": "SELECT ticker, hvc_count as steps, pattern_end_date as ended, pattern_gain_pct as gain_pct, latest_close as current_price, price_change_since_pct as change_since_pct, above_pattern_high as trending FROM stairstepping_hvcs_stocks WHERE days_since_pattern <= 30 AND hvc_count >= 4 ORDER BY pattern_end_date DESC"
+        },
+        "best_patterns_all_time": {
+          "title": "Highest Gain Patterns",
+          "description": "Top 20 stair-stepping patterns by total gain percentage",
+          "sql": "SELECT ticker, hvc_count as steps, first_close, last_close, pattern_gain_pct as gain_pct, pattern_start_date as started, pattern_end_date as ended FROM stairstepping_hvcs_stocks ORDER BY pattern_gain_pct DESC LIMIT 20"
+        },
+        "active_patterns": {
+          "title": "Active Patterns (Still Trending Up)",
+          "description": "Patterns where the stock is still trading above the pattern high",
+          "sql": "SELECT ticker, hvc_count as steps, pattern_end_date as ended, last_close as pattern_high, latest_close as current_price, price_change_since_pct as gain_since_pct, days_since_pattern as days_ago FROM stairstepping_hvcs_stocks WHERE above_pattern_high = 1 AND days_since_pattern <= 60 ORDER BY price_change_since_pct DESC"
+        },
+        "recent_hvcs": {
+          "title": "Recent High Volume Closes",
+          "description": "Most recent high volume trading days across all stocks",
+          "sql": "SELECT date, ticker, volume_avg_ratio as vol_ratio, volume FROM high_volume_closes_stocks ORDER BY date DESC LIMIT 100"
+        },
+        "strongest_stairstepping_stocks": {
+          "title": "Strongest Stair-Stepping Stocks",
+          "description": "Stocks with the most consecutive ascending HVCs (best pattern per ticker)",
+          "sql": "SELECT ticker, steps, first_hvc, last_hvc, bottom_price, top_price, gain_pct, latest_close, change_since_pct, still_trending FROM stairstepping_summary_stocks ORDER BY steps DESC, last_hvc DESC LIMIT 50"
+        },
+        "trending_stairstepping_stocks": {
+          "title": "Stair-Stepping Stocks Still Trending",
+          "description": "Stocks where price is still above the pattern top (continued strength)",
+          "sql": "SELECT ticker, steps, last_hvc, top_price, latest_close, change_since_pct, days_since_pattern FROM stairstepping_summary_stocks WHERE still_trending = 1 ORDER BY steps DESC, change_since_pct DESC"
+        }
+      }
+    }
+  },
+  "plugins": {
+    "datasette-cluster-map": {
+      "latitude_column": null,
+      "longitude_column": null
+    }
+  }
+}

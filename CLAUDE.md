@@ -44,9 +44,14 @@ TickerLake follows a medallion architecture for financial data processing:
   - Automatically generates weekly and monthly aggregates
 
 - **Gold Layer** (`src/tickerlake/gold/`): Business-level aggregates and analytics
-  - Identifies high-volume trading days for pattern analysis
-  - Reads from silver Delta tables for optimal performance
-  - Exports to SQLite for easy querying and visualization
+  - **High Volume Closes (HVCs)**: Identifies days with 3x+ average volume
+    - Filters for liquid stocks (200K+ avg volume, $5+ price) and ETFs (50K+ avg volume)
+    - Tracks current price vs HVC channels for pattern continuation
+  - **Stair-Stepping Patterns**: Detects consecutive HVCs with ascending prices
+    - Identifies institutional accumulation (3+ consecutive HVCs, each closing higher)
+    - Analyzes pattern strength, duration, and current status
+    - See `examples/find_stairstepping_hvcs.py` for usage
+  - Exports to SQLite database (`hvcs.db`) for easy querying and visualization
 
 ### Configuration Management
 - Uses Pydantic Settings with `.env` file support (`src/tickerlake/config.py`)

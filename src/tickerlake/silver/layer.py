@@ -137,13 +137,14 @@ class SilverLayer:
 
         Returns:
             pl.DataFrame: DataFrame with two additional columns:
-                - 'volume_avg': 20-period rolling mean of 'volume' per 'ticker'.
+                - 'volume_avg': 20-period rolling mean of 'volume' per 'ticker' (excluding current day).
                 - 'volume_avg_ratio': Ratio of 'volume' to 'volume_avg'.
         """
         logger.info("Calculating volume average ratio")
         result = df.with_columns(
             pl.col("volume")
             .rolling_mean(window_size=20)
+            .shift(1)  # Use previous 20 days, not including current day
             .over("ticker")
             .cast(pl.UInt64)
             .alias("volume_avg")
@@ -198,7 +199,7 @@ class SilverLayer:
         if start_date:
             df = df.filter(pl.col("date") > start_date)
 
-        df = df.sort(["date", "ticker"])
+        df = df.sort(["ticker", "date"])
 
         # Join with ticker details to add ticker_type
         if ticker_details is not None:
@@ -262,7 +263,7 @@ class SilverLayer:
             (pl.col("high") * pl.col("total_adjustment")).cast(pl.Float64).alias("high"),
             (pl.col("low") * pl.col("total_adjustment")).cast(pl.Float64).alias("low"),
             (pl.col("volume") / pl.col("total_adjustment")).cast(pl.UInt64).alias("volume"),
-        ).drop("total_adjustment")
+        ).drop("total_adjustment").sort(["ticker", "date"])
 
         return validate_daily_aggregates(result)
 
@@ -396,8 +397,9 @@ class SilverLayer:
         self.write_daily_aggs(new_rows_with_ratio, mode="append")
 
         # For weekly/monthly, we need to rebuild from the full dataset
+        # OPTIMIZATION: Reuse existing_daily_data instead of re-reading from Delta table
         logger.info("Rebuilding weekly and monthly aggregates from full dataset")
-        full_daily_data = scan_delta_table("daily").collect()
+        full_daily_data = pl.concat([existing_daily_data, new_rows_with_ratio]).sort(["ticker", "date"])
         self.write_weekly_aggs(full_daily_data)
         self.write_monthly_aggs(full_daily_data)
 

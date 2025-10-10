@@ -1,6 +1,7 @@
 """Gold medallion layer for TickerLake."""
 
 import logging
+from datetime import date, timedelta
 
 import polars as pl
 import structlog
@@ -38,17 +39,22 @@ class GoldLayer:
         return latest_prices
 
     def get_high_volume_closes(self) -> pl.DataFrame:
-        """Get days with unusually high trading volume from Delta table and join latest closing prices.
+        """Get days with unusually high trading volume from Delta table.
+
+        Only includes data from the past 5 years to focus on recent patterns.
 
         Returns:
-            pl.DataFrame: DataFrame with ticker, date, close, volume, volume_avg_ratio,
-                         and latest_close columns.
+            pl.DataFrame: DataFrame with ticker, date, close, volume, and volume_avg_ratio.
         """
-        logger.info("Extracting high volume closes from daily data")
+        logger.info("Extracting high volume closes from daily data (past 5 years)")
+
+        # Calculate 5 years ago from today
+        five_years_ago = date.today() - timedelta(days=5 * 365)
 
         df = (
             scan_delta_table("daily")
             .filter(
+                pl.col("date") >= five_years_ago,  # Only past 5 years
                 pl.col("volume_avg_ratio") >= 3,
                 (
                     (
@@ -56,57 +62,256 @@ class GoldLayer:
                         & (pl.col("volume_avg") >= 200000)
                         & (pl.col("close") >= 5)
                     )
-                    | ((pl.col("ticker_type") == "ETF") & (pl.col("volume_avg") >= 50000))
+                    | (
+                        (pl.col("ticker_type") == "ETF")
+                        & (pl.col("volume_avg") >= 50000)
+                    )
                 ),
             )
             .collect()
             .sort(["date", "ticker"], descending=[True, False])
         )
 
-        # Get latest closing prices for each ticker
-        latest_prices = self.get_latest_closing_prices()
+        return df
 
-        # Join the latest prices to the high volume DataFrame
-        df_with_latest = df.join(latest_prices, on="ticker", how="left")
+    def get_stairstepping_hvcs(
+        self,
+        min_steps: int = 3,
+        hvcs_df: pl.DataFrame | None = None,
+        latest_prices: pl.DataFrame | None = None,
+    ) -> pl.DataFrame:
+        """Identify stocks with consecutive HVCs showing stair-stepping price increases.
 
-        # Add columns to indicate if latest close is within or near the high volume channel
-        df_with_latest = df_with_latest.with_columns(
-            (
-                (pl.col("latest_close") >= pl.col("low"))
-                & (pl.col("latest_close") <= pl.col("high"))
-            ).alias("in_hvc_channel"),
-            (
+        A stair-step pattern occurs when a stock has consecutive HVCs where each
+        subsequent HVC has a higher closing price than the previous one. This pattern
+        often indicates sustained institutional accumulation.
+
+        Only includes data from the past 5 years to focus on recent patterns.
+
+        Args:
+            min_steps: Minimum number of consecutive ascending HVCs required (default: 3).
+            hvcs_df: Optional precomputed HVCs DataFrame. If None, will fetch from Delta table.
+            latest_prices: Optional precomputed latest prices. If None, will fetch from Delta table.
+
+        Returns:
+            pl.DataFrame: DataFrame with ticker, pattern details, and sequence of HVCs
+                         showing stair-stepping behavior.
+        """
+        logger.info(f"Identifying stair-stepping HVC patterns with min {min_steps} steps")
+
+        # If HVCs not provided, fetch them
+        if hvcs_df is None:
+            logger.info("HVCs not provided, fetching from Delta table")
+            hvcs_df = self.get_high_volume_closes()
+        else:
+            logger.info("Using precomputed HVCs (optimization)")
+
+        # Extract just the columns needed for stairstepping analysis
+        hvcs = hvcs_df.select([
+            "ticker",
+            "ticker_type",
+            "date",
+            "close",
+            "volume",
+            "volume_avg_ratio",
+        ]).sort(["ticker", "date"])
+
+        # For each ticker, identify consecutive ascending price sequences
+        stairstepping_patterns = (
+            hvcs.with_columns(
+                # Get previous close price for this ticker
+                pl.col("close").shift(1).over("ticker").alias("prev_close"),
+                # Check if current close is higher than previous
+                (pl.col("close") > pl.col("close").shift(1).over("ticker")).alias(
+                    "is_ascending"
+                ),
+            )
+            .with_columns(
+                # Create groups: new group starts when is_ascending becomes False or is null
+                (~pl.col("is_ascending").fill_null(False))
+                .cum_sum()
+                .over("ticker")
+                .alias("sequence_group"),
+            )
+            .filter(
+                # Only keep ascending sequences
+                pl.col("is_ascending") == True  # noqa: E712
+            )
+            .group_by(["ticker", "ticker_type", "sequence_group"])
+            .agg(
+                pl.col("date").min().alias("pattern_start_date"),
+                pl.col("date").max().alias("pattern_end_date"),
+                pl.col("date").alias("dates"),
+                pl.col("close").alias("closes"),
+                pl.col("volume_avg_ratio").alias("volume_ratios"),
+                pl.col("close").first().alias("first_close"),
+                pl.col("close").last().alias("last_close"),
+                pl.len().alias("step_count"),
+            )
+            .filter(
+                # Filter for patterns with at least min_steps
+                pl.col("step_count")
+                >= (min_steps - 1)  # -1 because we're counting transitions
+            )
+            .with_columns(
+                # Calculate percent gain from first to last close in the pattern
                 (
-                    # Above high but within 5% of high
-                    (pl.col("latest_close") > pl.col("high"))
-                    & (pl.col("latest_close") <= pl.col("high") * 1.05)
-                )
-                | (
-                    # Below low but within 5% of low
-                    (pl.col("latest_close") < pl.col("low"))
-                    & (pl.col("latest_close") >= pl.col("low") * 0.95)
-                )
-            ).alias("near_hvc_channel"),
+                    (pl.col("last_close") - pl.col("first_close"))
+                    / pl.col("first_close")
+                    * 100
+                ).alias("pattern_gain_pct"),
+                # Actual number of HVCs in the pattern (+1 for the initial step)
+                (pl.col("step_count") + 1).alias("hvc_count"),
+            )
+            .sort(["pattern_end_date", "hvc_count"], descending=[True, True])
+            .drop("sequence_group")
         )
 
-        return df_with_latest
+        # Get latest closing prices if not provided
+        if latest_prices is None:
+            logger.info("Latest prices not provided, fetching from Delta table")
+            latest_prices = self.get_latest_closing_prices()
+        else:
+            logger.info("Using precomputed latest prices (optimization)")
+
+        stairstepping_patterns = stairstepping_patterns.join(
+            latest_prices, on="ticker", how="left"
+        )
+
+        # Check if pattern is still "active" (no lower HVCs after pattern ended)
+        # For each pattern, check if any HVCs after pattern_end_date are below last_close
+        logger.info("Checking for broken patterns (HVCs below pattern high after pattern ended)")
+
+        # Join stairstepping patterns with all HVCs to find any HVCs after the pattern
+        patterns_with_future_hvcs = stairstepping_patterns.join(
+            hvcs.select(["ticker", "date", "close"]).rename({"date": "hvc_date", "close": "hvc_close"}),
+            on="ticker",
+            how="left"
+        )
+
+        # Filter to HVCs that occurred after the pattern ended
+        patterns_with_future_hvcs = patterns_with_future_hvcs.filter(
+            pl.col("hvc_date") > pl.col("pattern_end_date")
+        )
+
+        # Check if any future HVCs are lower than the pattern's last_close
+        broken_patterns = (
+            patterns_with_future_hvcs
+            .filter(pl.col("hvc_close") < pl.col("last_close"))
+            .select(["ticker", "pattern_start_date", "pattern_end_date"])
+            .unique()
+            .with_columns(pl.lit(True).alias("is_broken"))
+        )
+
+        # Left join to mark broken patterns
+        stairstepping_patterns = stairstepping_patterns.join(
+            broken_patterns,
+            on=["ticker", "pattern_start_date", "pattern_end_date"],
+            how="left"
+        ).with_columns(
+            pl.col("is_broken").fill_null(False).alias("pattern_broken")
+        ).drop("is_broken")
+
+        # Add analysis columns
+        stairstepping_patterns = stairstepping_patterns.with_columns(
+            # Days since pattern ended
+            (pl.lit(date.today()) - pl.col("pattern_end_date"))
+            .dt.total_days()
+            .alias("days_since_pattern"),
+            # Current price vs last HVC in pattern
+            (
+                (pl.col("latest_close") - pl.col("last_close"))
+                / pl.col("last_close")
+                * 100
+            ).alias("price_change_since_pct"),
+            # Is current price above the pattern high?
+            (pl.col("latest_close") > pl.col("last_close")).alias("above_pattern_high"),
+        )
+
+        logger.info(f"Found {stairstepping_patterns.height} stair-stepping patterns")
+
+        # Filter out broken patterns
+        active_patterns = stairstepping_patterns.filter(~pl.col("pattern_broken"))
+        logger.info(f"Filtered to {active_patterns.height} active patterns (excluding broken patterns)")
+
+        return active_patterns
+
+    def get_stairstepping_summary(
+        self, patterns: pl.DataFrame | None = None
+    ) -> pl.DataFrame:
+        """Get a summary of stair-stepping patterns with one row per ticker showing their most recent pattern.
+
+        For tickers with multiple patterns, shows the most recent one (by pattern_end_date).
+
+        Args:
+            patterns: Optional precomputed patterns DataFrame. If None, will compute patterns.
+
+        Returns:
+            pl.DataFrame: Summary with ticker, step count, dates, and gains.
+        """
+        logger.info("Creating stair-stepping summary (most recent pattern per ticker)")
+
+        # Get all patterns if not provided
+        if patterns is None:
+            logger.info("Patterns not provided, computing from scratch")
+            patterns = self.get_stairstepping_hvcs(min_steps=3)
+        else:
+            logger.info("Using precomputed patterns (optimization)")
+
+        if patterns.height == 0:
+            return pl.DataFrame()
+
+        # For each ticker, keep only the most recent pattern (by pattern_end_date)
+        # If tied, keep the one with the most steps
+        summary = (
+            patterns.sort(["pattern_end_date", "hvc_count"], descending=[True, True])
+            .group_by("ticker")
+            .agg(
+                pl.col("ticker_type").first(),
+                pl.col("hvc_count").first().alias("steps"),
+                pl.col("pattern_start_date").first().alias("first_hvc"),
+                pl.col("pattern_end_date").first().alias("last_hvc"),
+                pl.col("first_close").first().round(2).alias("bottom_price"),
+                pl.col("last_close").first().round(2).alias("top_price"),
+                pl.col("pattern_gain_pct").first().round(1).alias("gain_pct"),
+                pl.col("latest_close").first().round(2),
+                pl.col("price_change_since_pct")
+                .first()
+                .round(1)
+                .alias("change_since_pct"),
+                pl.col("days_since_pattern").first(),
+                pl.col("above_pattern_high").first().alias("still_trending"),
+            )
+            .sort(["last_hvc", "steps"], descending=[True, True])
+        )
+
+        logger.info(f"Created summary with {summary.height} unique tickers")
+        return summary
 
     def run(self) -> None:
-        """Execute gold layer analytics and export to SQLite."""
-        logger.info("Starting high volume closes extraction")
-        df = self.get_high_volume_closes()
+        """Execute gold layer analytics and export to SQLite.
 
-        hvcs = df.with_columns(
+        Optimized to minimize Delta table scans:
+        - Scans Delta table once for HVCs
+        - Scans Delta table once for latest prices
+        - Reuses these DataFrames for all downstream analytics
+        """
+        # SCAN 1: Get all HVCs (used by multiple downstream operations)
+        logger.info("Starting high volume closes extraction")
+        hvcs_raw = self.get_high_volume_closes()
+
+        # Prepare HVCs for database export
+        hvcs = hvcs_raw.with_columns(
+            pl.col("close").round(2).alias("close"),
             pl.col("volume_avg_ratio").round(2).alias("volume_avg_ratio")
         ).select([
             "date",
             "ticker",
             "ticker_type",
+            "close",
             "volume_avg_ratio",
             "volume",
             "volume_avg",
-            "in_hvc_channel",
-            "near_hvc_channel",
         ])
 
         # Validate schema before writing
@@ -126,81 +331,43 @@ class GoldLayer:
             if_table_exists="replace",
         )
 
+        # SCAN 2: Get latest prices (used by stairstepping analysis)
+        latest_prices = self.get_latest_closing_prices()
 
-def get_latest_closing_prices() -> pl.DataFrame:
-    """Get the latest closing price for each ticker from Delta table.
-
-    Returns:
-        pl.DataFrame: DataFrame with ticker and latest_close columns.
-    """
-    logger.info("Fetching latest closing prices for each ticker")
-    latest_prices = (
-        scan_delta_table("daily")
-        .group_by("ticker")
-        .agg(
-            pl.col("close").last().alias("latest_close"),
-            pl.col("date").max().alias("latest_date"),
+        # Compute stair-stepping patterns (reusing hvcs_raw and latest_prices)
+        logger.info("Starting stair-stepping HVC pattern analysis")
+        stairstepping = self.get_stairstepping_hvcs(
+            min_steps=3, hvcs_df=hvcs_raw, latest_prices=latest_prices
         )
-        .select(["ticker", "latest_close"])
-        .collect()
-    )
 
-    return latest_prices
+        if stairstepping.height == 0:
+            logger.info("No stair-stepping patterns found")
+            return
 
+        # Extract and write stair-stepping summary (reusing stairstepping patterns)
+        logger.info("Creating stair-stepping summary")
+        summary = self.get_stairstepping_summary(patterns=stairstepping)
 
-def get_high_volume_closes() -> pl.DataFrame:
-    """Get days with unusually high trading volume from Delta table and join latest closing prices.
-
-    Returns:
-        pl.DataFrame: DataFrame with ticker, date, close, volume, volume_avg_ratio,
-                     and latest_close columns.
-    """
-    logger.info("Extracting high volume closes from daily data")
-
-    df = (
-        scan_delta_table("daily")
-        .filter(
-            pl.col("volume_avg_ratio") >= 3,
-            (
-                (
-                    (pl.col("ticker_type") == "CS")
-                    & (pl.col("volume_avg") >= 200000)
-                    & (pl.col("close") >= 5)
-                )
-                | ((pl.col("ticker_type") == "ETF") & (pl.col("volume_avg") >= 50000))
-            ),
-        )
-        .collect()
-        .sort(["date", "ticker"], descending=[True, False])
-    )
-
-    # Get latest closing prices for each ticker
-    latest_prices = get_latest_closing_prices()
-
-    # Join the latest prices to the high volume DataFrame
-    df_with_latest = df.join(latest_prices, on="ticker", how="left")
-
-    # Add columns to indicate if latest close is within or near the high volume channel
-    df_with_latest = df_with_latest.with_columns(
-        (
-            (pl.col("latest_close") >= pl.col("low"))
-            & (pl.col("latest_close") <= pl.col("high"))
-        ).alias("in_hvc_channel"),
-        (
-            (
-                # Above high but within 5% of high
-                (pl.col("latest_close") > pl.col("high"))
-                & (pl.col("latest_close") <= pl.col("high") * 1.05)
+        if summary.height > 0:
+            logger.info(
+                f"Writing {summary.height} tickers to stair-stepping summary tables"
             )
-            | (
-                # Below low but within 5% of low
-                (pl.col("latest_close") < pl.col("low"))
-                & (pl.col("latest_close") >= pl.col("low") * 0.95)
+            summary.filter(pl.col("ticker_type") == "CS").drop(
+                "ticker_type"
+            ).write_database(
+                table_name="stairstepping_summary_stocks",
+                connection="sqlite:///hvcs.db",
+                if_table_exists="replace",
             )
-        ).alias("near_hvc_channel"),
-    )
-
-    return df_with_latest
+            summary.filter(pl.col("ticker_type") == "ETF").drop(
+                "ticker_type"
+            ).write_database(
+                table_name="stairstepping_summary_etfs",
+                connection="sqlite:///hvcs.db",
+                if_table_exists="replace",
+            )
+        else:
+            logger.info("No patterns to summarize")
 
 
 def main():

@@ -55,11 +55,10 @@ HIGH_VOLUME_CLOSE_SCHEMA: dict[str, Any] = {
     "date": pl.Date,
     "ticker": pl.String,
     "ticker_type": pl.String,
+    "close": pl.Float64,
     "volume_avg_ratio": pl.Float64,
     "volume": pl.UInt64,
     "volume_avg": pl.UInt64,
-    "in_hvc_channel": pl.Boolean,
-    "near_hvc_channel": pl.Boolean,
 }
 
 

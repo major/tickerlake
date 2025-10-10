@@ -139,13 +139,14 @@ def add_volume_ratio(df: pl.DataFrame) -> pl.DataFrame:
 
     Returns:
         pl.DataFrame: DataFrame with two additional columns:
-            - 'volume_avg': 20-period rolling mean of 'volume' per 'ticker'.
+            - 'volume_avg': 20-period rolling mean of 'volume' per 'ticker' (excluding current day).
             - 'volume_avg_ratio': Ratio of 'volume' to 'volume_avg'.
     """
     logger.info("Calculating volume average ratio")
     result = df.with_columns(
         pl.col("volume")
         .rolling_mean(window_size=20)
+        .shift(1)  # Use previous 20 days, not including current day
         .over("ticker")
         .cast(pl.UInt64)
         .alias("volume_avg")

@@ -1614,6 +1614,9 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+container = [
+    { name = "datasette" },
+]
 dev = [
     { name = "fakeredis" },
     { name = "pandas-stubs" },
@@ -1646,6 +1649,7 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+container = [{ name = "datasette", specifier = ">=0.65.1" }]
 dev = [
     { name = "fakeredis", specifier = ">=2.30.1" },
     { name = "pandas-stubs", specifier = ">=2.3.0.250703" },
