@@ -3,9 +3,9 @@ name: Update stocks data
 on:
   schedule:
     # 4:30 PM EST (UTC-5) - November to March
-    - cron: '30 21 * 11-12,1-3 1-5'
+    - cron: "30 21 * 11-12,1-3 1-5"
     # 4:30 PM EDT (UTC-4) - March to November
-    - cron: '30 20 * 3-11 1-5'
+    - cron: "30 20 * 3-11 1-5"
   workflow_dispatch:
 
 env:
@@ -78,7 +78,7 @@ jobs:
           ls -al
           find . -name hvcs.db
           find . -name inspect-data.json
-          
+
       - name: Build and push
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
         with:
@@ -90,3 +90,27 @@ jobs:
           cache-to: type=gha,mode=min
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Extract new image digest
+        id: digest
+        run: |
+          # Get the digest of the image we just pushed
+          DIGEST=$(docker inspect ghcr.io/major/tickerlake:latest --format='{{index .RepoDigests 0}}' | cut -d'@' -f2)
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Update deployment in selfhosted repo
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Clone the selfhosted repo
+          git clone https://x-access-token:${{ secrets.SELFHOSTED_PAT }}@github.com/major/selfhosted.git
+          cd selfhosted
+
+          # Update the image digest in the deployment
+          sed -i "s|image: ghcr.io/major/tickerlake:latest@sha256:.*|image: ghcr.io/major/tickerlake:latest@${{ steps.digest.outputs.digest }}|" apps/base/tickerlake/deployment.yaml
+
+          # Commit and push
+          git add apps/base/tickerlake/deployment.yaml
+          git commit -m "Update tickerlake image to ${{ steps.digest.outputs.digest }}"
+          git push
