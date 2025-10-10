@@ -2,7 +2,7 @@
 
 import logging
 from datetime import date, datetime, time, timedelta
-from typing import Literal
+from typing import Literal, cast
 
 import polars as pl
 import structlog
@@ -180,10 +180,20 @@ def read_daily_aggs(
         logger.info("Reading all daily aggregates")
 
     path = f"s3://{settings.s3_bucket_name}/bronze/daily/*/data.parquet"
-    lazy_frame = (
-        pl.scan_parquet(path, storage_options=s3_storage_options)
-        .filter(pl.col("ticker").is_in(valid_tickers))
-    )
+    scan = pl.scan_parquet(  # type: ignore[arg-type]
+        path,
+        storage_options=s3_storage_options,
+    ).select([
+        "timestamp",
+        "ticker",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "transactions",
+    ])
+    lazy_frame = scan.filter(pl.col("ticker").is_in(valid_tickers))
 
     if start_date:
         cutoff_ts = int(datetime.combine(start_date, time.min).timestamp() * 1000)
@@ -469,10 +479,11 @@ def _process_incremental_data(
     # Append new data to Delta table
     write_daily_aggs(new_rows_with_ratio, mode="append")
 
-    min_new_date = new_rows_with_ratio["date"].min()
-    if min_new_date is None:
+    min_new_date_value = cast(date | None, new_rows_with_ratio["date"].min())
+    if min_new_date_value is None:
         logger.warning("No new dates found after filtering; skipping aggregate refresh")
         return
+    min_new_date = min_new_date_value
 
     weekly_start = min_new_date - timedelta(days=min_new_date.weekday())
     monthly_start = min_new_date.replace(day=1)

@@ -202,7 +202,7 @@ class TestDailyAggregates:
         self, mock_scan, sample_daily_data, mock_s3_storage, mock_settings
     ):
         """Test reading daily aggregates with ticker filtering."""
-        mock_scan.return_value.filter.return_value.collect.return_value = (
+        mock_scan.return_value.select.return_value.filter.return_value.collect.return_value = (
             sample_daily_data
         )
 
@@ -210,11 +210,21 @@ class TestDailyAggregates:
 
         valid_tickers = ["AAPL", "MSFT"]
         result = read_daily_aggs(valid_tickers)
-
-        mock_scan.assert_called_once_with(
-            "s3://test-bucket/bronze/daily/*/data.parquet",
-            storage_options=mock_s3_storage,
-        )
+        mock_scan.assert_called_once()
+        args, kwargs = mock_scan.call_args
+        assert args == ("s3://test-bucket/bronze/daily/*/data.parquet",)
+        assert kwargs["storage_options"] == mock_s3_storage
+        # Verify select was called with the correct columns
+        mock_scan.return_value.select.assert_called_once_with([
+            "timestamp",
+            "ticker",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "transactions",
+        ])
         assert isinstance(result, pl.DataFrame)
 
     @patch("tickerlake.silver.main.pl.scan_parquet")
@@ -227,7 +237,7 @@ class TestDailyAggregates:
         mock_settings,
     ):
         """Test reading daily aggregates with ticker details for ticker_type."""
-        mock_scan.return_value.filter.return_value.collect.return_value = (
+        mock_scan.return_value.select.return_value.filter.return_value.collect.return_value = (
             sample_daily_data
         )
 
