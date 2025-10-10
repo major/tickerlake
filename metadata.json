@@ -66,6 +66,66 @@
             ]
           }
         },
+        "weekly_high_volume_closes_stocks": {
+          "title": "Stock Weekly High Volume Closes",
+          "description": "Individual trading weeks where stocks experienced unusually high volume (3x+ 20-week average). Weekly HVCs are more significant than daily HVCs and often indicate major institutional accumulation, distribution, or significant corporate events. Limited to the past 5 years.",
+          "sort_desc": "date",
+          "columns": {
+            "date": {
+              "description": "Week starting date (Monday) of the high volume event"
+            },
+            "ticker": {
+              "description": "Stock ticker symbol"
+            },
+            "volume_avg_ratio": {
+              "description": "Ratio of actual weekly volume to 20-week average volume (e.g., 3.5 means 3.5x normal weekly volume)",
+              "label": "Volume Ratio"
+            },
+            "volume": {
+              "description": "Total shares traded during this week"
+            },
+            "volume_avg": {
+              "description": "20-week average volume for comparison",
+              "label": "Average Volume"
+            }
+          },
+          "metadata": {
+            "filter_by": [
+              "ticker",
+              "date"
+            ]
+          }
+        },
+        "weekly_high_volume_closes_etfs": {
+          "title": "ETF Weekly High Volume Closes",
+          "description": "Individual trading weeks where ETFs experienced unusually high volume (3x+ 20-week average). Weekly ETF HVCs often indicate major sector rotation or sustained market trends.",
+          "sort_desc": "date",
+          "columns": {
+            "date": {
+              "description": "Week starting date (Monday) of the high volume event"
+            },
+            "ticker": {
+              "description": "ETF ticker symbol"
+            },
+            "volume_avg_ratio": {
+              "description": "Ratio of actual weekly volume to 20-week average volume",
+              "label": "Volume Ratio"
+            },
+            "volume": {
+              "description": "Total shares traded during this week"
+            },
+            "volume_avg": {
+              "description": "20-week average volume for comparison",
+              "label": "Average Volume"
+            }
+          },
+          "metadata": {
+            "filter_by": [
+              "ticker",
+              "date"
+            ]
+          }
+        },
         "stairstepping_hvcs_stocks": {
           "title": "Stock Stair-Stepping Patterns",
           "description": "Stocks showing consecutive HVCs with progressively higher closing prices. This pattern indicates sustained institutional accumulation and is often a bullish signal. Each row represents a complete pattern sequence. Limited to the past 5 years.",
@@ -365,6 +425,26 @@
           "title": "Stair-Stepping Stocks Still Trending",
           "description": "Stocks where price is still above the pattern top (continued strength)",
           "sql": "SELECT ticker, steps, last_hvc, top_price, latest_close, change_since_pct, days_since_pattern FROM stairstepping_summary_stocks WHERE still_trending = 1 ORDER BY steps DESC, change_since_pct DESC"
+        },
+        "recent_weekly_hvcs_stocks": {
+          "title": "Recent Weekly HVCs (Stocks)",
+          "description": "Most recent high volume weeks across all stocks - these are BIG DEALS indicating major institutional activity",
+          "sql": "SELECT date, ticker, volume_avg_ratio as vol_ratio, volume FROM weekly_high_volume_closes_stocks ORDER BY date DESC LIMIT 100"
+        },
+        "recent_weekly_hvcs_etfs": {
+          "title": "Recent Weekly HVCs (ETFs)",
+          "description": "Most recent high volume weeks across all ETFs - indicates major sector or market moves",
+          "sql": "SELECT date, ticker, volume_avg_ratio as vol_ratio, volume FROM weekly_high_volume_closes_etfs ORDER BY date DESC LIMIT 100"
+        },
+        "strongest_weekly_hvcs_stocks": {
+          "title": "Strongest Weekly HVCs (Stocks)",
+          "description": "Stocks with the highest weekly volume ratios - extreme institutional interest",
+          "sql": "SELECT ticker, date, volume_avg_ratio as vol_ratio, volume, close FROM weekly_high_volume_closes_stocks ORDER BY volume_avg_ratio DESC LIMIT 50"
+        },
+        "strongest_weekly_hvcs_etfs": {
+          "title": "Strongest Weekly HVCs (ETFs)",
+          "description": "ETFs with the highest weekly volume ratios - extreme market or sector flows",
+          "sql": "SELECT ticker, date, volume_avg_ratio as vol_ratio, volume, close FROM weekly_high_volume_closes_etfs ORDER BY volume_avg_ratio DESC LIMIT 50"
         }
       }
     }

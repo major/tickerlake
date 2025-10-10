@@ -1,7 +1,7 @@
 """Silver medallion layer for TickerLake."""
 
 import logging
-from datetime import date
+from datetime import date, datetime, time
 from typing import Literal
 
 import polars as pl
@@ -180,21 +180,25 @@ def read_daily_aggs(
         logger.info("Reading all daily aggregates")
 
     path = f"s3://{settings.s3_bucket_name}/bronze/daily/*/data.parquet"
-    df = (
+    lazy_frame = (
         pl.scan_parquet(path, storage_options=s3_storage_options)
         .filter(pl.col("ticker").is_in(valid_tickers))
-        .collect()
-        .with_columns(
-            pl.from_epoch(pl.col("timestamp"), time_unit="ms")
-            .cast(pl.Date)
-            .alias("date"),
-            pl.col("volume").cast(pl.UInt64),
-            pl.col("open").cast(pl.Float64),
-            pl.col("close").cast(pl.Float64),
-            pl.col("high").cast(pl.Float64),
-            pl.col("low").cast(pl.Float64),
-            pl.col("transactions").cast(pl.UInt64),
-        )
+    )
+
+    if start_date:
+        cutoff_ts = int(datetime.combine(start_date, time.min).timestamp() * 1000)
+        lazy_frame = lazy_frame.filter(pl.col("timestamp") > cutoff_ts)
+
+    df = lazy_frame.collect().with_columns(
+        pl.from_epoch(pl.col("timestamp"), time_unit="ms")
+        .cast(pl.Date)
+        .alias("date"),
+        pl.col("volume").cast(pl.UInt64),
+        pl.col("open").cast(pl.Float64),
+        pl.col("close").cast(pl.Float64),
+        pl.col("high").cast(pl.Float64),
+        pl.col("low").cast(pl.Float64),
+        pl.col("transactions").cast(pl.UInt64),
     )
 
     # Filter by start_date if provided (incremental mode)

@@ -288,19 +288,79 @@ class GoldLayer:
         logger.info(f"Created summary with {summary.height} unique tickers")
         return summary
 
+    def get_weekly_high_volume_closes(self) -> pl.DataFrame:
+        """Get weeks with unusually high trading volume from weekly Delta table.
+
+        Only includes data from the past 5 years to focus on recent patterns.
+
+        Returns:
+            pl.DataFrame: DataFrame with ticker, date, close, volume, and volume_avg_ratio.
+        """
+        logger.info("Extracting high volume closes from weekly data (past 5 years)")
+
+        # Calculate 5 years ago from today
+        five_years_ago = date.today() - timedelta(days=5 * 365)
+
+        # Read weekly data and join with ticker details for ticker_type
+        weekly_df = scan_delta_table("weekly").collect()
+        ticker_details = scan_delta_table("tickers").select(["ticker", "ticker_type"]).collect()
+
+        weekly_df = weekly_df.join(ticker_details, on="ticker", how="left")
+
+        # Calculate 20-period volume average for weekly data
+        weekly_with_volume_ratio = (
+            weekly_df.sort(["ticker", "date"])
+            .with_columns(
+                pl.col("volume")
+                .rolling_mean(window_size=20)
+                .shift(1)  # Use previous 20 weeks, not including current week
+                .over("ticker")
+                .cast(pl.UInt64)
+                .alias("volume_avg")
+            )
+            .with_columns(
+                pl.when(pl.col("volume_avg").is_not_null())
+                .then(pl.col("volume") / pl.col("volume_avg"))
+                .otherwise(None)
+                .alias("volume_avg_ratio")
+            )
+        )
+
+        df = (
+            weekly_with_volume_ratio.filter(
+                pl.col("date") >= five_years_ago,  # Only past 5 years
+                pl.col("volume_avg_ratio") >= 3,
+                (
+                    (
+                        (pl.col("ticker_type") == "CS")
+                        & (pl.col("volume_avg") >= 200000)
+                        & (pl.col("close") >= 5)
+                    )
+                    | (
+                        (pl.col("ticker_type") == "ETF")
+                        & (pl.col("volume_avg") >= 50000)
+                    )
+                ),
+            )
+            .sort(["date", "ticker"], descending=[True, False])
+        )
+
+        return df
+
     def run(self) -> None:
         """Execute gold layer analytics and export to SQLite.
 
         Optimized to minimize Delta table scans:
-        - Scans Delta table once for HVCs
+        - Scans Delta table once for daily HVCs
+        - Scans Delta table once for weekly HVCs
         - Scans Delta table once for latest prices
         - Reuses these DataFrames for all downstream analytics
         """
-        # SCAN 1: Get all HVCs (used by multiple downstream operations)
-        logger.info("Starting high volume closes extraction")
+        # SCAN 1: Get all daily HVCs (used by multiple downstream operations)
+        logger.info("Starting daily high volume closes extraction")
         hvcs_raw = self.get_high_volume_closes()
 
-        # Prepare HVCs for database export
+        # Prepare daily HVCs for database export
         hvcs = hvcs_raw.with_columns(
             pl.col("close").round(2).alias("close"),
             pl.col("volume_avg_ratio").round(2).alias("volume_avg_ratio")
@@ -317,9 +377,9 @@ class GoldLayer:
         # Validate schema before writing
         hvcs = validate_high_volume_closes(hvcs)
 
-        logger.info(f"Extracted {hvcs.height} high volume close records")
+        logger.info(f"Extracted {hvcs.height} daily high volume close records")
 
-        logger.info("Writing high volume closes to SQLite database")
+        logger.info("Writing daily high volume closes to SQLite database")
         hvcs.filter(pl.col("ticker_type") == "CS").drop("ticker_type").write_database(
             table_name="high_volume_closes_stocks",
             connection="sqlite:///hvcs.db",
@@ -331,7 +391,39 @@ class GoldLayer:
             if_table_exists="replace",
         )
 
-        # SCAN 2: Get latest prices (used by stairstepping analysis)
+        # SCAN 2: Get all weekly HVCs
+        logger.info("Starting weekly high volume closes extraction")
+        weekly_hvcs_raw = self.get_weekly_high_volume_closes()
+
+        # Prepare weekly HVCs for database export
+        weekly_hvcs = weekly_hvcs_raw.with_columns(
+            pl.col("close").round(2).alias("close"),
+            pl.col("volume_avg_ratio").round(2).alias("volume_avg_ratio")
+        ).select([
+            "date",
+            "ticker",
+            "ticker_type",
+            "close",
+            "volume_avg_ratio",
+            "volume",
+            "volume_avg",
+        ])
+
+        logger.info(f"Extracted {weekly_hvcs.height} weekly high volume close records")
+
+        logger.info("Writing weekly high volume closes to SQLite database")
+        weekly_hvcs.filter(pl.col("ticker_type") == "CS").drop("ticker_type").write_database(
+            table_name="weekly_high_volume_closes_stocks",
+            connection="sqlite:///hvcs.db",
+            if_table_exists="replace",
+        )
+        weekly_hvcs.filter(pl.col("ticker_type") == "ETF").drop("ticker_type").write_database(
+            table_name="weekly_high_volume_closes_etfs",
+            connection="sqlite:///hvcs.db",
+            if_table_exists="replace",
+        )
+
+        # SCAN 3: Get latest prices (used by stairstepping analysis)
         latest_prices = self.get_latest_closing_prices()
 
         # Compute stair-stepping patterns (reusing hvcs_raw and latest_prices)
