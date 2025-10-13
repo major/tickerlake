@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     aws_secret_access_key: SecretStr = SecretStr("")
     aws_region: str = "us-east-1"
 
-    data_start_date: date = date.today() - timedelta(days=10 * 365)
+    data_start_date: date = date.today() - timedelta(days=4 * 365)
 
     # Index holdings data source URLs
     etfs: list = ["SPY", "MDY", "SPSM", "QQQ", "IWM"]
