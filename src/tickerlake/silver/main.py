@@ -1,11 +1,9 @@
 """Silver medallion layer for TickerLake."""
 
-import logging
 from datetime import date, datetime, time, timedelta
 from typing import Literal, cast
 
 import polars as pl
-import structlog
 
 from tickerlake.config import s3_storage_options, settings
 from tickerlake.delta_utils import (
@@ -14,6 +12,7 @@ from tickerlake.delta_utils import (
     scan_delta_table,
     write_delta_table,
 )
+from tickerlake.logging_config import get_logger, setup_logging
 from tickerlake.schemas import (
     validate_daily_aggregates,
     validate_etf_holdings,
@@ -24,8 +23,8 @@ from tickerlake.silver.layer import SilverLayer
 
 pl.Config(tbl_rows=-1, tbl_cols=-1, fmt_float="full")
 
-logging.basicConfig(level=logging.INFO)
-logger = structlog.get_logger()
+setup_logging()
+logger = get_logger(__name__)
 
 
 def read_ticker_details() -> pl.DataFrame:
@@ -329,9 +328,9 @@ def write_time_aggs(
     """Write or upsert time-aggregated data to Delta table."""
     higher_timeframe_df = compute_time_aggs(df, period)
 
+    mode_str = "incremental" if incremental else "full rebuild"
     logger.info(
-        f"Writing {period} aggregates ({higher_timeframe_df.shape[0]:,} rows)",
-        incremental=incremental,
+        f"Writing {period} aggregates ({higher_timeframe_df.shape[0]:,} rows) in {mode_str} mode"
     )
 
     if incremental and delta_table_exists(table_name):
@@ -411,9 +410,7 @@ def _process_incremental_data(
     history_start = last_processed_date - timedelta(days=history_buffer_days)
 
     logger.info(
-        "Reading existing data to calculate volume ratios",
-        history_start=history_start,
-        tickers=len(required_tickers),
+        f"Reading existing data to calculate volume ratios (history_start={history_start}, tickers={len(required_tickers)})"
     )
 
     lazy_existing = (
@@ -439,8 +436,7 @@ def _process_incremental_data(
 
     if insufficient_history:
         logger.info(
-            "Fetching additional history for tickers with sparse data",
-            tickers=insufficient_history,
+            f"Fetching additional history for {len(insufficient_history)} tickers with sparse data"
         )
         extra_history = (
             scan_delta_table("daily")

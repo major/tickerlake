@@ -19,7 +19,6 @@ dependencies = [
     "ruff>=0.13.0",
     "s3fs>=2025.9.0",
     "sqlalchemy>=2.0.43",
-    "structlog>=25.4.0",
 ]
 
 [project.scripts]
@@ -57,16 +56,12 @@ addopts = [
     "--cov-report=xml",
     "--cov-branch",
     "--color=yes",
+    "--log-disable=all",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
 ]
-# Having problems with tests? Uncomment the following line to see more output.
-# log_cli = false
-# log_level = "DEBUG"
-log_format = "%%(asctime)s %%(levelname)s %%(message)s"
-log_date_format = "%%Y-%%m-%%d %%H:%%M:%%S"
 testpaths = ["tests"]
 
 [tool.pyright]

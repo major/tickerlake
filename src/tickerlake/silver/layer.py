@@ -4,7 +4,6 @@ from datetime import date, datetime, time, timedelta
 from typing import Literal, cast
 
 import polars as pl
-import structlog
 
 from tickerlake.config import s3_storage_options, settings
 from tickerlake.delta_utils import (
@@ -14,6 +13,7 @@ from tickerlake.delta_utils import (
     scan_delta_table,
     write_delta_table,
 )
+from tickerlake.logging_config import get_logger
 from tickerlake.schemas import (
     validate_daily_aggregates,
     validate_etf_holdings,
@@ -21,7 +21,7 @@ from tickerlake.schemas import (
     validate_ticker_details,
 )
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 class SilverLayer:
@@ -326,9 +326,9 @@ class SilverLayer:
         """Write or upsert time-aggregated data to Delta table."""
         higher_timeframe_df = self.compute_time_aggs(df, period)
 
+        mode_str = "incremental" if incremental else "full rebuild"
         logger.info(
-            f"Writing {period} aggregates ({higher_timeframe_df.shape[0]:,} rows)",
-            incremental=incremental,
+            f"Writing {period} aggregates ({higher_timeframe_df.shape[0]:,} rows) in {mode_str} mode"
         )
 
         if incremental and delta_table_exists(table_name):
@@ -405,9 +405,7 @@ class SilverLayer:
         history_start = last_processed_date - timedelta(days=history_buffer_days)
 
         logger.info(
-            "Reading existing data to calculate volume ratios",
-            history_start=history_start,
-            tickers=len(required_tickers),
+            f"Reading existing data to calculate volume ratios (history_start={history_start}, tickers={len(required_tickers)})"
         )
 
         lazy_existing = (
@@ -434,8 +432,7 @@ class SilverLayer:
 
         if insufficient_history:
             logger.info(
-                "Fetching additional history for tickers with sparse data",
-                tickers=insufficient_history,
+                f"Fetching additional history for {len(insufficient_history)} tickers with sparse data"
             )
             extra_history = (
                 scan_delta_table("daily")

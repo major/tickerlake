@@ -1,18 +1,17 @@
 """Gold medallion layer for TickerLake."""
 
-import logging
 from datetime import date, timedelta
 
 import polars as pl
-import structlog
 
 from tickerlake.delta_utils import scan_delta_table
+from tickerlake.logging_config import get_logger, setup_logging
 from tickerlake.schemas import validate_high_volume_closes
 
 pl.Config(tbl_rows=-1, tbl_cols=-1, fmt_float="full")
 
-logging.basicConfig(level=logging.INFO)
-logger = structlog.get_logger()
+setup_logging()
+logger = get_logger(__name__)
 
 
 class GoldLayer:

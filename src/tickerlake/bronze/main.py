@@ -1,20 +1,19 @@
 """Bronze medallion layer for TickerLake."""
 
-import logging
 from datetime import datetime
 from pathlib import PurePath
 
 import polars as pl
 import pytz
 import s3fs
-import structlog
 from polygon import RESTClient
 
 from tickerlake.config import s3_storage_options, settings
+from tickerlake.logging_config import get_logger, setup_logging
 from tickerlake.utils import get_trading_days, is_data_available_for_today
 
-logging.basicConfig(level=logging.INFO)
-logger = structlog.get_logger()
+setup_logging()
+logger = get_logger(__name__)
 
 
 class BronzeLayer:

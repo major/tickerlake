@@ -4,13 +4,13 @@ from datetime import date
 from typing import Literal
 
 import polars as pl
-import structlog
 from deltalake import DeltaTable
 from deltalake.exceptions import TableNotFoundError
 
 from tickerlake.config import s3_storage_options, settings
+from tickerlake.logging_config import get_logger
 
-logger = structlog.get_logger()
+logger = get_logger(__name__)
 
 
 def get_delta_table_path(table_name: str) -> str:
@@ -53,7 +53,8 @@ def read_delta_table(table_name: str, version: int | None = None) -> pl.DataFram
         pl.DataFrame: Data from the Delta table.
     """
     path = get_delta_table_path(table_name)
-    logger.info(f"Reading Delta table: {table_name}", path=path, version=version)
+    version_str = f", version={version}" if version is not None else ""
+    logger.info(f"Reading Delta table: {table_name} (path={path}{version_str})")
 
     if version is not None:
         return pl.read_delta(path, storage_options=s3_storage_options, version=version)
@@ -70,7 +71,7 @@ def scan_delta_table(table_name: str) -> pl.LazyFrame:
         pl.LazyFrame: Lazy frame for the Delta table.
     """
     path = get_delta_table_path(table_name)
-    logger.info(f"Scanning Delta table: {table_name}", path=path)
+    logger.info(f"Scanning Delta table: {table_name} (path={path})")
     return pl.scan_delta(path, storage_options=s3_storage_options)
 
 
@@ -89,12 +90,9 @@ def write_delta_table(
         partition_by: Optional list of columns to partition by.
     """
     path = get_delta_table_path(table_name)
+    partition_str = f", partition_by={partition_by}" if partition_by else ""
     logger.info(
-        f"Writing Delta table: {table_name}",
-        path=path,
-        mode=mode,
-        rows=df.shape[0],
-        partition_by=partition_by,
+        f"Writing Delta table: {table_name} (path={path}, mode={mode}, rows={df.shape[0]:,}{partition_str})"
     )
 
     # Convert categorical columns to strings to avoid Delta Lake compatibility issues
@@ -138,10 +136,7 @@ def merge_to_delta_table(
     """
     path = get_delta_table_path(table_name)
     logger.info(
-        f"Merging into Delta table: {table_name}",
-        path=path,
-        rows=df.shape[0],
-        merge_keys=merge_keys,
+        f"Merging into Delta table: {table_name} (path={path}, rows={df.shape[0]:,}, merge_keys={merge_keys})"
     )
 
     # Convert categorical columns to strings to avoid Delta Lake compatibility issues
@@ -211,7 +206,7 @@ def optimize_delta_table(table_name: str) -> None:
         table_name: Name of the Delta table.
     """
     path = get_delta_table_path(table_name)
-    logger.info(f"Optimizing Delta table: {table_name}", path=path)
+    logger.info(f"Optimizing Delta table: {table_name} (path={path})")
 
     dt = DeltaTable(path, storage_options=s3_storage_options)
     dt.optimize.compact()
@@ -227,9 +222,7 @@ def vacuum_delta_table(table_name: str, retention_hours: int = 168) -> None:
     """
     path = get_delta_table_path(table_name)
     logger.info(
-        f"Vacuuming Delta table: {table_name}",
-        path=path,
-        retention_hours=retention_hours,
+        f"Vacuuming Delta table: {table_name} (path={path}, retention_hours={retention_hours})"
     )
 
     dt = DeltaTable(path, storage_options=s3_storage_options)
