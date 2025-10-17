@@ -9,7 +9,18 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Application configuration settings using Pydantic BaseSettings."""
 
+    # Polygon API + flatfiles access
     polygon_api_key: SecretStr = SecretStr("")
+    polygon_access_key_id: SecretStr = SecretStr("")
+    polygon_secret_access_key: SecretStr = SecretStr("")
+    polygon_flatfiles_endpoint_url: str = "https://files.polygon.io"
+    polygon_flatfiles_stocks: str = "s3://flatfiles/us_stocks_sip/day_aggs_v1"
+    polygon_flatfiles_options: str = "s3://flatfiles/us_options_opra/day_aggs_v1"
+    polygon_flatfiles_stocks_first_year: int = date.today().year - 4
+    polygon_flatfiles_options_first_year: int = date.today().year - 2
+
+    # Unified s3 storage
+    bronze_unified_storage_path: str = "s3://tickerlake/unified/bronze"
 
     s3_bucket_name: str = "tickerlake"
     aws_access_key_id: SecretStr = SecretStr("")
