@@ -13,6 +13,17 @@ STOCKS_SCHEMA = {
     "transactions": pl.UInt32,
 }
 
+STOCKS_SCHEMA_MODIFIED = {
+    "ticker": pl.Categorical,
+    "volume": pl.UInt64,
+    "open": pl.Float32,
+    "close": pl.Float32,
+    "high": pl.Float32,
+    "low": pl.Float32,
+    "date": pl.Date,
+    "transactions": pl.UInt32,
+}
+
 OPTIONS_SCHEMA = {
     "ticker": pl.Utf8,
     "volume": pl.UInt32,
@@ -21,6 +32,17 @@ OPTIONS_SCHEMA = {
     "high": pl.Float32,
     "low": pl.Float32,
     "window_start": pl.Int64,
+    "transactions": pl.UInt32,
+}
+
+OPTIONS_SCHEMA_MODIFIED = {
+    "ticker": pl.Utf8,
+    "volume": pl.UInt32,
+    "open": pl.Float32,
+    "close": pl.Float32,
+    "high": pl.Float32,
+    "low": pl.Float32,
+    "date": pl.Date,
     "transactions": pl.UInt32,
 }
 

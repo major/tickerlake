@@ -277,6 +277,7 @@ class TestPreviouslyStoredDates:
         """Test previously_stored_dates retrieves dates from Parquet files."""
         # Create mock DataFrame with dates
         mock_dates = pl.DataFrame({"date": [date(2024, 1, 2), date(2024, 1, 3)]})
+        test_schema = {"ticker": pl.Utf8, "date": pl.Date}
 
         # Setup mock lazy frame
         mock_lf = MagicMock()
@@ -290,7 +291,7 @@ class TestPreviouslyStoredDates:
 
         mock_scan_parquet.return_value = mock_lf
 
-        result = previously_stored_dates("s3://test/destination")
+        result = previously_stored_dates("s3://test/destination", test_schema)
 
         assert result == ["2024-01-02", "2024-01-03"]
         mock_scan_parquet.assert_called_once()
@@ -300,6 +301,7 @@ class TestPreviouslyStoredDates:
     def test_previously_stored_dates_empty(self, mock_scan_parquet):
         """Test previously_stored_dates handles empty results."""
         mock_dates = pl.DataFrame({"date": []}, schema={"date": pl.Utf8})
+        test_schema = {"ticker": pl.Utf8, "date": pl.Date}
 
         mock_lf = MagicMock()
         mock_lf.select.return_value = mock_lf
@@ -310,7 +312,7 @@ class TestPreviouslyStoredDates:
 
         mock_scan_parquet.return_value = mock_lf
 
-        result = previously_stored_dates("s3://test/destination")
+        result = previously_stored_dates("s3://test/destination", test_schema)
 
         assert result == []
 
