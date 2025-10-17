@@ -90,6 +90,7 @@ def previously_stored_dates(destination: str) -> list:
         pl.scan_parquet(
             f"{destination}/date=*/*.parquet",
             storage_options=s3_storage_options,
+            schema={"date": pl.Date},
         )
         .select(pl.col("date"))
         .with_columns(pl.col("date").dt.strftime("%Y-%m-%d").alias("date"))
