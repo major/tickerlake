@@ -1,4 +1,4 @@
-name: Update stocks data
+name: Unified Data Update
 
 on:
   schedule:

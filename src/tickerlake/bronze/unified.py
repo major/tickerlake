@@ -156,7 +156,7 @@ def main() -> None:
 
     # Stocks
     stocks_dates_already_stored = previously_stored_dates(
-        settings.bronze_unified_storage_path + "stocks"
+        settings.bronze_unified_storage_path + "/stocks"
     )
     stocks_files_to_process = get_missing_dates(
         already_stored_dates=stocks_dates_already_stored,
@@ -164,13 +164,13 @@ def main() -> None:
     )
     load_polygon_flatfiles(
         files_to_process=stocks_files_to_process,
-        destination_path=settings.bronze_unified_storage_path + "stocks",
+        destination_path=settings.bronze_unified_storage_path + "/stocks",
         schema=STOCKS_SCHEMA,
     )
 
     # Options
     options_dates_already_stored = previously_stored_dates(
-        settings.bronze_unified_storage_path + "options"
+        settings.bronze_unified_storage_path + "/options"
     )
     options_files_to_process = get_missing_dates(
         already_stored_dates=options_dates_already_stored,
@@ -178,7 +178,7 @@ def main() -> None:
     )
     load_polygon_flatfiles(
         files_to_process=options_files_to_process,
-        destination_path=settings.bronze_unified_storage_path + "options",
+        destination_path=settings.bronze_unified_storage_path + "/options",
         schema=OPTIONS_SCHEMA,
     )
 
