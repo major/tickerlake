@@ -36,84 +36,86 @@ jobs:
       - name: Install the project
         run: uv sync --locked --all-extras --dev
 
-      - name: 🥉 Update bronze data
+      - name: 🥉 Update bronze layer
         run: uv run bronze
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+          POLYGON_ACCESS_KEY_ID: ${{ secrets.POLYGON_ACCESS_KEY_ID }}
+          POLYGON_SECRET_ACCESS_KEY: ${{ secrets.POLYGON_SECRET_ACCESS_KEY }}
 
-      - name: 🥈 Update silver data
-        run: uv run silver
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+      # - name: 🥈 Update silver data
+      #   run: uv run silver
+      #   env:
+      #     AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #     AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
 
-      - name: 🥇 Update gold data
-        run: uv run gold
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+      # - name: 🥇 Update gold data
+      #   run: uv run gold
+      #   env:
+      #     AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #     AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
 
-      - name: Inspect the database for datasette
-        run: uv run datasette inspect --inspect-file inspect-data.json hvcs.db
+      # - name: Inspect the database for datasette
+      #   run: uv run datasette inspect --inspect-file inspect-data.json hvcs.db
 
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      # - name: Login to GitHub Container Registry
+      #   uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+      #   with:
+      #     registry: ghcr.io
+      #     username: ${{ github.repository_owner }}
+      #     password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3
+      # - name: Set up QEMU
+      #   uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3
+      # - name: Set up Docker Buildx
+      #   uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3
 
-      - name: Check for required files
-        run: |
-          ls -al
-          find . -name hvcs.db
-          find . -name inspect-data.json
+      # - name: Check for required files
+      #   run: |
+      #     ls -al
+      #     find . -name hvcs.db
+      #     find . -name inspect-data.json
 
-      - name: Build and push
-        id: build
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
-        with:
-          platforms: linux/amd64
-          push: true
-          context: .
-          file: ./Containerfile
-          cache-from: type=gha
-          cache-to: type=gha,mode=min
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+      # - name: Build and push
+      #   id: build
+      #   uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
+      #   with:
+      #     platforms: linux/amd64
+      #     push: true
+      #     context: .
+      #     file: ./Containerfile
+      #     cache-from: type=gha
+      #     cache-to: type=gha,mode=min
+      #     tags: |
+      #       ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
-      - name: Update deployment in selfhosted repo
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      # - name: Update deployment in selfhosted repo
+      #   run: |
+      #     git config --global user.name "github-actions[bot]"
+      #     git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Clone the selfhosted repo (shallow clone for speed)
-          git clone --depth 1 https://x-access-token:${{ secrets.SELFHOSTED_PAT }}@github.com/major/selfhosted.git
-          cd selfhosted
+      #     # Clone the selfhosted repo (shallow clone for speed)
+      #     git clone --depth 1 https://x-access-token:${{ secrets.SELFHOSTED_PAT }}@github.com/major/selfhosted.git
+      #     cd selfhosted
 
-          # Extract short digest for commit message
-          SHORT_DIGEST=$(echo "${{ steps.build.outputs.digest }}" | cut -c1-12)
+      #     # Extract short digest for commit message
+      #     SHORT_DIGEST=$(echo "${{ steps.build.outputs.digest }}" | cut -c1-12)
 
-          # Update the image digest in the deployment
-          sed -i "s|image: ghcr.io/major/tickerlake:latest@sha256:.*|image: ghcr.io/major/tickerlake:latest@${{ steps.build.outputs.digest }}|" apps/base/tickerlake/deployment.yaml
+      #     # Update the image digest in the deployment
+      #     sed -i "s|image: ghcr.io/major/tickerlake:latest@sha256:.*|image: ghcr.io/major/tickerlake:latest@${{ steps.build.outputs.digest }}|" apps/base/tickerlake/deployment.yaml
 
-          # Check if there are changes to commit
-          if git diff --quiet apps/base/tickerlake/deployment.yaml; then
-            echo "No changes to deployment.yaml, skipping commit"
-            exit 0
-          fi
+      #     # Check if there are changes to commit
+      #     if git diff --quiet apps/base/tickerlake/deployment.yaml; then
+      #       echo "No changes to deployment.yaml, skipping commit"
+      #       exit 0
+      #     fi
 
-          # Commit and push
-          git add apps/base/tickerlake/deployment.yaml
-          git commit -m "Update tickerlake image to sha256:${SHORT_DIGEST}"
-          git push
+      #     # Commit and push
+      #     git add apps/base/tickerlake/deployment.yaml
+      #     git commit -m "Update tickerlake image to sha256:${SHORT_DIGEST}"
+      #     git push
