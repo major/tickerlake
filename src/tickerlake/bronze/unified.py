@@ -36,7 +36,6 @@ def options_flatfiles_valid_years() -> list[int]:
 
 
 def valid_flatfiles_years(first_year_available: int) -> list[int]:
-    first_year_available = settings.polygon_flatfiles_stocks_first_year
     valid_years = range(first_year_available, date.today().year + 1)
     return sorted(valid_years, reverse=True)
 
@@ -146,7 +145,7 @@ def load_polygon_flatfiles(
                 break
 
 
-def main() -> None:
+def main() -> None:  # pragma: no cover
     """Main function to load stocks and options flatfiles into unified storage."""
     # Splits
     load_splits()
@@ -183,5 +182,5 @@ def main() -> None:
     )
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()
