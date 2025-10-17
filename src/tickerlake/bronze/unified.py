@@ -82,18 +82,24 @@ def get_missing_dates(
     ]
 
 
-def previously_stored_dates(destination: str) -> list:
+def previously_stored_dates(destination: str, schema: dict) -> list:
     """Retrieve previously stored dates from the destination Parquet files."""
     logger.info("Retrieving previously stored dates...")
+
+    # Fully loaded bronze unified Parquet files should have a 'date' column
+    # instead of 'window_start' since we convert it during loading.
+    schema["date"] = pl.Date
+    del schema["window_start"]
+
     lf = (
         pl.scan_parquet(
             f"{destination}/date=*/*.parquet",
             storage_options=s3_storage_options,
-            schema={"date": pl.Date},
+            schema=schema,
         )
         .select(pl.col("date"))
-        .with_columns(pl.col("date").dt.strftime("%Y-%m-%d").alias("date"))
         .unique()
+        .with_columns(pl.col("date").dt.strftime("%Y-%m-%d").alias("date"))
         .sort("date")
     )
     return lf.collect().to_series().to_list()
@@ -155,7 +161,7 @@ def main() -> None:  # pragma: no cover
 
     # Stocks
     stocks_dates_already_stored = previously_stored_dates(
-        settings.bronze_unified_storage_path + "/stocks"
+        settings.bronze_unified_storage_path + "/stocks", STOCKS_SCHEMA
     )
     stocks_files_to_process = get_missing_dates(
         already_stored_dates=stocks_dates_already_stored,
@@ -169,7 +175,7 @@ def main() -> None:  # pragma: no cover
 
     # Options
     options_dates_already_stored = previously_stored_dates(
-        settings.bronze_unified_storage_path + "/options"
+        settings.bronze_unified_storage_path + "/options", OPTIONS_SCHEMA
     )
     options_files_to_process = get_missing_dates(
         already_stored_dates=options_dates_already_stored,

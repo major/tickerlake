@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     polygon_flatfiles_endpoint_url: str = "https://files.polygon.io"
     polygon_flatfiles_stocks: str = "s3://flatfiles/us_stocks_sip/day_aggs_v1"
     polygon_flatfiles_options: str = "s3://flatfiles/us_options_opra/day_aggs_v1"
-    polygon_flatfiles_stocks_first_year: int = date.today().year - 4
+    polygon_flatfiles_stocks_first_year: int = date.today().year - 5
     polygon_flatfiles_options_first_year: int = date.today().year - 2
 
     # Unified s3 storage
