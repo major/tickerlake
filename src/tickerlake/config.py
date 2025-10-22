@@ -1,6 +1,6 @@
 """Configuration settings for TickerLake application."""
 
-from datetime import date, timedelta
+from datetime import date
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,13 +15,14 @@ class Settings(BaseSettings):
     polygon_secret_access_key: SecretStr = SecretStr("")
     polygon_flatfiles_endpoint_url: str = "https://files.polygon.io"
     polygon_flatfiles_stocks: str = "s3://flatfiles/us_stocks_sip/day_aggs_v1"
-    polygon_flatfiles_stocks_first_year: int = date.today().year - 5
+    polygon_flatfiles_stocks_first_year: int = date.today().year - 10
 
     # Local storage paths
     bronze_storage_path: str = "./data/bronze"
     silver_storage_path: str = "./data/silver"
 
-    data_start_date: date = date.today() - timedelta(days=4 * 365)
+    # Technical indicators configuration
+    hvc_volume_ratio_threshold: float = 3.0
 
     # Index holdings data source URLs
     etfs: list = ["SPY", "MDY", "SPSM", "QQQ", "IWM"]

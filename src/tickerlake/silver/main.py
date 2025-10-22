@@ -6,6 +6,12 @@ import polars as pl
 
 from tickerlake.config import settings
 from tickerlake.logging_config import get_logger, setup_logging
+from tickerlake.schemas import validate_daily_aggregates, validate_indicators
+from tickerlake.silver.aggregates import aggregate_to_monthly, aggregate_to_weekly
+from tickerlake.silver.indicators import (
+    calculate_all_indicators,
+    calculate_weinstein_stage,
+)
 
 setup_logging()
 logger = get_logger(__name__)
@@ -108,10 +114,42 @@ def apply_splits_lazy(
     adjusted_lazy.sink_parquet(output_path)
 
 
+def create_ticker_metadata(tickers_df: pl.DataFrame) -> None:
+    """Create ticker metadata dimension table in silver layer.
+
+    Args:
+        tickers_df: DataFrame with ticker data from bronze layer.
+    """
+    logger.info("Creating ticker metadata dimension table...")
+
+    # Filter to CS/ETF and select relevant columns
+    ticker_metadata = tickers_df.filter(
+        pl.col("type").is_in(["CS", "ETF"])
+    ).select([
+        "ticker",
+        "name",
+        "type",
+        "primary_exchange",
+        "active",
+        "cik",
+    ])
+
+    # Write to silver layer
+    metadata_path = f"{settings.silver_storage_path}/ticker_metadata.parquet"
+    Path(metadata_path).parent.mkdir(parents=True, exist_ok=True)
+    ticker_metadata.write_parquet(metadata_path)
+
+    logger.info(f"✅ Wrote {len(ticker_metadata)} ticker metadata records to {metadata_path}")
+
+
 def main() -> None:  # pragma: no cover
     """Main function to adjust historical stock data for splits."""
     # Read tickers and filter to only CS (Common Stock) and ETF types
     tickers_df = read_tickers()
+
+    # Create ticker metadata dimension table
+    create_ticker_metadata(tickers_df)
+
     valid_tickers = tickers_df.filter(
         pl.col("type").is_in(["CS", "ETF"])
     ).select("ticker")
@@ -138,12 +176,71 @@ def main() -> None:  # pragma: no cover
     # Filter stocks to only valid ticker types using semi-join
     stocks_lf = stocks_lf.join(valid_tickers.lazy(), on="ticker", how="semi")
 
-    # Process all years at once with partitioning
+    # Process all years at once - write daily aggregates (split-adjusted OHLCV)
+    daily_path = f"{settings.silver_storage_path}/stocks/daily_aggregates.parquet"
     apply_splits_lazy(
         stocks_lf=stocks_lf,
         splits_df=splits_df,
-        output_path=f"{settings.silver_storage_path}/stocks/adjusted.parquet",
+        output_path=daily_path,
     )
+
+    # Read back the daily aggregates to calculate indicators and create weekly/monthly data
+    logger.info("Reading daily aggregates for indicator and aggregate calculations...")
+    daily_df = pl.read_parquet(daily_path)
+
+    # Calculate and write daily indicators
+    logger.info("Calculating daily technical indicators...")
+    daily_indicators = calculate_all_indicators(daily_df)
+    daily_indicators = validate_indicators(daily_indicators)
+    daily_indicators_path = f"{settings.silver_storage_path}/stocks/daily_indicators.parquet"
+    logger.info(f"Writing daily indicators to {daily_indicators_path}...")
+    daily_indicators.write_parquet(daily_indicators_path)
+
+    # Create weekly aggregates
+    logger.info("Creating weekly aggregates...")
+    weekly_df = aggregate_to_weekly(daily_df)
+    weekly_df = validate_daily_aggregates(weekly_df)
+    weekly_path = f"{settings.silver_storage_path}/stocks/weekly_aggregates.parquet"
+    logger.info(f"Writing weekly aggregates to {weekly_path}...")
+    weekly_df.write_parquet(weekly_path)
+
+    # Calculate and write weekly indicators
+    logger.info("Calculating weekly technical indicators...")
+    weekly_indicators = calculate_all_indicators(weekly_df)
+
+    # Add Weinstein Stage Analysis for weekly data (needs close prices)
+    logger.info("Adding Weinstein Stage Analysis to weekly indicators...")
+    # Join close prices back for Weinstein calculation
+    weekly_with_close = weekly_df.select(["ticker", "date", "close", "volume"]).join(
+        weekly_indicators, on=["ticker", "date"], how="inner"
+    )
+    weekly_with_stages = calculate_weinstein_stage(weekly_with_close)
+
+    # Drop the close and volume columns (they're in aggregates already)
+    weekly_indicators = weekly_with_stages.drop(["close", "volume"])
+
+    weekly_indicators = validate_indicators(weekly_indicators, include_stages=True)
+    weekly_indicators_path = f"{settings.silver_storage_path}/stocks/weekly_indicators.parquet"
+    logger.info(f"Writing weekly indicators to {weekly_indicators_path}...")
+    weekly_indicators.write_parquet(weekly_indicators_path)
+
+    # Create monthly aggregates
+    logger.info("Creating monthly aggregates...")
+    monthly_df = aggregate_to_monthly(daily_df)
+    monthly_df = validate_daily_aggregates(monthly_df)
+    monthly_path = f"{settings.silver_storage_path}/stocks/monthly_aggregates.parquet"
+    logger.info(f"Writing monthly aggregates to {monthly_path}...")
+    monthly_df.write_parquet(monthly_path)
+
+    # Calculate and write monthly indicators
+    logger.info("Calculating monthly technical indicators...")
+    monthly_indicators = calculate_all_indicators(monthly_df)
+    monthly_indicators = validate_indicators(monthly_indicators)
+    monthly_indicators_path = f"{settings.silver_storage_path}/stocks/monthly_indicators.parquet"
+    logger.info(f"Writing monthly indicators to {monthly_indicators_path}...")
+    monthly_indicators.write_parquet(monthly_indicators_path)
+
+    logger.info("Silver layer processing complete! ✅")
 
 
 if __name__ == "__main__":  # pragma: no cover

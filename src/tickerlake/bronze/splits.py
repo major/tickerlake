@@ -5,7 +5,7 @@ from pathlib import Path
 
 import polars as pl
 
-from tickerlake.bronze.schemas import SPLITS_SCHEMA
+from tickerlake.schemas import SPLITS_RAW_SCHEMA
 from tickerlake.clients import setup_polygon_api_client
 from tickerlake.config import settings
 from tickerlake.logging_config import get_logger, setup_logging
@@ -35,7 +35,7 @@ def get_splits() -> pl.DataFrame:
     ]
 
     logger.info(f"Retrieved {len(splits)} stock splits.")
-    return pl.DataFrame(splits, schema_overrides=SPLITS_SCHEMA)
+    return pl.DataFrame(splits, schema_overrides=SPLITS_RAW_SCHEMA)
 
 
 def load_splits() -> None:

@@ -54,6 +54,10 @@ class TestReadTickers:
         sample_tickers = pl.DataFrame({
             "ticker": ["AAPL", "SPY", "AAPL.WS"],
             "type": ["CS", "ETF", "WARRANT"],
+            "name": ["Apple Inc.", "SPDR S&P 500 ETF Trust", "Apple Warrant"],
+            "primary_exchange": ["NASDAQ", "NYSE", "NASDAQ"],
+            "active": [True, True, False],
+            "cik": ["0000320193", "0001064642", "0000320193"],
         })
         mock_read.return_value = sample_tickers
 
@@ -89,6 +93,10 @@ class TestReadStocksLazy:
 class TestMain:
     """Test main pipeline function."""
 
+    @patch("tickerlake.silver.main.aggregate_to_monthly")
+    @patch("tickerlake.silver.main.aggregate_to_weekly")
+    @patch("tickerlake.silver.main.calculate_all_indicators")
+    @patch("tickerlake.silver.main.pl.read_parquet")
     @patch("tickerlake.silver.main.apply_splits_lazy")
     @patch("tickerlake.silver.main.read_stocks_lazy")
     @patch("tickerlake.silver.main.read_splits")
@@ -99,6 +107,10 @@ class TestMain:
         mock_read_splits,
         mock_read_stocks,
         mock_apply_splits,
+        mock_read_parquet,
+        mock_calc_indicators,
+        mock_agg_weekly,
+        mock_agg_monthly,
         mock_settings,
     ):
         """Test main function calls the correct processing functions and filters splits."""
@@ -106,6 +118,10 @@ class TestMain:
         mock_tickers_df = pl.DataFrame({
             "ticker": ["AAPL", "SPY", "AAPL.WS"],
             "type": ["CS", "ETF", "WARRANT"],
+            "name": ["Apple Inc.", "SPDR S&P 500 ETF Trust", "Apple Warrant"],
+            "primary_exchange": ["NASDAQ", "NYSE", "NASDAQ"],
+            "active": [True, True, False],
+            "cik": ["0000320193", "0001064642", "0000320193"],
         })
         mock_read_tickers.return_value = mock_tickers_df
 
@@ -122,9 +138,35 @@ class TestMain:
         stock_data = pl.DataFrame({
             "ticker": ["AAPL", "SPY", "AAPL.WS"],
             "date": [date(2024, 1, 1)] * 3,
+            "open": [99.0, 199.0, 49.0],
+            "high": [101.0, 201.0, 51.0],
+            "low": [98.0, 198.0, 48.0],
             "close": [100.0, 200.0, 50.0],
+            "volume": [1000000, 2000000, 500000],
+            "transactions": [10000, 20000, 5000],
         })
         mock_read_stocks.return_value = stock_data.lazy()
+
+        # Mock read_parquet to return the same stock data for daily aggregates
+        mock_read_parquet.return_value = stock_data
+
+        # Mock indicator calculations to return simple DataFrames
+        mock_indicators = pl.DataFrame({
+            "ticker": ["AAPL", "SPY"],
+            "date": [date(2024, 1, 1)] * 2,
+            "sma_20": [100.0, 200.0],
+            "sma_50": [100.0, 200.0],
+            "sma_200": [100.0, 200.0],
+            "atr_14": [2.0, 4.0],
+            "volume_ma_20": [1000000, 2000000],
+            "volume_ratio": [1.0, 1.0],
+            "is_hvc": [False, False],
+        })
+        mock_calc_indicators.return_value = mock_indicators
+
+        # Mock aggregations to return simple DataFrames
+        mock_agg_weekly.return_value = stock_data.head(2)
+        mock_agg_monthly.return_value = stock_data.head(2)
 
         from tickerlake.silver.main import main
 
@@ -142,3 +184,8 @@ class TestMain:
         # Verify that only CS and ETF splits were passed (AAPL.WS should be filtered out)
         assert len(splits_passed) == 2
         assert "AAPL.WS" not in splits_passed["ticker"].to_list()
+
+        # Verify indicators and aggregations were calculated
+        assert mock_calc_indicators.call_count == 3  # daily, weekly, monthly
+        assert mock_agg_weekly.call_count == 1
+        assert mock_agg_monthly.call_count == 1

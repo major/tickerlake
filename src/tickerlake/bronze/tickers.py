@@ -4,7 +4,7 @@ from pathlib import Path
 
 import polars as pl
 
-from tickerlake.bronze.schemas import TICKERS_SCHEMA
+from tickerlake.schemas import TICKERS_RAW_SCHEMA
 from tickerlake.clients import setup_polygon_api_client
 from tickerlake.config import settings
 from tickerlake.logging_config import get_logger, setup_logging
@@ -30,7 +30,7 @@ def get_tickers() -> pl.DataFrame:
     ]
 
     logger.info(f"Fetched {len(tickers)} active tickers")
-    return pl.DataFrame(tickers, schema_overrides=TICKERS_SCHEMA)
+    return pl.DataFrame(tickers, schema_overrides=TICKERS_RAW_SCHEMA)
 
 
 def load_tickers() -> None:

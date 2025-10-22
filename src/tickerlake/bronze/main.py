@@ -6,9 +6,9 @@ from pathlib import Path
 import polars as pl
 from tqdm import tqdm
 
-from tickerlake.bronze.schemas import (
-    STOCKS_SCHEMA,
-    STOCKS_SCHEMA_MODIFIED,
+from tickerlake.schemas import (
+    STOCKS_RAW_SCHEMA,
+    STOCKS_RAW_SCHEMA_MODIFIED,
 )
 from tickerlake.bronze.splits import load_splits
 from tickerlake.bronze.tickers import load_tickers
@@ -144,7 +144,7 @@ def main() -> None:  # pragma: no cover
     stocks_path.mkdir(parents=True, exist_ok=True)
 
     stocks_dates_already_stored = previously_stored_dates(
-        settings.bronze_storage_path + "/stocks", STOCKS_SCHEMA_MODIFIED
+        settings.bronze_storage_path + "/stocks", STOCKS_RAW_SCHEMA_MODIFIED
     )
     stocks_files_to_process = get_missing_dates(
         already_stored_dates=stocks_dates_already_stored,
@@ -153,7 +153,7 @@ def main() -> None:  # pragma: no cover
     load_polygon_flatfiles(
         files_to_process=stocks_files_to_process,
         destination_path=settings.bronze_storage_path + "/stocks",
-        schema=STOCKS_SCHEMA,
+        schema=STOCKS_RAW_SCHEMA,
     )
 
 

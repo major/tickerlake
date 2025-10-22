@@ -6,12 +6,12 @@ readme = "README.md"
 authors = [{ name = "Major Hayden", email = "major@mhtx.net" }]
 requires-python = ">=3.12"
 dependencies = [
-    "datasette>=0.65.1",
-    "deltalake>=0.23.1",
+    "duckdb>=1.1.0",
     "fastexcel>=0.15.1",
     "fsspec>=2025.9.0",
     "pandas-market-calendars>=5.1.1",
     "polars>=1.33.1",
+    "polars-talib>=0.1.5",
     "polygon-api-client>=1.15.3",
     "pyarrow>=21.0.0",
     "pydantic>=2.0.0",
@@ -27,12 +27,14 @@ dependencies = [
 bronze = "tickerlake.bronze.main:main"
 silver = "tickerlake.silver.main:main"
 gold = "tickerlake.gold.main:main"
+validate = "tickerlake.silver.validation:main"
 
 [build-system]
 requires = ["uv_build>=0.9.0,<0.10.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
+analysis = ["matplotlib>=3.10.0"]
 container = ["datasette>=0.65.1"]
 dev = [
     "deptry>=0.20.0",

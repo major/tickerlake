@@ -5,7 +5,63 @@ from typing import Any
 import polars as pl
 
 
-# Schema definitions for common data structures
+# =============================================================================
+# Bronze Layer Schemas (Raw Polygon API data)
+# =============================================================================
+
+STOCKS_RAW_SCHEMA: dict[str, Any] = {
+    "ticker": pl.Categorical,
+    "volume": pl.UInt64,
+    "open": pl.Float32,
+    "close": pl.Float32,
+    "high": pl.Float32,
+    "low": pl.Float32,
+    "window_start": pl.Int64,
+    "transactions": pl.UInt32,
+}
+
+STOCKS_RAW_SCHEMA_MODIFIED: dict[str, Any] = {
+    "ticker": pl.Categorical,
+    "volume": pl.UInt64,
+    "open": pl.Float32,
+    "close": pl.Float32,
+    "high": pl.Float32,
+    "low": pl.Float32,
+    "date": pl.Date,
+    "transactions": pl.UInt32,
+}
+
+SPLITS_RAW_SCHEMA: dict[str, Any] = {
+    "id": pl.Utf8,
+    "execution_date": pl.Date,
+    "split_from": pl.Float32,
+    "split_to": pl.Float32,
+    "ticker": pl.Categorical,
+}
+
+TICKERS_RAW_SCHEMA: dict[str, Any] = {
+    "active": pl.Boolean,
+    "base_currency_name": pl.Utf8,
+    "base_currency_symbol": pl.Utf8,
+    "cik": pl.Utf8,
+    "composite_figi": pl.Utf8,
+    "currency_name": pl.Categorical,
+    "currency_symbol": pl.Categorical,
+    "delisted_utc": pl.Utf8,
+    "last_updated_utc": pl.Utf8,
+    "locale": pl.Categorical,
+    "market": pl.Categorical,
+    "name": pl.Utf8,
+    "primary_exchange": pl.Categorical,
+    "share_class_figi": pl.Utf8,
+    "ticker": pl.Categorical,
+    "type": pl.Categorical,
+}
+
+
+# =============================================================================
+# Silver/Gold Layer Schemas (Processed data)
+# =============================================================================
 DAILY_AGGREGATE_SCHEMA: dict[str, Any] = {
     "ticker": pl.String,
     "date": pl.Date,
@@ -59,6 +115,26 @@ HIGH_VOLUME_CLOSE_SCHEMA: dict[str, Any] = {
     "volume_avg_ratio": pl.Float64,
     "volume": pl.UInt64,
     "volume_avg": pl.UInt64,
+}
+
+INDICATORS_SCHEMA: dict[str, Any] = {
+    "ticker": pl.String,
+    "date": pl.Date,
+    "sma_20": pl.Float64,
+    "sma_50": pl.Float64,
+    "sma_200": pl.Float64,
+    "atr_14": pl.Float64,
+    "volume_ma_20": pl.UInt64,
+    "volume_ratio": pl.Float64,
+    "is_hvc": pl.Boolean,
+    # Weinstein Stage Analysis columns (weekly data only)
+    "ma_30": pl.Float64,
+    "price_vs_ma_pct": pl.Float64,
+    "ma_slope_pct": pl.Float64,
+    "raw_stage": pl.UInt8,
+    "stage": pl.UInt8,
+    "stage_changed": pl.Boolean,
+    "weeks_in_stage": pl.UInt32,
 }
 
 
@@ -131,3 +207,31 @@ def validate_high_volume_closes(df: pl.DataFrame) -> pl.DataFrame:
         DataFrame with validated schema.
     """
     return df.cast(HIGH_VOLUME_CLOSE_SCHEMA, strict=False)  # type: ignore[arg-type]
+
+
+def validate_indicators(df: pl.DataFrame, include_stages: bool = False) -> pl.DataFrame:
+    """Validate and cast technical indicators to expected schema.
+
+    Args:
+        df: DataFrame containing technical indicator data.
+        include_stages: If True, validate Weinstein stage columns (weekly data only).
+
+    Returns:
+        DataFrame with validated schema.
+    """
+    if include_stages:
+        return df.cast(INDICATORS_SCHEMA, strict=False)  # type: ignore[arg-type]
+    else:
+        # Daily/monthly indicators don't have stage analysis columns
+        basic_schema = {
+            "ticker": pl.String,
+            "date": pl.Date,
+            "sma_20": pl.Float64,
+            "sma_50": pl.Float64,
+            "sma_200": pl.Float64,
+            "atr_14": pl.Float64,
+            "volume_ma_20": pl.UInt64,
+            "volume_ratio": pl.Float64,
+            "is_hvc": pl.Boolean,
+        }
+        return df.cast(basic_schema, strict=False)  # type: ignore[arg-type]

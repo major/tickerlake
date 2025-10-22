@@ -21,6 +21,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - Use when schema changes or data corrections needed
   - Add `full_rebuild=True` parameter to `main()` function
 
+### Gold Layer Usage
+
+**Running the gold layer:**
+```bash
+uv run gold  # Creates gold.duckdb with all views
+```
+
+**Python query examples:**
+```python
+from tickerlake.gold.query import get_ticker_data, get_recent_hvcs
+from datetime import date
+
+# Get ticker data with all indicators
+df = get_ticker_data('AAPL', start_date=date(2024, 1, 1))
+
+# Find recent high volume closes
+hvcs = get_recent_hvcs(days=30, min_ratio=3.0, ticker_type='CS')
+
+# Custom SQL query
+from tickerlake.gold.query import execute_custom_query
+df = execute_custom_query("SELECT * FROM daily_enriched WHERE ticker = 'AAPL'")
+```
+
+**Direct DuckDB usage:**
+```python
+import duckdb
+con = duckdb.connect('./data/gold/gold.duckdb')
+df = con.execute('SELECT * FROM daily_enriched LIMIT 10').pl()
+```
+
 ### GitHub Actions
 - Workflow runs on push/PR to main branch
 - Requires GitHub secret: `POLYGON_API_KEY` (for Polygon.io flat file access)
@@ -43,15 +73,18 @@ TickerLake follows a medallion architecture for financial data processing:
   - Full rebuild mode: Reprocesses all data from bronze layer
   - Automatically generates weekly and monthly aggregates
 
-- **Gold Layer** (`src/tickerlake/gold/`): Business-level aggregates and analytics
-  - **High Volume Closes (HVCs)**: Identifies days with 3x+ average volume
-    - Filters for liquid stocks (200K+ avg volume, $5+ price) and ETFs (50K+ avg volume)
-    - Tracks current price vs HVC channels for pattern continuation
-  - **Stair-Stepping Patterns**: Detects consecutive HVCs with ascending prices
-    - Identifies institutional accumulation (3+ consecutive HVCs, each closing higher)
-    - Analyzes pattern strength, duration, and current status
-    - See `examples/find_stairstepping_hvcs.py` for usage
-  - Exports to SQLite database (`hvcs.db`) for easy querying and visualization
+- **Gold Layer** (`src/tickerlake/gold/`): DuckDB views for analytics and querying
+  - Creates pure views (query-time joins) for always-fresh data
+  - **Ticker Metadata**: Dimension table with CS/ETF ticker info from bronze layer
+  - **Enriched Views**: Joins OHLCV aggregates + technical indicators + ticker metadata
+    - `daily_enriched`, `weekly_enriched`, `monthly_enriched`
+  - **Analysis Views**: Specialized views for common patterns
+    - `recent_hvcs`: High volume closes (3x+ avg volume) from last 30 days
+    - `liquid_stocks`: CS stocks with 200K+ volume, $5+ price; ETFs with 50K+ volume
+    - `trending_stocks`: Stocks with price above all SMAs (20/50/200)
+    - `latest_prices`: Most recent data for each ticker
+  - Python helper functions for ad-hoc queries and backtesting
+  - Persistent DuckDB database at `./data/gold/gold.duckdb`
 
 ### Configuration Management
 - Uses Pydantic Settings with `.env` file support (`src/tickerlake/config.py`)
