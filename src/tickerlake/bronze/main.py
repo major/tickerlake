@@ -1,4 +1,4 @@
-"""Unified flatfile processing for stocks and options data."""
+"""Bronze layer flatfile processing for stocks data from Polygon.io."""
 
 from datetime import date
 from pathlib import Path
@@ -6,19 +6,17 @@ from pathlib import Path
 import polars as pl
 from tqdm import tqdm
 
-from tickerlake.bronze.clients import (
-    POLYGON_STORAGE_OPTIONS,
-    setup_polygon_flatfiles_client,
-)
 from tickerlake.bronze.schemas import (
-    OPTIONS_SCHEMA,
-    OPTIONS_SCHEMA_MODIFIED,
     STOCKS_SCHEMA,
     STOCKS_SCHEMA_MODIFIED,
 )
 from tickerlake.bronze.splits import load_splits
 from tickerlake.bronze.tickers import load_tickers
-from tickerlake.config import s3_storage_options, settings
+from tickerlake.clients import (
+    POLYGON_STORAGE_OPTIONS,
+    setup_polygon_flatfiles_client,
+)
+from tickerlake.config import settings
 from tickerlake.logging_config import get_logger, setup_logging
 
 setup_logging()
@@ -31,12 +29,6 @@ pl.Config.set_verbose(False)
 def stocks_flatfiles_valid_years() -> list[int]:
     return valid_flatfiles_years(
         first_year_available=settings.polygon_flatfiles_stocks_first_year
-    )
-
-
-def options_flatfiles_valid_years() -> list[int]:
-    return valid_flatfiles_years(
-        first_year_available=settings.polygon_flatfiles_options_first_year
     )
 
 
@@ -53,16 +45,8 @@ def list_available_stocks_flatfiles() -> list[str]:
     )
 
 
-def list_available_options_flatfiles() -> list[str]:
-    """List available option flatfiles in the Polygon S3 bucket."""
-    return list_available_flatfiles(
-        flatfiles_path=settings.polygon_flatfiles_options,
-        valid_years=options_flatfiles_valid_years(),
-    )
-
-
 def list_available_flatfiles(flatfiles_path: str, valid_years: list[int]) -> list[str]:
-    """List available stock and option flatfiles in the Polygon S3 bucket."""
+    """List available stock flatfiles in the Polygon S3 bucket."""
     polygon_s3 = setup_polygon_flatfiles_client()
     logger.info(f"Listing available flatfiles in polygon's s3 for {flatfiles_path}...")
 
@@ -93,7 +77,6 @@ def previously_stored_dates(destination: str, schema: dict) -> list:
     lf = (
         pl.scan_parquet(
             f"{destination}/date=*/*.parquet",
-            storage_options=s3_storage_options,
             schema=schema,
         )
         .select(pl.col("date").dt.strftime("%Y-%m-%d").alias("date"))
@@ -142,7 +125,6 @@ def load_polygon_flatfiles(
                 lf.collect().write_parquet(
                     destination_path,
                     partition_by=["date"],
-                    storage_options=s3_storage_options,
                 )
             except OSError:
                 logger.info(f"✔️ Reached the last file: {filename}")
@@ -150,16 +132,19 @@ def load_polygon_flatfiles(
 
 
 def main() -> None:  # pragma: no cover
-    """Main function to load stocks and options flatfiles into unified storage."""
+    """Main function to load stocks flatfiles from Polygon.io into local storage."""
     # Splits
     load_splits()
 
     # Tickers
     load_tickers()
 
-    # Stocks
+    # Stocks - ensure directory exists before processing
+    stocks_path = Path(f"{settings.bronze_storage_path}/stocks")
+    stocks_path.mkdir(parents=True, exist_ok=True)
+
     stocks_dates_already_stored = previously_stored_dates(
-        settings.bronze_unified_storage_path + "/stocks", STOCKS_SCHEMA_MODIFIED
+        settings.bronze_storage_path + "/stocks", STOCKS_SCHEMA_MODIFIED
     )
     stocks_files_to_process = get_missing_dates(
         already_stored_dates=stocks_dates_already_stored,
@@ -167,22 +152,8 @@ def main() -> None:  # pragma: no cover
     )
     load_polygon_flatfiles(
         files_to_process=stocks_files_to_process,
-        destination_path=settings.bronze_unified_storage_path + "/stocks",
+        destination_path=settings.bronze_storage_path + "/stocks",
         schema=STOCKS_SCHEMA,
-    )
-
-    # Options
-    options_dates_already_stored = previously_stored_dates(
-        settings.bronze_unified_storage_path + "/options", OPTIONS_SCHEMA_MODIFIED
-    )
-    options_files_to_process = get_missing_dates(
-        already_stored_dates=options_dates_already_stored,
-        stored_files=list_available_options_flatfiles(),
-    )
-    load_polygon_flatfiles(
-        files_to_process=options_files_to_process,
-        destination_path=settings.bronze_unified_storage_path + "/options",
-        schema=OPTIONS_SCHEMA,
     )
 
 

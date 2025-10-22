@@ -23,14 +23,3 @@ def setup_polygon_flatfiles_client() -> s3fs.S3FileSystem:
         endpoint_url=settings.polygon_flatfiles_endpoint_url,
     )
     return polygon_s3
-
-
-def setup_aws_s3_client() -> s3fs.S3FileSystem:
-    """Set up the AWS S3 client using s3fs."""
-    aws_s3 = s3fs.S3FileSystem(
-        anon=False,
-        key=settings.aws_access_key_id.get_secret_value(),
-        secret=settings.aws_secret_access_key.get_secret_value(),
-        client_kwargs={"region_name": settings.aws_region},
-    )
-    return aws_s3

@@ -1,10 +1,12 @@
 """Getting ticker data from Polygon API and loading into Parquet files."""
 
+from pathlib import Path
+
 import polars as pl
 
-from tickerlake.bronze.clients import setup_polygon_api_client
 from tickerlake.bronze.schemas import TICKERS_SCHEMA
-from tickerlake.config import s3_storage_options, settings
+from tickerlake.clients import setup_polygon_api_client
+from tickerlake.config import settings
 from tickerlake.logging_config import get_logger, setup_logging
 
 setup_logging()
@@ -34,8 +36,12 @@ def get_tickers() -> pl.DataFrame:
 def load_tickers() -> None:
     """Load tickers data into Parquet files."""
     tickers_df = get_tickers()
+
+    # Ensure directory exists before writing
+    tickers_path = Path(f"{settings.bronze_storage_path}/tickers")
+    tickers_path.mkdir(parents=True, exist_ok=True)
+
     tickers_df.write_parquet(
-        f"{settings.bronze_unified_storage_path}/tickers/tickers.parquet",
-        storage_options=s3_storage_options,
+        f"{settings.bronze_storage_path}/tickers/tickers.parquet",
     )
     logger.info("Tickers data written to Parquet files.")

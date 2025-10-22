@@ -1,11 +1,11 @@
 name: Unified Data Update
 
 on:
-  schedule:
-    # 4:30 PM EST (UTC-5) - November to March
-    - cron: "30 21 * 11-12,1-3 1-5"
-    # 4:30 PM EDT (UTC-4) - March to November
-    - cron: "30 20 * 3-11 1-5"
+  # schedule:
+  #   # 4:30 PM EST (UTC-5) - November to March
+  #   - cron: "30 21 * 11-12,1-3 1-5"
+  #   # 4:30 PM EDT (UTC-4) - March to November
+  #   - cron: "30 20 * 3-11 1-5"
   workflow_dispatch:
 
 env:

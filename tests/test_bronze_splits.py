@@ -13,7 +13,7 @@ from tickerlake.bronze.splits import get_splits, load_splits
 def mock_settings():
     """Create a mock settings object for testing."""
     with patch("tickerlake.bronze.splits.settings") as mock:
-        mock.bronze_unified_storage_path = "s3://tickerlake/unified/bronze"
+        mock.bronze_storage_path = "./data/bronze"
         yield mock
 
 
@@ -122,10 +122,10 @@ class TestGetSplits:
         assert first_row["split_to"] == 4.0
 
         # Check data types
-        assert result.schema["ticker"] == pl.Utf8
+        assert result.schema["ticker"] == pl.Categorical
         assert result.schema["execution_date"] == pl.Date
-        assert result.schema["split_from"] == pl.Float64
-        assert result.schema["split_to"] == pl.Float64
+        assert result.schema["split_from"] == pl.Float32
+        assert result.schema["split_to"] == pl.Float32
 
     @patch("tickerlake.bronze.splits.setup_polygon_api_client")
     def test_get_splits_empty_response(self, mock_setup_client, mock_polygon_client):
@@ -199,7 +199,6 @@ class TestGetSplits:
 class TestLoadSplits:
     """Test cases for load_splits function."""
 
-    @patch("tickerlake.bronze.splits.s3_storage_options", {"option": "value"})
     @patch("tickerlake.bronze.splits.get_splits")
     def test_load_splits_writes_parquet(
         self, mock_get_splits, mock_settings, expected_splits_df
@@ -213,11 +212,9 @@ class TestLoadSplits:
 
             # Verify write_parquet was called with correct parameters
             mock_write.assert_called_once_with(
-                "s3://tickerlake/unified/bronze/splits/splits.parquet",
-                storage_options={"option": "value"},
+                "./data/bronze/splits/splits.parquet",
             )
 
-    @patch("tickerlake.bronze.splits.s3_storage_options", {"option": "value"})
     @patch("tickerlake.bronze.splits.get_splits")
     def test_load_splits_calls_get_splits(self, mock_get_splits, mock_settings):
         """Test load_splits calls get_splits to retrieve data."""
@@ -237,7 +234,6 @@ class TestLoadSplits:
             # Verify get_splits was called
             mock_get_splits.assert_called_once()
 
-    @patch("tickerlake.bronze.splits.s3_storage_options", {"option": "value"})
     @patch("tickerlake.bronze.splits.get_splits")
     def test_load_splits_empty_dataframe(self, mock_get_splits, mock_settings):
         """Test load_splits handles empty DataFrame correctly."""
@@ -257,33 +253,10 @@ class TestLoadSplits:
             # Should still write even if empty
             mock_write.assert_called_once()
 
-    @patch("tickerlake.bronze.splits.s3_storage_options", {"aws_region": "us-east-1"})
-    @patch("tickerlake.bronze.splits.get_splits")
-    def test_load_splits_storage_options(self, mock_get_splits, mock_settings):
-        """Test load_splits uses correct storage options."""
-        mock_df = pl.DataFrame(
-            {
-                "ticker": ["TEST"],
-                "execution_date": [date(2024, 1, 1)],
-                "split_from": [1.0],
-                "split_to": [2.0],
-            }
-        )
-        mock_get_splits.return_value = mock_df
-
-        with patch.object(pl.DataFrame, "write_parquet") as mock_write:
-            load_splits()
-
-            # Verify storage options were passed
-            call_kwargs = mock_write.call_args.kwargs
-            assert "storage_options" in call_kwargs
-            assert call_kwargs["storage_options"]["aws_region"] == "us-east-1"
-
 
 class TestIntegration:
     """Integration tests for splits module."""
 
-    @patch("tickerlake.bronze.splits.s3_storage_options", {"option": "value"})
     @patch("tickerlake.bronze.splits.setup_polygon_api_client")
     def test_end_to_end_splits_loading(
         self, mock_setup_client, mock_polygon_client, sample_split_data, mock_settings

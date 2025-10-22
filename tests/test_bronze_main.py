@@ -1,4 +1,4 @@
-"""Tests for the bronze unified layer module."""
+"""Tests for the bronze layer main module."""
 
 from datetime import date
 from unittest.mock import MagicMock, Mock, patch
@@ -6,13 +6,11 @@ from unittest.mock import MagicMock, Mock, patch
 import polars as pl
 import pytest
 
-from tickerlake.bronze.unified import (
+from tickerlake.bronze.main import (
     get_missing_dates,
     list_available_flatfiles,
-    list_available_options_flatfiles,
     list_available_stocks_flatfiles,
     load_polygon_flatfiles,
-    options_flatfiles_valid_years,
     previously_stored_dates,
     stocks_flatfiles_valid_years,
     valid_flatfiles_years,
@@ -22,12 +20,10 @@ from tickerlake.bronze.unified import (
 @pytest.fixture
 def mock_settings():
     """Create a mock settings object for testing."""
-    with patch("tickerlake.bronze.unified.settings") as mock:
+    with patch("tickerlake.bronze.main.settings") as mock:
         mock.polygon_flatfiles_stocks_first_year = 2020
-        mock.polygon_flatfiles_options_first_year = 2022
         mock.polygon_flatfiles_stocks = "s3://flatfiles/us_stocks_sip/day_aggs_v1"
-        mock.polygon_flatfiles_options = "s3://flatfiles/us_options_opra/day_aggs_v1"
-        mock.bronze_unified_storage_path = "s3://tickerlake/unified/bronze"
+        mock.bronze_storage_path = "./data/bronze"
         yield mock
 
 
@@ -45,15 +41,6 @@ def sample_stock_paths():
         "flatfiles/us_stocks_sip/day_aggs_v1/2024/01/2024-01-02.csv.gz",
         "flatfiles/us_stocks_sip/day_aggs_v1/2024/01/2024-01-03.csv.gz",
         "flatfiles/us_stocks_sip/day_aggs_v1/2023/12/2023-12-29.csv.gz",
-    ]
-
-
-@pytest.fixture
-def sample_options_paths():
-    """Sample options flatfile paths from Polygon S3."""
-    return [
-        "flatfiles/us_options_opra/day_aggs_v1/2024/01/2024-01-02.csv.gz",
-        "flatfiles/us_options_opra/day_aggs_v1/2024/01/2024-01-03.csv.gz",
     ]
 
 
@@ -75,13 +62,13 @@ class TestValidFlatfilesYears:
     )
     def test_valid_flatfiles_years(self, first_year, current_year, expected_years):
         """Test valid_flatfiles_years with various year ranges."""
-        with patch("tickerlake.bronze.unified.date") as mock_date:
+        with patch("tickerlake.bronze.main.date") as mock_date:
             mock_date.today.return_value = date(current_year, 1, 1)
             result = valid_flatfiles_years(first_year)
             assert result == expected_years
 
-    @patch("tickerlake.bronze.unified.settings")
-    @patch("tickerlake.bronze.unified.date")
+    @patch("tickerlake.bronze.main.settings")
+    @patch("tickerlake.bronze.main.date")
     def test_stocks_flatfiles_valid_years(self, mock_date, mock_settings):
         """Test stocks_flatfiles_valid_years uses correct settings."""
         mock_date.today.return_value = date(2025, 1, 1)
@@ -90,17 +77,6 @@ class TestValidFlatfilesYears:
         result = stocks_flatfiles_valid_years()
 
         assert result == [2025, 2024, 2023, 2022]
-
-    @patch("tickerlake.bronze.unified.settings")
-    @patch("tickerlake.bronze.unified.date")
-    def test_options_flatfiles_valid_years(self, mock_date, mock_settings):
-        """Test options_flatfiles_valid_years uses correct settings."""
-        mock_date.today.return_value = date(2025, 1, 1)
-        mock_settings.polygon_flatfiles_options_first_year = 2023
-
-        result = options_flatfiles_valid_years()
-
-        assert result == [2025, 2024, 2023]
 
 
 class TestListAvailableFlatfiles:
@@ -120,7 +96,7 @@ class TestListAvailableFlatfiles:
         ]
 
         with patch(
-            "tickerlake.bronze.unified.setup_polygon_flatfiles_client",
+            "tickerlake.bronze.main.setup_polygon_flatfiles_client",
             return_value=mock_polygon_s3,
         ):
             result = list_available_flatfiles(flatfiles_path, valid_years)
@@ -147,7 +123,7 @@ class TestListAvailableFlatfiles:
         mock_polygon_s3.glob.return_value = []
 
         with patch(
-            "tickerlake.bronze.unified.setup_polygon_flatfiles_client",
+            "tickerlake.bronze.main.setup_polygon_flatfiles_client",
             return_value=mock_polygon_s3,
         ):
             result = list_available_flatfiles(flatfiles_path, valid_years)
@@ -155,8 +131,8 @@ class TestListAvailableFlatfiles:
         assert result == []
         mock_polygon_s3.glob.assert_called_once()
 
-    @patch("tickerlake.bronze.unified.list_available_flatfiles")
-    @patch("tickerlake.bronze.unified.stocks_flatfiles_valid_years")
+    @patch("tickerlake.bronze.main.list_available_flatfiles")
+    @patch("tickerlake.bronze.main.stocks_flatfiles_valid_years")
     def test_list_available_stocks_flatfiles(
         self, mock_valid_years, mock_list_flatfiles, mock_settings
     ):
@@ -168,23 +144,6 @@ class TestListAvailableFlatfiles:
 
         mock_list_flatfiles.assert_called_once_with(
             flatfiles_path=mock_settings.polygon_flatfiles_stocks,
-            valid_years=[2024, 2023],
-        )
-        assert result == ["file1.csv.gz", "file2.csv.gz"]
-
-    @patch("tickerlake.bronze.unified.list_available_flatfiles")
-    @patch("tickerlake.bronze.unified.options_flatfiles_valid_years")
-    def test_list_available_options_flatfiles(
-        self, mock_valid_years, mock_list_flatfiles, mock_settings
-    ):
-        """Test list_available_options_flatfiles uses correct parameters."""
-        mock_valid_years.return_value = [2024, 2023]
-        mock_list_flatfiles.return_value = ["file1.csv.gz", "file2.csv.gz"]
-
-        result = list_available_options_flatfiles()
-
-        mock_list_flatfiles.assert_called_once_with(
-            flatfiles_path=mock_settings.polygon_flatfiles_options,
             valid_years=[2024, 2023],
         )
         assert result == ["file1.csv.gz", "file2.csv.gz"]
@@ -271,8 +230,7 @@ class TestGetMissingDates:
 class TestPreviouslyStoredDates:
     """Test cases for retrieving previously stored dates."""
 
-    @patch("tickerlake.bronze.unified.s3_storage_options", {"option": "value"})
-    @patch("tickerlake.bronze.unified.pl.scan_parquet")
+    @patch("tickerlake.bronze.main.pl.scan_parquet")
     def test_previously_stored_dates_success(self, mock_scan_parquet):
         """Test previously_stored_dates retrieves dates from Parquet files."""
         # Create mock DataFrame with dates
@@ -291,13 +249,12 @@ class TestPreviouslyStoredDates:
 
         mock_scan_parquet.return_value = mock_lf
 
-        result = previously_stored_dates("s3://test/destination", test_schema)
+        result = previously_stored_dates("./data/test/destination", test_schema)
 
         assert result == ["2024-01-02", "2024-01-03"]
         mock_scan_parquet.assert_called_once()
 
-    @patch("tickerlake.bronze.unified.s3_storage_options", {"option": "value"})
-    @patch("tickerlake.bronze.unified.pl.scan_parquet")
+    @patch("tickerlake.bronze.main.pl.scan_parquet")
     def test_previously_stored_dates_empty(self, mock_scan_parquet):
         """Test previously_stored_dates handles empty results."""
         mock_dates = pl.DataFrame({"date": []}, schema={"date": pl.Utf8})
@@ -312,7 +269,7 @@ class TestPreviouslyStoredDates:
 
         mock_scan_parquet.return_value = mock_lf
 
-        result = previously_stored_dates("s3://test/destination", test_schema)
+        result = previously_stored_dates("./data/test/destination", test_schema)
 
         assert result == []
 
@@ -320,17 +277,16 @@ class TestPreviouslyStoredDates:
 class TestLoadPolygonFlatfiles:
     """Test cases for loading Polygon flatfiles."""
 
-    @patch("tickerlake.bronze.unified.s3_storage_options", {"option": "value"})
-    @patch("tickerlake.bronze.unified.POLYGON_STORAGE_OPTIONS", {"polygon": "opts"})
-    @patch("tickerlake.bronze.unified.pl.scan_csv")
-    @patch("tickerlake.bronze.unified.tqdm")
+    @patch("tickerlake.bronze.main.POLYGON_STORAGE_OPTIONS", {"polygon": "opts"})
+    @patch("tickerlake.bronze.main.pl.scan_csv")
+    @patch("tickerlake.bronze.main.tqdm")
     def test_load_polygon_flatfiles_single_file(
         self, mock_tqdm, mock_scan_csv, mock_settings
     ):
         """Test load_polygon_flatfiles processes a single file correctly."""
         # Setup test data
         files = ["s3://polygon/2024/01/2024-01-02.csv.gz"]
-        destination = "s3://dest/stocks"
+        destination = "./data/dest/stocks"
         schema = {"ticker": pl.Utf8, "window_start": pl.Int64}
 
         # Setup mock lazy frame
@@ -360,13 +316,11 @@ class TestLoadPolygonFlatfiles:
         mock_collected.write_parquet.assert_called_once_with(
             destination,
             partition_by=["date"],
-            storage_options={"option": "value"},
         )
 
-    @patch("tickerlake.bronze.unified.s3_storage_options", {"option": "value"})
-    @patch("tickerlake.bronze.unified.POLYGON_STORAGE_OPTIONS", {"polygon": "opts"})
-    @patch("tickerlake.bronze.unified.pl.scan_csv")
-    @patch("tickerlake.bronze.unified.tqdm")
+    @patch("tickerlake.bronze.main.POLYGON_STORAGE_OPTIONS", {"polygon": "opts"})
+    @patch("tickerlake.bronze.main.pl.scan_csv")
+    @patch("tickerlake.bronze.main.tqdm")
     def test_load_polygon_flatfiles_multiple_files(
         self, mock_tqdm, mock_scan_csv, mock_settings
     ):
@@ -375,7 +329,7 @@ class TestLoadPolygonFlatfiles:
             "s3://polygon/2024/01/2024-01-02.csv.gz",
             "s3://polygon/2024/01/2024-01-03.csv.gz",
         ]
-        destination = "s3://dest/stocks"
+        destination = "./data/dest/stocks"
         schema = {"ticker": pl.Utf8}
 
         # Setup mocks
@@ -398,10 +352,9 @@ class TestLoadPolygonFlatfiles:
         # Should write both times
         assert mock_collected.write_parquet.call_count == 2
 
-    @patch("tickerlake.bronze.unified.s3_storage_options", {"option": "value"})
-    @patch("tickerlake.bronze.unified.POLYGON_STORAGE_OPTIONS", {"polygon": "opts"})
-    @patch("tickerlake.bronze.unified.pl.scan_csv")
-    @patch("tickerlake.bronze.unified.tqdm")
+    @patch("tickerlake.bronze.main.POLYGON_STORAGE_OPTIONS", {"polygon": "opts"})
+    @patch("tickerlake.bronze.main.pl.scan_csv")
+    @patch("tickerlake.bronze.main.tqdm")
     def test_load_polygon_flatfiles_handles_oserror(
         self, mock_tqdm, mock_scan_csv, mock_settings
     ):
@@ -410,7 +363,7 @@ class TestLoadPolygonFlatfiles:
             "s3://polygon/2024/01/2024-01-02.csv.gz",
             "s3://polygon/2024/01/2024-01-03.csv.gz",
         ]
-        destination = "s3://dest/stocks"
+        destination = "./data/dest/stocks"
         schema = {"ticker": pl.Utf8}
 
         # Setup mocks - first file succeeds, second raises OSError
@@ -437,11 +390,11 @@ class TestLoadPolygonFlatfiles:
         # But only first write succeeded
         assert mock_collected.write_parquet.call_count == 2
 
-    @patch("tickerlake.bronze.unified.tqdm")
+    @patch("tickerlake.bronze.main.tqdm")
     def test_load_polygon_flatfiles_empty_file_list(self, mock_tqdm):
         """Test load_polygon_flatfiles handles empty file list."""
         files = []
-        destination = "s3://dest/stocks"
+        destination = "./data/dest/stocks"
         schema = {"ticker": pl.Utf8}
 
         mock_pbar = MagicMock()

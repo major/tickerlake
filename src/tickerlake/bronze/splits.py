@@ -1,12 +1,13 @@
 """Getting data about stock splits from Polygon API and loading into Parquet files."""
 
 from datetime import datetime
+from pathlib import Path
 
 import polars as pl
 
-from tickerlake.bronze.clients import setup_polygon_api_client
 from tickerlake.bronze.schemas import SPLITS_SCHEMA
-from tickerlake.config import s3_storage_options, settings
+from tickerlake.clients import setup_polygon_api_client
+from tickerlake.config import settings
 from tickerlake.logging_config import get_logger, setup_logging
 
 setup_logging()
@@ -40,8 +41,12 @@ def get_splits() -> pl.DataFrame:
 def load_splits() -> None:
     """Load stock splits data into Parquet files."""
     splits_df = get_splits()
+
+    # Ensure directory exists before writing
+    splits_path = Path(f"{settings.bronze_storage_path}/splits")
+    splits_path.mkdir(parents=True, exist_ok=True)
+
     splits_df.write_parquet(
-        f"{settings.bronze_unified_storage_path}/splits/splits.parquet",
-        storage_options=s3_storage_options,
+        f"{settings.bronze_storage_path}/splits/splits.parquet",
     )
     logger.info("Stock splits data written to Parquet files.")

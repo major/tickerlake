@@ -23,7 +23,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### GitHub Actions
 - Workflow runs on push/PR to main branch
-- Requires GitHub secrets: `POLYGON_API_KEY`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
+- Requires GitHub secret: `POLYGON_API_KEY` (for Polygon.io flat file access)
 
 ## Architecture
 
@@ -31,8 +31,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 TickerLake follows a medallion architecture for financial data processing:
 
 - **Bronze Layer** (`src/tickerlake/bronze/`): Raw data ingestion from Polygon.io API
-  - Downloads daily stock aggregates for NYSE trading days
-  - Stores data as Parquet files in S3-compatible storage
+  - Downloads daily stock aggregates for NYSE trading days from Polygon S3 flat files
+  - Stores data as Parquet files in local `./data/bronze` directory
   - Implements incremental loading by checking existing vs. required trading days
 
 - **Silver Layer** (`src/tickerlake/silver/`): Cleaned and enriched data using Delta Lake
@@ -56,7 +56,8 @@ TickerLake follows a medallion architecture for financial data processing:
 ### Configuration Management
 - Uses Pydantic Settings with `.env` file support (`src/tickerlake/config.py`)
 - All sensitive credentials handled as `SecretStr` types
-- S3 storage options pre-configured for various backends (Backblaze B2, MinIO, etc.)
+- Local filesystem storage in `./data/bronze` and `./data/silver` directories
+- Polygon.io S3 credentials required for accessing flat files
 - Default data window: 5 years from current date
 
 ### Key Components
@@ -66,10 +67,11 @@ TickerLake follows a medallion architecture for financial data processing:
 - `is_market_open()`: Real-time market status using pandas_market_calendars
 - Handles timezone conversion automatically (NYSE uses US/Eastern)
 
-**S3 Storage**:
-- Bronze path structure: `s3://bucket/bronze/daily/{YYYY-MM-DD}/data.parquet`
-- Silver path structure: `s3://bucket/silver/{table_name}/_delta_log/...`
-- Uses Polars for efficient Parquet/Delta I/O with cloud storage
+**Local Storage**:
+- Bronze path structure: `./data/bronze/stocks/date={YYYY-MM-DD}/*.parquet`
+- Silver path structure: `./data/silver/{table_name}/_delta_log/...`
+- Uses Polars for efficient Parquet/Delta I/O with local filesystem
+- Polygon S3 access: Fetches flat files from Polygon.io S3 bucket (read-only)
 
 **Delta Lake Integration** (`src/tickerlake/delta_utils.py`):
 - `write_delta_table()`: Write DataFrames to Delta tables with overwrite/append modes
@@ -81,16 +83,25 @@ TickerLake follows a medallion architecture for financial data processing:
 - `vacuum_delta_table()`: Clean up old file versions
 
 ### Data Sources
-- **Polygon.io**: Primary source for US stock market data
+- **Polygon.io**: Primary source for US stock market data (via S3 flat files)
 - **pandas_market_calendars**: NYSE trading calendar and hours
-- **Storage**: S3-compatible object storage (Backblaze B2 by default)
+- **Storage**: Local filesystem in `./data` directory
+
+**Important Polygon.io API Limitations**:
+- ⚠️ **Current Day Data**: The Polygon API does NOT allow requesting daily aggregate bars for the current day until the market has closed
+- When the market is still open or hasn't closed yet, you can only request data up to yesterday's date
+- Any validation scripts or API calls that attempt to fetch today's data will fail
+- This is why the validation script uses `get_last_trading_day()` to find the most recent complete trading day from the silver data
+- **Timezone Note**: Polygon returns timestamps in UTC. Always use `datetime.fromtimestamp(timestamp/1000, tz=timezone.utc)` when converting Polygon timestamps to avoid off-by-one date errors
 
 ### Environment Variables
 ```
 POLYGON_API_KEY=your_api_key
-AWS_ACCESS_KEY_ID=your_access_key
-AWS_SECRET_ACCESS_KEY=your_secret_key
+POLYGON_ACCESS_KEY_ID=your_polygon_s3_access_key
+POLYGON_SECRET_ACCESS_KEY=your_polygon_s3_secret_key
 ```
+
+Note: Polygon S3 credentials are only used for accessing Polygon.io flat files, not for data storage.
 
 The bronze layer automatically identifies and downloads missing trading days on each run, making it safe for scheduled execution.
 

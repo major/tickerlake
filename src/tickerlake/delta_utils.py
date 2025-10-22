@@ -7,22 +7,22 @@ import polars as pl
 from deltalake import DeltaTable
 from deltalake.exceptions import TableNotFoundError
 
-from tickerlake.config import s3_storage_options, settings
+from tickerlake.config import settings
 from tickerlake.logging_config import get_logger
 
 logger = get_logger(__name__)
 
 
 def get_delta_table_path(table_name: str) -> str:
-    """Construct S3 path for a Delta table.
+    """Construct local path for a Delta table.
 
     Args:
         table_name: Name of the Delta table (e.g., 'daily', 'tickers').
 
     Returns:
-        str: Full S3 path to the Delta table.
+        str: Full local path to the Delta table.
     """
-    return f"s3://{settings.s3_bucket_name}/silver/{table_name}"
+    return f"{settings.silver_storage_path}/{table_name}"
 
 
 def delta_table_exists(table_name: str) -> bool:
@@ -36,7 +36,7 @@ def delta_table_exists(table_name: str) -> bool:
     """
     try:
         path = get_delta_table_path(table_name)
-        DeltaTable(path, storage_options=s3_storage_options)
+        DeltaTable(path)
         return True
     except TableNotFoundError:
         return False
@@ -57,8 +57,8 @@ def read_delta_table(table_name: str, version: int | None = None) -> pl.DataFram
     logger.info(f"Reading Delta table: {table_name} (path={path}{version_str})")
 
     if version is not None:
-        return pl.read_delta(path, storage_options=s3_storage_options, version=version)
-    return pl.read_delta(path, storage_options=s3_storage_options)
+        return pl.read_delta(path, version=version)
+    return pl.read_delta(path)
 
 
 def scan_delta_table(table_name: str) -> pl.LazyFrame:
@@ -72,7 +72,7 @@ def scan_delta_table(table_name: str) -> pl.LazyFrame:
     """
     path = get_delta_table_path(table_name)
     logger.info(f"Scanning Delta table: {table_name} (path={path})")
-    return pl.scan_delta(path, storage_options=s3_storage_options)
+    return pl.scan_delta(path)
 
 
 def write_delta_table(
@@ -105,7 +105,6 @@ def write_delta_table(
     df_to_write.write_delta(
         path,
         mode=mode,
-        storage_options=s3_storage_options,
         delta_write_options={
             "partition_by": partition_by if partition_by else None,
         },
@@ -152,7 +151,7 @@ def merge_to_delta_table(
     predicate = " AND ".join([f"target.{key} = source.{key}" for key in merge_keys])
 
     # Load existing Delta table
-    dt = DeltaTable(path, storage_options=s3_storage_options)
+    dt = DeltaTable(path)
 
     # Perform merge (upsert)
     (
@@ -208,7 +207,7 @@ def optimize_delta_table(table_name: str) -> None:
     path = get_delta_table_path(table_name)
     logger.info(f"Optimizing Delta table: {table_name} (path={path})")
 
-    dt = DeltaTable(path, storage_options=s3_storage_options)
+    dt = DeltaTable(path)
     dt.optimize.compact()
     logger.info(f"Optimization complete for {table_name}")
 
@@ -225,6 +224,6 @@ def vacuum_delta_table(table_name: str, retention_hours: int = 168) -> None:
         f"Vacuuming Delta table: {table_name} (path={path}, retention_hours={retention_hours})"
     )
 
-    dt = DeltaTable(path, storage_options=s3_storage_options)
+    dt = DeltaTable(path)
     dt.vacuum(retention_hours=retention_hours)
     logger.info(f"Vacuum complete for {table_name}")

@@ -12,7 +12,7 @@ from tickerlake.bronze.tickers import get_tickers, load_tickers
 def mock_settings():
     """Create a mock settings object for testing."""
     with patch("tickerlake.bronze.tickers.settings") as mock:
-        mock.bronze_unified_storage_path = "s3://tickerlake/unified/bronze"
+        mock.bronze_storage_path = "./data/bronze"
         yield mock
 
 
@@ -244,7 +244,6 @@ class TestGetTickers:
 class TestLoadTickers:
     """Test cases for load_tickers function."""
 
-    @patch("tickerlake.bronze.tickers.s3_storage_options", {"option": "value"})
     @patch("tickerlake.bronze.tickers.get_tickers")
     def test_load_tickers_writes_parquet(
         self, mock_get_tickers, mock_settings, sample_ticker_data
@@ -259,11 +258,9 @@ class TestLoadTickers:
 
             # Verify write_parquet was called with correct parameters
             mock_write.assert_called_once_with(
-                "s3://tickerlake/unified/bronze/tickers/tickers.parquet",
-                storage_options={"option": "value"},
+                "./data/bronze/tickers/tickers.parquet",
             )
 
-    @patch("tickerlake.bronze.tickers.s3_storage_options", {"option": "value"})
     @patch("tickerlake.bronze.tickers.get_tickers")
     def test_load_tickers_calls_get_tickers(self, mock_get_tickers, mock_settings):
         """Test load_tickers calls get_tickers to retrieve data."""
@@ -282,7 +279,6 @@ class TestLoadTickers:
             # Verify get_tickers was called
             mock_get_tickers.assert_called_once()
 
-    @patch("tickerlake.bronze.tickers.s3_storage_options", {"option": "value"})
     @patch("tickerlake.bronze.tickers.get_tickers")
     def test_load_tickers_empty_dataframe(self, mock_get_tickers, mock_settings):
         """Test load_tickers handles empty DataFrame correctly."""
@@ -295,28 +291,6 @@ class TestLoadTickers:
             # Should still write even if empty
             mock_write.assert_called_once()
 
-    @patch("tickerlake.bronze.tickers.s3_storage_options", {"aws_region": "us-east-1"})
-    @patch("tickerlake.bronze.tickers.get_tickers")
-    def test_load_tickers_storage_options(self, mock_get_tickers, mock_settings):
-        """Test load_tickers uses correct storage options."""
-        mock_df = pl.DataFrame(
-            {
-                "ticker": ["TEST"],
-                "name": ["Test Corp"],
-                "active": [True],
-            }
-        )
-        mock_get_tickers.return_value = mock_df
-
-        with patch.object(pl.DataFrame, "write_parquet") as mock_write:
-            load_tickers()
-
-            # Verify storage options were passed
-            call_kwargs = mock_write.call_args.kwargs
-            assert "storage_options" in call_kwargs
-            assert call_kwargs["storage_options"]["aws_region"] == "us-east-1"
-
-    @patch("tickerlake.bronze.tickers.s3_storage_options", {"option": "value"})
     @patch("tickerlake.bronze.tickers.get_tickers")
     def test_load_tickers_destination_path(self, mock_get_tickers, mock_settings):
         """Test load_tickers writes to correct destination path."""
@@ -330,13 +304,12 @@ class TestLoadTickers:
             written_path = mock_write.call_args.args[0]
             assert written_path.endswith("/tickers/tickers.parquet")
             assert "bronze" in written_path
-            assert written_path.startswith("s3://")
+            assert written_path.startswith("./data/")
 
 
 class TestIntegration:
     """Integration tests for tickers module."""
 
-    @patch("tickerlake.bronze.tickers.s3_storage_options", {"option": "value"})
     @patch("tickerlake.bronze.tickers.setup_polygon_api_client")
     def test_end_to_end_tickers_loading(
         self, mock_setup_client, mock_polygon_client, sample_ticker_data, mock_settings
@@ -358,7 +331,6 @@ class TestIntegration:
             assert api_kwargs["market"] == "stocks"
             assert api_kwargs["active"] is True
 
-    @patch("tickerlake.bronze.tickers.s3_storage_options", {"option": "value"})
     @patch("tickerlake.bronze.tickers.setup_polygon_api_client")
     def test_large_ticker_list(
         self, mock_setup_client, mock_polygon_client, mock_settings
