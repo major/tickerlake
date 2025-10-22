@@ -93,24 +93,30 @@ class TestReadStocksLazy:
 class TestMain:
     """Test main pipeline function."""
 
+    @patch("tickerlake.silver.main.pl.DataFrame.write_parquet")
     @patch("tickerlake.silver.main.aggregate_to_monthly")
     @patch("tickerlake.silver.main.aggregate_to_weekly")
     @patch("tickerlake.silver.main.calculate_all_indicators")
+    @patch("tickerlake.silver.main.calculate_weinstein_stage")
     @patch("tickerlake.silver.main.pl.read_parquet")
     @patch("tickerlake.silver.main.apply_splits_lazy")
     @patch("tickerlake.silver.main.read_stocks_lazy")
     @patch("tickerlake.silver.main.read_splits")
     @patch("tickerlake.silver.main.read_tickers")
+    @patch("tickerlake.silver.main.create_ticker_metadata")
     def test_main_calls_functions(
         self,
+        mock_create_metadata,
         mock_read_tickers,
         mock_read_splits,
         mock_read_stocks,
         mock_apply_splits,
         mock_read_parquet,
+        mock_calc_stages,
         mock_calc_indicators,
         mock_agg_weekly,
         mock_agg_monthly,
+        mock_write_parquet,
         mock_settings,
     ):
         """Test main function calls the correct processing functions and filters splits."""
@@ -163,6 +169,20 @@ class TestMain:
             "is_hvc": [False, False],
         })
         mock_calc_indicators.return_value = mock_indicators
+
+        # Mock Weinstein stage calculation - needs to return input df + stage columns
+        # The function receives weekly_with_close which has close, volume, and all indicators
+        def mock_weinstein(df):
+            return df.with_columns([
+                pl.lit(2, dtype=pl.UInt8).alias("stage"),
+                pl.lit(1, dtype=pl.UInt8).alias("raw_stage"),
+                pl.lit(100.0).alias("ma_30"),
+                pl.lit(5.0).alias("price_vs_ma_pct"),
+                pl.lit(1.0).alias("ma_slope_pct"),
+                pl.lit(True).alias("stage_changed"),
+                pl.lit(3, dtype=pl.UInt8).alias("weeks_in_stage"),
+            ])
+        mock_calc_stages.side_effect = mock_weinstein
 
         # Mock aggregations to return simple DataFrames
         mock_agg_weekly.return_value = stock_data.head(2)

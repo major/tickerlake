@@ -70,10 +70,10 @@ def create_enriched_view(
             i.ma_30,
             i.price_vs_ma_pct,
             i.ma_slope_pct,
-            i.raw_stage,
-            i.stage,
+            CAST(i.raw_stage AS UTINYINT) as raw_stage,
+            CAST(i.stage AS UTINYINT) as stage,
             i.stage_changed,
-            i.weeks_in_stage"""
+            CAST(i.weeks_in_stage AS UTINYINT) as weeks_in_stage"""
     else:
         columns = base_columns
 
@@ -206,7 +206,9 @@ def create_latest_stage_view(con: duckdb.DuckDBPyConnection) -> None:
         )
         SELECT
             ticker, name, type, date, close, volume,
-            stage, weeks_in_stage, stage_changed,
+            CAST(stage AS UTINYINT) as stage,
+            CAST(weeks_in_stage AS UTINYINT) as weeks_in_stage,
+            stage_changed,
             price_vs_ma_pct, ma_slope_pct, ma_30,
             sma_20, sma_50, sma_200,
             volume_ma_20, volume_ratio,

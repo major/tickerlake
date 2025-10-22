@@ -3,6 +3,7 @@
 from datetime import date, timedelta
 
 import polars as pl
+import polars_talib as plta  # noqa: F401 - registers .ta namespace
 import pytest
 
 from tickerlake.silver.indicators import (

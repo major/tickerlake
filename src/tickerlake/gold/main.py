@@ -23,7 +23,7 @@ def get_duckdb_path() -> str:
     return str(db_path)
 
 
-def main(in_memory: bool = False) -> duckdb.DuckDBPyConnection:
+def initialize_gold_layer(in_memory: bool = False) -> duckdb.DuckDBPyConnection:
     """Initialize gold layer and create DuckDB views.
 
     Args:
@@ -62,6 +62,11 @@ def main(in_memory: bool = False) -> duckdb.DuckDBPyConnection:
     return con
 
 
-if __name__ == "__main__":  # pragma: no cover
-    connection = main()
+def main() -> None:
+    """CLI entry point for gold layer."""
+    connection = initialize_gold_layer()
     connection.close()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
