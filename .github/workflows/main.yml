@@ -118,7 +118,7 @@ jobs:
           git push
 
       - name: 📦 Upload data artifact for next run
-        uses: actions/upload-artifact@ea0b2446fa7a7b51623e5bb83a8993bcd6c1ee92 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: success()
         with:
           name: tickerlake-data
