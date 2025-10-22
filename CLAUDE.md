@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `uv run bronze` - Run the bronze layer (data ingestion)
 - `uv run silver` - Run the silver layer (incremental processing by default)
 - `uv run gold` - Run the gold layer (analytics and exports)
+- `uv run publish` - Run the publish layer (generate and publish Hugo blog reports)
 
 ### Silver Layer Modes
 - **Incremental mode** (default): Processes only new data since last run
@@ -86,6 +87,16 @@ TickerLake follows a medallion architecture for financial data processing:
   - Python helper functions for ad-hoc queries and backtesting
   - Persistent DuckDB database at `./data/gold/gold.duckdb`
 
+- **Publish Layer** (`src/tickerlake/publish/`): Hugo blog content generation and publishing
+  - Generates markdown reports from gold layer data
+  - Publishes to Hugo blog at github.com/major/thetanerd.com
+  - **Reports Generated**:
+    - `index.md`: Overview page with stage counts and links
+    - `stage-1.md` through `stage-4.md`: Stocks in each Weinstein stage
+    - `weekly-hvcs.md`: Weekly high volume closes from past 2 years
+  - Automated git workflow: clone/update → write content → commit → push
+  - Uses GitHub PAT for authenticated pushes
+
 ### Configuration Management
 - Uses Pydantic Settings with `.env` file support (`src/tickerlake/config.py`)
 - All sensitive credentials handled as `SecretStr` types
@@ -132,9 +143,12 @@ TickerLake follows a medallion architecture for financial data processing:
 POLYGON_API_KEY=your_api_key
 POLYGON_ACCESS_KEY_ID=your_polygon_s3_access_key
 POLYGON_SECRET_ACCESS_KEY=your_polygon_s3_secret_key
+GITHUB_PAT=your_github_personal_access_token
 ```
 
-Note: Polygon S3 credentials are only used for accessing Polygon.io flat files, not for data storage.
+Notes:
+- Polygon S3 credentials are only used for accessing Polygon.io flat files, not for data storage
+- GitHub PAT is used for pushing report updates to the Hugo blog repository
 
 The bronze layer automatically identifies and downloads missing trading days on each run, making it safe for scheduled execution.
 

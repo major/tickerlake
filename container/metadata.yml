@@ -1,0 +1,160 @@
+title: TickerLake Stock Analysis
+description: Weinstein Stage Analysis and High Volume Close tracking for US stocks
+
+databases:
+  stage_analysis:
+    title: Weinstein Stage Analysis
+    description: Stocks categorized by their current Weinstein stage
+    tables:
+      summary:
+        title: Stage Summary
+        description: Overview of stocks in each stage
+        label_column: category
+        sort_desc: count
+
+      stage_1_stocks:
+        title: "Stage 1: Basing"
+        description: Liquid stocks building bases before potential breakouts (price below 30-week MA, MA trending flat or up)
+        label_column: ticker
+        sort_desc: weeks_in_stage
+        columns:
+          ticker:
+            description: Stock ticker symbol
+          name:
+            description: Company name
+          close:
+            description: Last closing price (rounded to 2 decimals)
+          weeks_in_stage:
+            description: Number of weeks in current stage
+          ma_slope_pct:
+            description: 30-week MA slope (%)
+          ma_30:
+            description: 30-week moving average
+          volume_ratio:
+            description: Current volume vs 20-day average
+
+      stage_2_stocks:
+        title: "Stage 2: Advancing"
+        description: Liquid stocks in confirmed uptrends (price above 30-week MA, MA trending up)
+        label_column: ticker
+        sort_desc: weeks_in_stage
+        columns:
+          ticker:
+            description: Stock ticker symbol
+          name:
+            description: Company name
+          close:
+            description: Last closing price (rounded to 2 decimals)
+          weeks_in_stage:
+            description: Number of weeks in current stage
+          ma_slope_pct:
+            description: 30-week MA slope (%)
+          ma_30:
+            description: 30-week moving average
+          volume_ratio:
+            description: Current volume vs 20-day average
+
+      stage_3_stocks:
+        title: "Stage 3: Topping"
+        description: Liquid stocks showing distribution and potential trend exhaustion (price above 30-week MA, MA trending flat or down)
+        label_column: ticker
+        sort_desc: weeks_in_stage
+        columns:
+          ticker:
+            description: Stock ticker symbol
+          name:
+            description: Company name
+          close:
+            description: Last closing price (rounded to 2 decimals)
+          weeks_in_stage:
+            description: Number of weeks in current stage
+          ma_slope_pct:
+            description: 30-week MA slope (%)
+          ma_30:
+            description: 30-week moving average
+          volume_ratio:
+            description: Current volume vs 20-day average
+
+      stage_4_stocks:
+        title: "Stage 4: Declining"
+        description: Liquid stocks in confirmed downtrends (price below 30-week MA, MA trending down)
+        label_column: ticker
+        sort_desc: weeks_in_stage
+        columns:
+          ticker:
+            description: Stock ticker symbol
+          name:
+            description: Company name
+          close:
+            description: Last closing price (rounded to 2 decimals)
+          weeks_in_stage:
+            description: Number of weeks in current stage
+          ma_slope_pct:
+            description: 30-week MA slope (%)
+          ma_30:
+            description: 30-week moving average
+          volume_ratio:
+            description: Current volume vs 20-day average
+
+  high_volume_close:
+    title: High Volume Closes
+    description: Stocks with significant volume spikes (3x+ average) indicating potential institutional activity
+    tables:
+      daily_hvcs:
+        title: Daily High Volume Closes
+        description: Stocks with daily closes at 3x+ average volume (potential institutional activity)
+        label_column: ticker
+        sort_desc: date
+        facets:
+          - date
+        columns:
+          ticker:
+            description: Stock ticker symbol
+          name:
+            description: Company name
+          date:
+            description: Date of high volume close
+          open:
+            description: Opening price (rounded to 2 decimals)
+          high:
+            description: High price (rounded to 2 decimals)
+          low:
+            description: Low price (rounded to 2 decimals)
+          close:
+            description: Closing price (rounded to 2 decimals)
+          volume:
+            description: Volume on HVC day
+          volume_ratio:
+            description: Volume vs 20-day average (3x+ indicates HVC)
+
+      weekly_hvcs:
+        title: Weekly High Volume Closes
+        description: Stocks with weekly closes at 3x+ average volume (potential institutional activity)
+        label_column: ticker
+        sort_desc: date
+        facets:
+          - stage
+          - date
+        columns:
+          ticker:
+            description: Stock ticker symbol
+          name:
+            description: Company name
+          date:
+            description: Week ending date
+          close:
+            description: Closing price (rounded to 2 decimals)
+          volume:
+            description: Volume for the week
+          volume_ratio:
+            description: Volume vs 20-week average (3x+ indicates HVC)
+          stage:
+            description: Weinstein stage (1=Basing, 2=Advancing, 3=Topping, 4=Declining)
+          weeks_in_stage:
+            description: Number of weeks in current stage
+          price_vs_ma_pct:
+            description: Price distance from 30-week MA (%)
+          ma_slope_pct:
+            description: 30-week MA slope (%)
+          ma_30:
+            description: 30-week moving average
