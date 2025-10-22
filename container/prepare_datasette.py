@@ -152,6 +152,7 @@ def create_datasette_db(
           AND type = 'CS'
           AND weeks_in_stage >= 2
           AND volume_ma_20 >= 200000
+          AND close >= 5.0
         ORDER BY weeks_in_stage DESC, ticker
     """).df()
     stage_4_df.to_sql("stage_4_stocks", stage_con, if_exists="replace", index=False)
@@ -173,6 +174,7 @@ def create_datasette_db(
         FROM daily_enriched
         WHERE is_hvc = true
           AND type = 'CS'
+          AND close >= 5.0
         ORDER BY date DESC, volume_ratio DESC
     """).df()
     daily_hvcs_df.to_sql("daily_hvcs", hvc_con, if_exists="replace", index=False)
@@ -196,6 +198,7 @@ def create_datasette_db(
         FROM weekly_enriched
         WHERE is_hvc = true
           AND type = 'CS'
+          AND close >= 5.0
         ORDER BY date DESC, volume_ratio DESC
     """).df()
     weekly_hvcs_df.to_sql("weekly_hvcs", hvc_con, if_exists="replace", index=False)
