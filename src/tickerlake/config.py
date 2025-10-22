@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     polygon_secret_access_key: SecretStr = SecretStr("")
     polygon_flatfiles_endpoint_url: str = "https://files.polygon.io"
     polygon_flatfiles_stocks: str = "s3://flatfiles/us_stocks_sip/day_aggs_v1"
-    polygon_flatfiles_stocks_first_year: int = date.today().year - 0
+    polygon_flatfiles_stocks_first_year: int = date.today().year - 1
 
     # Local storage paths
     bronze_storage_path: str = "./data/bronze"
