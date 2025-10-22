@@ -6,35 +6,38 @@ readme = "README.md"
 authors = [{ name = "Major Hayden", email = "major@mhtx.net" }]
 requires-python = ">=3.12"
 dependencies = [
-    "datasette>=0.65.1",
-    "deltalake>=0.23.1",
+    "duckdb>=1.1.0",
     "fastexcel>=0.15.1",
+    "fsspec>=2025.9.0",
     "pandas-market-calendars>=5.1.1",
     "polars>=1.33.1",
+    "polars-talib>=0.1.5",
     "polygon-api-client>=1.15.3",
     "pyarrow>=21.0.0",
+    "pydantic>=2.0.0",
     "pydantic-settings>=2.10.1",
-    "pyright>=1.1.405",
+    "pytz>=2024.0",
     "rich>=14.1.0",
-    "ruff>=0.13.0",
     "s3fs>=2025.9.0",
     "sqlalchemy>=2.0.43",
+    "tqdm>=4.67.1",
 ]
 
 [project.scripts]
 bronze = "tickerlake.bronze.main:main"
 silver = "tickerlake.silver.main:main"
 gold = "tickerlake.gold.main:main"
+validate = "tickerlake.silver.validation:main"
 
 [build-system]
 requires = ["uv_build>=0.9.0,<0.10.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
-container = [
-    "datasette>=0.65.1",
-]
+analysis = ["matplotlib>=3.10.0"]
+container = ["datasette>=0.65.1"]
 dev = [
+    "deptry>=0.20.0",
     "fakeredis>=2.30.1",
     "pandas-stubs>=2.3.0.250703",
     "pre-commit>=4.2.0",
@@ -45,6 +48,7 @@ dev = [
     "pytest-randomly>=3.16.0",
     "radon>=6.0.1",
     "ruff>=0.12.5",
+    "vulture>=2.11",
 ]
 
 [tool.pytest.ini_options]
@@ -73,3 +77,11 @@ fix = true
 
 [tool.ruff.format]
 preview = true
+
+[tool.deptry]
+# Ignore dependencies that are used indirectly or in parts of the code not scanned
+extend_exclude = ["tests", "examples", ".venv"]
+pep621_dev_dependency_groups = ["dev"]
+# Ignore specific dependencies: pyarrow/fsspec are used by polars/deltalake/s3fs
+# datasette/fastexcel/sqlalchemy are used in gold layer or other unscanned code
+ignore = ["DEP002"]

@@ -1,663 +1,408 @@
-"""Tests for the bronze medallion layer main module."""
+"""Tests for the bronze layer main module."""
 
-from datetime import datetime
-from unittest.mock import MagicMock, patch
+from datetime import date
+from unittest.mock import MagicMock, Mock, patch
 
 import polars as pl
 import pytest
-import pytz
 
 from tickerlake.bronze.main import (
-    build_polygon_client,
-    download_daily_aggregates,
-    get_missing_stock_aggs,
-    get_missing_trading_days,
-    get_split_details,
-    get_ticker_details,
-    get_valid_trading_days,
-    list_bronze_daily_folders,
-    main,
-    store_daily_aggregates,
-    write_iwm_holdings,
-    write_mdy_holdings,
-    write_qqq_holdings,
-    write_split_details,
-    write_spsm_holdings,
-    write_spy_holdings,
-    write_ssga_holdings,
-    write_ticker_details,
+    get_missing_dates,
+    list_available_flatfiles,
+    list_available_stocks_flatfiles,
+    load_polygon_flatfiles,
+    previously_stored_dates,
+    stocks_flatfiles_valid_years,
+    valid_flatfiles_years,
 )
 
 
 @pytest.fixture
 def mock_settings():
-    """Mock settings for testing."""
-    settings = MagicMock()
-    settings.polygon_api_key.get_secret_value.return_value = "test_api_key"
-    settings.s3_bucket_name = "test-bucket"
-    settings.aws_access_key_id.get_secret_value.return_value = "test_access_key"
-    settings.aws_secret_access_key.get_secret_value.return_value = "test_secret"
-    settings.data_start_date = "2020-01-01"
-    settings.spy_holdings_source = "https://test.com/spy.xlsx"
-    return settings
+    """Create a mock settings object for testing."""
+    with patch("tickerlake.bronze.main.settings") as mock:
+        mock.polygon_flatfiles_stocks_first_year = 2020
+        mock.polygon_flatfiles_stocks = "s3://flatfiles/us_stocks_sip/day_aggs_v1"
+        mock.bronze_storage_path = "./data/bronze"
+        yield mock
 
 
 @pytest.fixture
-def mock_s3_storage_options():
-    """Mock S3 storage options."""
-    return {
-        "endpoint_url": "https://s3.test.com",
-        "key": "test_access_key",
-        "secret": "test_secret",
-    }
+def mock_polygon_s3():
+    """Create a mock S3 filesystem for Polygon flatfiles."""
+    mock_s3 = MagicMock()
+    return mock_s3
 
 
 @pytest.fixture
-def mock_polygon_client():
-    """Mock Polygon REST client."""
-    client = MagicMock()
-    return client
+def sample_stock_paths():
+    """Sample stock flatfile paths from Polygon S3."""
+    return [
+        "flatfiles/us_stocks_sip/day_aggs_v1/2024/01/2024-01-02.csv.gz",
+        "flatfiles/us_stocks_sip/day_aggs_v1/2024/01/2024-01-03.csv.gz",
+        "flatfiles/us_stocks_sip/day_aggs_v1/2023/12/2023-12-29.csv.gz",
+    ]
 
 
-@pytest.fixture
-def sample_dataframe():
-    """Sample DataFrame for testing."""
-    return pl.DataFrame({
-        "ticker": ["AAPL", "GOOGL", "MSFT"],
-        "close": [150.0, 2800.0, 300.0],
-        "volume": [100000, 50000, 80000],
-    })
-
-
-class TestBuildPolygonClient:
-    """Tests for build_polygon_client function."""
-
-    @patch("tickerlake.bronze.main.RESTClient")
-    @patch("tickerlake.bronze.main.settings")
-    def test_build_polygon_client(
-        self, mock_settings_import, mock_rest_client, mock_settings
-    ):
-        """Test building Polygon client with API key."""
-        mock_settings_import.polygon_api_key.get_secret_value.return_value = "test_key"
-
-        client = build_polygon_client()
-
-        mock_rest_client.assert_called_once_with("test_key")
-        assert client == mock_rest_client.return_value
-
-
-class TestDownloadDailyAggregates:
-    """Tests for download_daily_aggregates function."""
+class TestValidFlatfilesYears:
+    """Test cases for valid flatfiles year functions."""
 
     @pytest.mark.parametrize(
-        "date_str,expected_ticker_count",
+        "first_year,current_year,expected_years",
         [
-            ("2023-01-15", 3),
-            ("2023-02-20", 5),
+            # Test with 5 years of history
+            (2020, 2025, [2025, 2024, 2023, 2022, 2021, 2020]),
+            # Test with 2 years of history
+            (2023, 2025, [2025, 2024, 2023]),
+            # Test current year only
+            (2025, 2025, [2025]),
+            # Test including future year (current implementation allows this)
+            (2024, 2025, [2025, 2024]),
         ],
     )
-    @patch("tickerlake.bronze.main.build_polygon_client")
-    def test_download_daily_aggregates_with_data(
-        self, mock_build_client, date_str, expected_ticker_count
-    ):
-        """Test downloading daily aggregates with data."""
-        mock_client = MagicMock()
-        mock_build_client.return_value = mock_client
+    def test_valid_flatfiles_years(self, first_year, current_year, expected_years):
+        """Test valid_flatfiles_years with various year ranges."""
+        with patch("tickerlake.bronze.main.date") as mock_date:
+            mock_date.today.return_value = date(current_year, 1, 1)
+            result = valid_flatfiles_years(first_year)
+            assert result == expected_years
 
-        # Create mock data based on expected count
-        mock_data = [
-            {"ticker": f"T{i}", "c": 100.0 + i} for i in range(expected_ticker_count)
+    @patch("tickerlake.bronze.main.settings")
+    @patch("tickerlake.bronze.main.date")
+    def test_stocks_flatfiles_valid_years(self, mock_date, mock_settings):
+        """Test stocks_flatfiles_valid_years uses correct settings."""
+        mock_date.today.return_value = date(2025, 1, 1)
+        mock_settings.polygon_flatfiles_stocks_first_year = 2022
+
+        result = stocks_flatfiles_valid_years()
+
+        assert result == [2025, 2024, 2023, 2022]
+
+
+class TestListAvailableFlatfiles:
+    """Test cases for listing available flatfiles from Polygon S3."""
+
+    def test_list_available_flatfiles(
+        self, mock_polygon_s3, sample_stock_paths, mock_settings
+    ):
+        """Test list_available_flatfiles returns properly formatted paths."""
+        flatfiles_path = "s3://flatfiles/us_stocks_sip/day_aggs_v1"
+        valid_years = [2024, 2023]
+
+        # Setup mock S3 to return file paths
+        mock_polygon_s3.glob.side_effect = [
+            [sample_stock_paths[0], sample_stock_paths[1]],  # 2024 files
+            [sample_stock_paths[2]],  # 2023 files
         ]
-        mock_client.get_grouped_daily_aggs.return_value = mock_data
 
-        result = download_daily_aggregates(date_str)
+        with patch(
+            "tickerlake.bronze.main.setup_polygon_flatfiles_client",
+            return_value=mock_polygon_s3,
+        ):
+            result = list_available_flatfiles(flatfiles_path, valid_years)
 
-        mock_client.get_grouped_daily_aggs.assert_called_once_with(
-            date_str, adjusted=False, include_otc=False
-        )
-        assert len(result) == expected_ticker_count
-        # Verify data is sorted by ticker
-        assert result["ticker"].to_list() == sorted([
-            f"T{i}" for i in range(expected_ticker_count)
-        ])
-        assert "c" in result.columns
+        # Should have 3 files total
+        assert len(result) == 3
+        # Results should be sorted in reverse (newest first)
+        # All paths should start with s3://
+        assert all(path.startswith("s3://") for path in result)
+        # Check that all sample paths are in the results
+        assert f"s3://{sample_stock_paths[0]}" in result
+        assert f"s3://{sample_stock_paths[1]}" in result
+        assert f"s3://{sample_stock_paths[2]}" in result
+        # Check glob was called for each year
+        assert mock_polygon_s3.glob.call_count == 2
 
-    @patch("tickerlake.bronze.main.pl.DataFrame")
-    @patch("tickerlake.bronze.main.build_polygon_client")
-    def test_download_daily_aggregates_empty(self, mock_build_client, mock_dataframe):
-        """Test downloading daily aggregates with no data."""
-        mock_client = MagicMock()
-        mock_build_client.return_value = mock_client
-        mock_client.get_grouped_daily_aggs.return_value = []
-
-        # Mock empty DataFrame that returns early without sorting
-        mock_df = MagicMock()
-        mock_df.__len__ = lambda self: 0
-        mock_df.is_empty.return_value = True
-        mock_dataframe.return_value = mock_df
-
-        result = download_daily_aggregates("2023-03-10")
-
-        mock_client.get_grouped_daily_aggs.assert_called_once_with(
-            "2023-03-10", adjusted=False, include_otc=False
-        )
-        assert len(result) == 0
-        # Verify sort was NOT called (early return for empty DataFrame)
-        mock_df.sort.assert_not_called()
-
-
-class TestStoreDailyAggregates:
-    """Tests for store_daily_aggregates function."""
-
-    @patch("tickerlake.bronze.main.s3_storage_options")
-    @patch("tickerlake.bronze.main.settings")
-    def test_store_daily_aggregates(
-        self, mock_settings, mock_storage_options, sample_dataframe
+    def test_list_available_flatfiles_empty_results(
+        self, mock_polygon_s3, mock_settings
     ):
-        """Test storing daily aggregates to S3."""
-        mock_settings.s3_bucket_name = "test-bucket"
-        mock_storage_options.return_value = {"key": "value"}
+        """Test list_available_flatfiles handles empty results gracefully."""
+        flatfiles_path = "s3://flatfiles/us_stocks_sip/day_aggs_v1"
+        valid_years = [2024]
 
-        with patch.object(sample_dataframe, "write_parquet") as mock_write:
-            store_daily_aggregates(sample_dataframe, "2023-01-15")
+        mock_polygon_s3.glob.return_value = []
 
-            mock_write.assert_called_once_with(
-                file="s3://test-bucket/bronze/daily/2023-01-15/data.parquet",
-                storage_options=mock_storage_options,
-                compression="zstd",
-            )
-
-
-class TestGetValidTradingDays:
-    """Tests for get_valid_trading_days function."""
-
-    @patch("tickerlake.bronze.main.datetime")
-    @patch("tickerlake.bronze.main.get_trading_days")
-    @patch("tickerlake.bronze.main.settings")
-    def test_get_valid_trading_days(
-        self, mock_settings, mock_get_trading_days, mock_datetime
-    ):
-        """Test getting valid trading days."""
-        mock_settings.data_start_date = "2023-01-01"
-        ny_tz = pytz.timezone("America/New_York")
-        mock_datetime.now.return_value = ny_tz.localize(datetime(2023, 1, 31, 12, 0))
-        mock_get_trading_days.return_value = ["2023-01-03", "2023-01-04", "2023-01-05"]
-
-        result = get_valid_trading_days()
-
-        assert result == ["2023-01-03", "2023-01-04", "2023-01-05"]
-        mock_get_trading_days.assert_called_once_with(
-            start_date="2023-01-01",
-            end_date="2023-01-31",
-        )
-
-
-class TestListBronzeDailyFolders:
-    """Tests for list_bronze_daily_folders function."""
-
-    @patch("tickerlake.bronze.main.s3fs.S3FileSystem")
-    @patch("tickerlake.bronze.main.settings")
-    def test_list_bronze_daily_folders(self, mock_settings, mock_s3fs):
-        """Test listing bronze daily folders from S3."""
-        mock_settings.s3_bucket_name = "test-bucket"
-        mock_settings.aws_access_key_id.get_secret_value.return_value = "key"
-        mock_settings.aws_secret_access_key.get_secret_value.return_value = "secret"
-
-        mock_fs = MagicMock()
-        mock_s3fs.return_value = mock_fs
-        mock_fs.ls.return_value = [
-            "test-bucket/bronze/daily/2023-01-03",
-            "test-bucket/bronze/daily/2023-01-04",
-            "test-bucket/bronze/daily/2023-01-05",
-        ]
-        mock_fs.isdir.return_value = True
-
-        result = list_bronze_daily_folders()
-
-        assert result == ["2023-01-03", "2023-01-04", "2023-01-05"]
-        mock_fs.ls.assert_called_once_with("test-bucket/bronze/daily/")
-
-    @patch("tickerlake.bronze.main.s3fs.S3FileSystem")
-    @patch("tickerlake.bronze.main.settings")
-    def test_list_bronze_daily_folders_file_not_found(self, mock_settings, mock_s3fs):
-        """Test listing bronze daily folders when S3 prefix doesn't exist."""
-        mock_settings.s3_bucket_name = "test-bucket"
-        mock_settings.aws_access_key_id.get_secret_value.return_value = "key"
-        mock_settings.aws_secret_access_key.get_secret_value.return_value = "secret"
-
-        mock_fs = MagicMock()
-        mock_s3fs.return_value = mock_fs
-        mock_fs.ls.side_effect = FileNotFoundError("Prefix not found")
-
-        result = list_bronze_daily_folders()
+        with patch(
+            "tickerlake.bronze.main.setup_polygon_flatfiles_client",
+            return_value=mock_polygon_s3,
+        ):
+            result = list_available_flatfiles(flatfiles_path, valid_years)
 
         assert result == []
-        mock_fs.ls.assert_called_once_with("test-bucket/bronze/daily/")
+        mock_polygon_s3.glob.assert_called_once()
+
+    @patch("tickerlake.bronze.main.list_available_flatfiles")
+    @patch("tickerlake.bronze.main.stocks_flatfiles_valid_years")
+    def test_list_available_stocks_flatfiles(
+        self, mock_valid_years, mock_list_flatfiles, mock_settings
+    ):
+        """Test list_available_stocks_flatfiles uses correct parameters."""
+        mock_valid_years.return_value = [2024, 2023]
+        mock_list_flatfiles.return_value = ["file1.csv.gz", "file2.csv.gz"]
+
+        result = list_available_stocks_flatfiles()
+
+        mock_list_flatfiles.assert_called_once_with(
+            flatfiles_path=mock_settings.polygon_flatfiles_stocks,
+            valid_years=[2024, 2023],
+        )
+        assert result == ["file1.csv.gz", "file2.csv.gz"]
 
 
-class TestGetMissingTradingDays:
-    """Tests for get_missing_trading_days function."""
+class TestGetMissingDates:
+    """Test cases for identifying missing dates in flatfiles."""
 
     @pytest.mark.parametrize(
-        "data_available,expected_missing",
+        "already_stored,all_files,expected_missing",
         [
-            (False, ["2023-01-04", "2023-01-05"]),  # Data not available, exclude today
+            # No files stored yet - all files are missing
             (
-                True,
-                ["2023-01-04", "2023-01-05", "2023-01-06"],
-            ),  # Data available, include today
+                [],
+                [
+                    "s3://path/2024-01-02.csv.gz",
+                    "s3://path/2024-01-03.csv.gz",
+                    "s3://path/2024-01-04.csv.gz",
+                ],
+                [
+                    "s3://path/2024-01-02.csv.gz",
+                    "s3://path/2024-01-03.csv.gz",
+                    "s3://path/2024-01-04.csv.gz",
+                ],
+            ),
+            # Some files already stored
+            (
+                ["2024-01-02", "2024-01-03"],
+                [
+                    "s3://path/2024-01-02.csv.gz",
+                    "s3://path/2024-01-03.csv.gz",
+                    "s3://path/2024-01-04.csv.gz",
+                ],
+                ["s3://path/2024-01-04.csv.gz"],
+            ),
+            # All files already stored
+            (
+                ["2024-01-02", "2024-01-03", "2024-01-04"],
+                [
+                    "s3://path/2024-01-02.csv.gz",
+                    "s3://path/2024-01-03.csv.gz",
+                    "s3://path/2024-01-04.csv.gz",
+                ],
+                [],
+            ),
+            # Dates stored but no matching files
+            (
+                ["2024-01-05", "2024-01-06"],
+                [
+                    "s3://path/2024-01-02.csv.gz",
+                    "s3://path/2024-01-03.csv.gz",
+                ],
+                [
+                    "s3://path/2024-01-02.csv.gz",
+                    "s3://path/2024-01-03.csv.gz",
+                ],
+            ),
+            # Empty file list
+            (["2024-01-02"], [], []),
         ],
     )
-    @patch("tickerlake.bronze.main.datetime")
-    @patch("tickerlake.bronze.main.is_data_available_for_today")
-    @patch("tickerlake.bronze.main.list_bronze_daily_folders")
-    @patch("tickerlake.bronze.main.get_valid_trading_days")
-    def test_get_missing_trading_days_market_status(
-        self,
-        mock_get_valid,
-        mock_list_folders,
-        mock_is_data_available,
-        mock_datetime,
-        data_available,
-        expected_missing,
+    def test_get_missing_dates_scenarios(
+        self, already_stored, all_files, expected_missing
     ):
-        """Test getting missing trading days with different data availability statuses."""
-        mock_get_valid.return_value = [
-            "2023-01-03",
-            "2023-01-04",
-            "2023-01-05",
-            "2023-01-06",
-        ]
-        mock_list_folders.return_value = ["2023-01-03"]  # Only one day exists
-        mock_is_data_available.return_value = data_available
-
-        ny_tz = pytz.timezone("America/New_York")
-        mock_datetime.now.return_value = ny_tz.localize(datetime(2023, 1, 6, 14, 0))
-
-        result = get_missing_trading_days()
-
+        """Test get_missing_dates with various scenarios."""
+        result = get_missing_dates(already_stored, all_files)
         assert result == expected_missing
 
-
-class TestGetMissingStockAggs:
-    """Tests for get_missing_stock_aggs function."""
-
-    @patch("tickerlake.bronze.main.logger")
-    @patch("tickerlake.bronze.main.store_daily_aggregates")
-    @patch("tickerlake.bronze.main.download_daily_aggregates")
-    @patch("tickerlake.bronze.main.get_missing_trading_days")
-    def test_get_missing_stock_aggs(
-        self, mock_get_missing, mock_download, mock_store, mock_logger, sample_dataframe
-    ):
-        """Test processing missing stock aggregates."""
-        mock_get_missing.return_value = ["2023-01-04", "2023-01-05"]
-        mock_download.return_value = sample_dataframe
-
-        get_missing_stock_aggs()
-
-        assert mock_download.call_count == 2
-        assert mock_store.call_count == 2
-        mock_download.assert_any_call(date_str="2023-01-04")
-        mock_download.assert_any_call(date_str="2023-01-05")
-        mock_store.assert_any_call(sample_dataframe, date_str="2023-01-04")
-        mock_store.assert_any_call(sample_dataframe, date_str="2023-01-05")
-
-        # Verify logging
-        assert mock_logger.info.call_count == 3  # 1 for count + 2 for each day
-
-
-class TestGetTickerDetails:
-    """Tests for get_ticker_details function."""
-
-    @patch("tickerlake.bronze.main.pl.DataFrame")
-    @patch("tickerlake.bronze.main.logger")
-    @patch("tickerlake.bronze.main.build_polygon_client")
-    def test_get_ticker_details(self, mock_build_client, mock_logger, mock_dataframe):
-        """Test fetching ticker details from Polygon."""
-        mock_client = MagicMock()
-        mock_build_client.return_value = mock_client
-
-        # Create simple mock objects that behave like API results
-        ticker_data = [
-            type(
-                "ticker", (), {"ticker": "AAPL", "name": "Apple Inc.", "type": "CS"}
-            )(),
-            type(
-                "ticker", (), {"ticker": "GOOGL", "name": "Alphabet Inc.", "type": "CS"}
-            )(),
-            type(
-                "ticker",
-                (),
-                {"ticker": "MSFT", "name": "Microsoft Corp.", "type": "CS"},
-            )(),
+    def test_get_missing_dates_complex_paths(self):
+        """Test get_missing_dates with complex S3 paths."""
+        already_stored = ["2024-01-02"]
+        all_files = [
+            "s3://flatfiles/us_stocks_sip/day_aggs_v1/2024/01/2024-01-02.csv.gz",
+            "s3://flatfiles/us_stocks_sip/day_aggs_v1/2024/01/2024-01-03.csv.gz",
         ]
 
-        mock_client.list_tickers.return_value = iter(ticker_data)
+        result = get_missing_dates(already_stored, all_files)
 
-        # Mock the DataFrame creation
-        mock_df = MagicMock()
-        mock_df.__len__ = lambda self: 3
-        mock_df.columns = ["ticker", "name", "type"]
-        mock_dataframe.return_value = mock_df
+        # Only the file without 2024-01-02 in its name should be returned
+        assert len(result) == 1
+        assert "2024-01-03" in result[0]
 
-        result = get_ticker_details()
 
-        mock_client.list_tickers.assert_called_once_with(
-            market="stocks",
-            active=True,
-            order="asc",
-            sort="ticker",
-            limit=1000,
+class TestPreviouslyStoredDates:
+    """Test cases for retrieving previously stored dates."""
+
+    @patch("tickerlake.bronze.main.pl.scan_parquet")
+    def test_previously_stored_dates_success(self, mock_scan_parquet):
+        """Test previously_stored_dates retrieves dates from Parquet files."""
+        # Create mock DataFrame with dates
+        mock_dates = pl.DataFrame({"date": [date(2024, 1, 2), date(2024, 1, 3)]})
+        test_schema = {"ticker": pl.Utf8, "date": pl.Date}
+
+        # Setup mock lazy frame
+        mock_lf = MagicMock()
+        mock_lf.select.return_value = mock_lf
+        mock_lf.with_columns.return_value = mock_lf
+        mock_lf.unique.return_value = mock_lf
+        mock_lf.sort.return_value = mock_lf
+        mock_lf.collect.return_value = mock_dates.with_columns(
+            pl.col("date").dt.strftime("%Y-%m-%d").alias("date")
         )
-        assert len(result) == 3
-        assert "ticker" in result.columns
-        mock_logger.info.assert_called_once_with("Fetched 3 active tickers")
+
+        mock_scan_parquet.return_value = mock_lf
+
+        result = previously_stored_dates("./data/test/destination", test_schema)
+
+        assert result == ["2024-01-02", "2024-01-03"]
+        mock_scan_parquet.assert_called_once()
+
+    @patch("tickerlake.bronze.main.pl.scan_parquet")
+    def test_previously_stored_dates_empty(self, mock_scan_parquet):
+        """Test previously_stored_dates handles empty results."""
+        mock_dates = pl.DataFrame({"date": []}, schema={"date": pl.Utf8})
+        test_schema = {"ticker": pl.Utf8, "date": pl.Date}
+
+        mock_lf = MagicMock()
+        mock_lf.select.return_value = mock_lf
+        mock_lf.with_columns.return_value = mock_lf
+        mock_lf.unique.return_value = mock_lf
+        mock_lf.sort.return_value = mock_lf
+        mock_lf.collect.return_value = mock_dates
+
+        mock_scan_parquet.return_value = mock_lf
+
+        result = previously_stored_dates("./data/test/destination", test_schema)
+
+        assert result == []
 
 
-class TestWriteTickerDetails:
-    """Tests for write_ticker_details function."""
+class TestLoadPolygonFlatfiles:
+    """Test cases for loading Polygon flatfiles."""
 
-    @patch("tickerlake.bronze.main.s3_storage_options")
-    @patch("tickerlake.bronze.main.settings")
-    def test_write_ticker_details(
-        self, mock_settings, mock_storage_options, sample_dataframe
+    @patch("tickerlake.bronze.main.POLYGON_STORAGE_OPTIONS", {"polygon": "opts"})
+    @patch("tickerlake.bronze.main.pl.scan_csv")
+    @patch("tickerlake.bronze.main.tqdm")
+    def test_load_polygon_flatfiles_single_file(
+        self, mock_tqdm, mock_scan_csv, mock_settings
     ):
-        """Test writing ticker details to S3."""
-        mock_settings.s3_bucket_name = "test-bucket"
-        mock_storage_options.return_value = {"key": "value"}
+        """Test load_polygon_flatfiles processes a single file correctly."""
+        # Setup test data
+        files = ["s3://polygon/2024/01/2024-01-02.csv.gz"]
+        destination = "./data/dest/stocks"
+        schema = {"ticker": pl.Utf8, "window_start": pl.Int64}
 
-        with patch.object(sample_dataframe, "write_parquet") as mock_write:
-            write_ticker_details(sample_dataframe)
+        # Setup mock lazy frame
+        mock_lf = MagicMock()
+        mock_lf.with_columns.return_value = mock_lf
+        mock_lf.drop.return_value = mock_lf
+        mock_collected = MagicMock()
+        mock_lf.collect.return_value = mock_collected
 
-            mock_write.assert_called_once_with(
-                file="s3://test-bucket/bronze/tickers/data.parquet",
-                storage_options=mock_storage_options,
-                compression="zstd",
-            )
+        mock_scan_csv.return_value = mock_lf
 
+        # Mock tqdm context manager
+        mock_pbar = MagicMock()
+        mock_tqdm.return_value.__enter__.return_value = mock_pbar
+        mock_pbar.__iter__ = Mock(return_value=iter(files))
 
-class TestGetSplitDetails:
-    """Tests for get_split_details function."""
+        load_polygon_flatfiles(files, destination, schema)
 
-    @patch("tickerlake.bronze.main.pl.DataFrame")
-    @patch("tickerlake.bronze.main.logger")
-    @patch("tickerlake.bronze.main.build_polygon_client")
-    @patch("tickerlake.bronze.main.settings")
-    def test_get_split_details(
-        self, mock_settings, mock_build_client, mock_logger, mock_dataframe
+        # Verify CSV was scanned with correct options
+        mock_scan_csv.assert_called_once_with(
+            files[0],
+            storage_options={"polygon": "opts"},
+            schema_overrides=schema,
+        )
+
+        # Verify DataFrame was written to parquet
+        mock_collected.write_parquet.assert_called_once_with(
+            destination,
+            partition_by=["date"],
+        )
+
+    @patch("tickerlake.bronze.main.POLYGON_STORAGE_OPTIONS", {"polygon": "opts"})
+    @patch("tickerlake.bronze.main.pl.scan_csv")
+    @patch("tickerlake.bronze.main.tqdm")
+    def test_load_polygon_flatfiles_multiple_files(
+        self, mock_tqdm, mock_scan_csv, mock_settings
     ):
-        """Test fetching split details from Polygon."""
-        mock_settings.data_start_date = "2023-01-01"
-        mock_client = MagicMock()
-        mock_build_client.return_value = mock_client
-
-        # Create simple mock objects that behave like API results
-        split_data = [
-            type(
-                "split",
-                (),
-                {
-                    "id": "split1",
-                    "ticker": "AAPL",
-                    "split_from": 4,
-                    "split_to": 1,
-                    "execution_date": "2023-01-01",
-                },
-            )(),
-            type(
-                "split",
-                (),
-                {
-                    "id": "split2",
-                    "ticker": "GOOGL",
-                    "split_from": 20,
-                    "split_to": 1,
-                    "execution_date": "2023-02-01",
-                },
-            )(),
+        """Test load_polygon_flatfiles processes multiple files."""
+        files = [
+            "s3://polygon/2024/01/2024-01-02.csv.gz",
+            "s3://polygon/2024/01/2024-01-03.csv.gz",
         ]
+        destination = "./data/dest/stocks"
+        schema = {"ticker": pl.Utf8}
 
-        mock_client.list_splits.return_value = iter(split_data)
+        # Setup mocks
+        mock_lf = MagicMock()
+        mock_lf.with_columns.return_value = mock_lf
+        mock_lf.drop.return_value = mock_lf
+        mock_collected = MagicMock()
+        mock_lf.collect.return_value = mock_collected
 
-        # Mock the DataFrame creation with schema
-        mock_df = MagicMock()
-        mock_df.__len__ = lambda self: 2
-        mock_df.columns = ["id", "ticker", "split_from", "split_to", "execution_date"]
-        mock_df.__getitem__ = (
-            lambda self, key: MagicMock(dtype=pl.String) if key == "id" else MagicMock()
-        )
-        mock_dataframe.return_value = mock_df
+        mock_scan_csv.return_value = mock_lf
 
-        result = get_split_details()
+        mock_pbar = MagicMock()
+        mock_tqdm.return_value.__enter__.return_value = mock_pbar
+        mock_pbar.__iter__ = Mock(return_value=iter(files))
 
-        mock_client.list_splits.assert_called_once_with(
-            execution_date_gte="2020-01-01",
-            order="asc",
-            sort="execution_date",
-            limit=1000,
-        )
-        assert len(result) == 2
-        assert "id" in result.columns
-        # Check that id column is of type String
-        assert result["id"].dtype == pl.String
-        mock_logger.info.assert_called_once_with("Fetched 2 recent splits")
+        load_polygon_flatfiles(files, destination, schema)
 
+        # Should scan both files
+        assert mock_scan_csv.call_count == 2
+        # Should write both times
+        assert mock_collected.write_parquet.call_count == 2
 
-class TestWriteSplitDetails:
-    """Tests for write_split_details function."""
-
-    @patch("tickerlake.bronze.main.s3_storage_options")
-    @patch("tickerlake.bronze.main.settings")
-    def test_write_split_details(
-        self, mock_settings, mock_storage_options, sample_dataframe
+    @patch("tickerlake.bronze.main.POLYGON_STORAGE_OPTIONS", {"polygon": "opts"})
+    @patch("tickerlake.bronze.main.pl.scan_csv")
+    @patch("tickerlake.bronze.main.tqdm")
+    def test_load_polygon_flatfiles_handles_oserror(
+        self, mock_tqdm, mock_scan_csv, mock_settings
     ):
-        """Test writing split details to S3."""
-        mock_settings.s3_bucket_name = "test-bucket"
-        mock_storage_options.return_value = {"key": "value"}
+        """Test load_polygon_flatfiles handles OSError gracefully."""
+        files = [
+            "s3://polygon/2024/01/2024-01-02.csv.gz",
+            "s3://polygon/2024/01/2024-01-03.csv.gz",
+        ]
+        destination = "./data/dest/stocks"
+        schema = {"ticker": pl.Utf8}
 
-        with patch.object(sample_dataframe, "write_parquet") as mock_write:
-            write_split_details(sample_dataframe)
+        # Setup mocks - first file succeeds, second raises OSError
+        mock_lf = MagicMock()
+        mock_lf.with_columns.return_value = mock_lf
+        mock_lf.drop.return_value = mock_lf
+        mock_collected = MagicMock()
+        mock_lf.collect.return_value = mock_collected
 
-            mock_write.assert_called_once_with(
-                file="s3://test-bucket/bronze/splits/data.parquet",
-                storage_options=mock_storage_options,
-                compression="zstd",
-            )
+        # First call succeeds, second raises OSError
+        mock_collected.write_parquet.side_effect = [None, OSError("API limit")]
 
+        mock_scan_csv.return_value = mock_lf
 
-class TestWriteSSGAHoldings:
-    """Tests for write_ssga_holdings function."""
+        mock_pbar = MagicMock()
+        mock_tqdm.return_value.__enter__.return_value = mock_pbar
+        mock_pbar.__iter__ = Mock(return_value=iter(files))
 
-    @pytest.mark.parametrize(
-        "etf_ticker,expected_path",
-        [
-            ("SPY", "s3://test-bucket/bronze/holdings/spy/data.parquet"),
-            ("MDY", "s3://test-bucket/bronze/holdings/mdy/data.parquet"),
-            ("SPSM", "s3://test-bucket/bronze/holdings/spsm/data.parquet"),
-        ],
-    )
-    @patch("tickerlake.bronze.main.logger")
-    @patch("tickerlake.bronze.main.pl.read_excel")
-    @patch("tickerlake.bronze.main.s3_storage_options")
-    @patch("tickerlake.bronze.main.settings")
-    def test_write_ssga_holdings_various_etfs(
-        self,
-        mock_settings,
-        mock_storage_options,
-        mock_read_excel,
-        mock_logger,
-        etf_ticker,
-        expected_path,
-    ):
-        """Test writing SSGA holdings for various ETFs."""
-        mock_settings.s3_bucket_name = "test-bucket"
-        mock_storage_options.return_value = {"key": "value"}
+        # Should not raise, just log and break
+        load_polygon_flatfiles(files, destination, schema)
 
-        # Create mock DataFrame with method chaining
-        mock_df = MagicMock()
-        mock_df.rename.return_value = mock_df
-        mock_df.filter.return_value = mock_df
-        mock_df.select.return_value = mock_df
-        mock_df.sort.return_value = mock_df
-        mock_read_excel.return_value = mock_df
+        # Should have tried both files
+        assert mock_scan_csv.call_count == 2
+        # But only first write succeeded
+        assert mock_collected.write_parquet.call_count == 2
 
-        write_ssga_holdings("https://test.com/holdings.xlsx", etf_ticker)
+    @patch("tickerlake.bronze.main.tqdm")
+    def test_load_polygon_flatfiles_empty_file_list(self, mock_tqdm):
+        """Test load_polygon_flatfiles handles empty file list."""
+        files = []
+        destination = "./data/dest/stocks"
+        schema = {"ticker": pl.Utf8}
 
-        mock_read_excel.assert_called_once_with(
-            "https://test.com/holdings.xlsx",
-            sheet_name="holdings",
-            read_options={"header_row": 4},
-        )
-        mock_df.write_parquet.assert_called_once_with(
-            file=expected_path,
-            storage_options=mock_storage_options,
-            compression="zstd",
-        )
-        mock_logger.info.assert_called_once_with(f"Writing {etf_ticker} holdings")
+        mock_pbar = MagicMock()
+        mock_tqdm.return_value.__enter__.return_value = mock_pbar
+        mock_pbar.__iter__ = Mock(return_value=iter(files))
 
+        # Should not raise any errors
+        load_polygon_flatfiles(files, destination, schema)
 
-class TestWriteQQQHoldings:
-    """Tests for write_qqq_holdings function."""
-
-    @patch("tickerlake.bronze.main.logger")
-    @patch("tickerlake.bronze.main.pl.read_csv")
-    @patch("tickerlake.bronze.main.s3_storage_options")
-    @patch("tickerlake.bronze.main.settings")
-    def test_write_qqq_holdings(
-        self, mock_settings, mock_storage_options, mock_read_csv, mock_logger
-    ):
-        """Test writing QQQ holdings to S3."""
-        mock_settings.s3_bucket_name = "test-bucket"
-        mock_settings.qqq_holdings_source = "https://test.com/qqq.csv"
-        mock_storage_options.return_value = {"key": "value"}
-
-        # Create mock DataFrame with method chaining
-        mock_df = MagicMock()
-        mock_df.rename.return_value = mock_df
-        mock_df.select.return_value = mock_df
-        mock_df.filter.return_value = mock_df
-        mock_df.sort.return_value = mock_df
-        mock_read_csv.return_value = mock_df
-
-        write_qqq_holdings()
-
-        mock_read_csv.assert_called_once_with("https://test.com/qqq.csv", skip_rows=5)
-        mock_df.rename.assert_called_once_with({"StockTicker": "ticker"})
-        mock_df.select.assert_called_once_with(["ticker"])
-        mock_df.sort.assert_called_once_with("ticker")
-        mock_df.write_parquet.assert_called_once_with(
-            file="s3://test-bucket/bronze/holdings/qqq/data.parquet",
-            storage_options=mock_storage_options,
-            compression="zstd",
-        )
-        mock_logger.info.assert_called_once_with("Writing QQQ holdings")
-
-
-class TestWriteIWMHoldings:
-    """Tests for write_iwm_holdings function."""
-
-    @patch("tickerlake.bronze.main.logger")
-    @patch("tickerlake.bronze.main.pl.read_csv")
-    @patch("tickerlake.bronze.main.s3_storage_options")
-    @patch("tickerlake.bronze.main.settings")
-    def test_write_iwm_holdings(
-        self, mock_settings, mock_storage_options, mock_read_csv, mock_logger
-    ):
-        """Test writing IWM holdings to S3."""
-        mock_settings.s3_bucket_name = "test-bucket"
-        mock_settings.iwm_holdings_source = "https://test.com/iwm.csv"
-        mock_storage_options.return_value = {"key": "value"}
-
-        # Create mock DataFrame with method chaining
-        mock_df = MagicMock()
-        mock_df.rename.return_value = mock_df
-        mock_df.filter.return_value = mock_df
-        mock_df.select.return_value = mock_df
-        mock_df.sort.return_value = mock_df
-        mock_read_csv.return_value = mock_df
-
-        write_iwm_holdings()
-
-        mock_read_csv.assert_called_once_with(
-            "https://test.com/iwm.csv",
-            skip_rows=9,
-            columns=["Ticker", "Market Currency"],
-        )
-        mock_df.rename.assert_called_once_with({"Ticker": "ticker"})
-        mock_df.select.assert_called_once_with(["ticker"])
-        mock_df.sort.assert_called_once_with("ticker")
-        mock_df.write_parquet.assert_called_once_with(
-            file="s3://test-bucket/bronze/holdings/iwm/data.parquet",
-            storage_options=mock_storage_options,
-            compression="zstd",
-        )
-        mock_logger.info.assert_called_once_with("Writing IWM holdings")
-
-
-class TestETFWrapperFunctions:
-    """Tests for ETF wrapper functions."""
-
-    @patch("tickerlake.bronze.main.write_ssga_holdings")
-    @patch("tickerlake.bronze.main.settings")
-    def test_write_spy_holdings(self, mock_settings, mock_write_ssga):
-        """Test write_spy_holdings calls write_ssga_holdings correctly."""
-        mock_settings.spy_holdings_source = "https://test.com/spy.xlsx"
-
-        write_spy_holdings()
-
-        mock_write_ssga.assert_called_once_with("https://test.com/spy.xlsx", "SPY")
-
-    @patch("tickerlake.bronze.main.write_ssga_holdings")
-    @patch("tickerlake.bronze.main.settings")
-    def test_write_mdy_holdings(self, mock_settings, mock_write_ssga):
-        """Test write_mdy_holdings calls write_ssga_holdings correctly."""
-        mock_settings.mdy_holdings_source = "https://test.com/mdy.xlsx"
-
-        write_mdy_holdings()
-
-        mock_write_ssga.assert_called_once_with("https://test.com/mdy.xlsx", "MDY")
-
-    @patch("tickerlake.bronze.main.write_ssga_holdings")
-    @patch("tickerlake.bronze.main.settings")
-    def test_write_spsm_holdings(self, mock_settings, mock_write_ssga):
-        """Test write_spsm_holdings calls write_ssga_holdings correctly."""
-        mock_settings.spsm_holdings_source = "https://test.com/spsm.xlsx"
-
-        write_spsm_holdings()
-
-        mock_write_ssga.assert_called_once_with("https://test.com/spsm.xlsx", "SPSM")
-
-
-class TestMainFunction:
-    """Tests for main function."""
-
-    @patch("tickerlake.bronze.main.BronzeLayer")
-    def test_main_calls_all_functions(
-        self,
-        mock_bronze_layer_class,
-        sample_dataframe,
-    ):
-        """Test that main function calls all expected functions."""
-        # Create a mock instance
-        mock_bronze_instance = mock_bronze_layer_class.return_value
-
-        main()
-
-        # Verify BronzeLayer was instantiated and run was called
-        mock_bronze_layer_class.assert_called_once()
-        mock_bronze_instance.run.assert_called_once()
-
-
-class TestMainEntryPoint:
-    """Tests for __main__ entry point."""
-
-    @patch("tickerlake.bronze.main.main")
-    def test_main_entry_point(self, mock_main):
-        """Test that __main__ calls main function."""
-        # Import the module to trigger __main__ execution
-        import tickerlake.bronze.main
-
-        # Reload to trigger __main__ block if needed
-        # Note: This doesn't actually test line 363 due to how imports work
-        # But it ensures the main function exists and is callable
-        assert callable(tickerlake.bronze.main.main)
+        # Progress bar should be created but no files processed
+        mock_tqdm.assert_called_once()

@@ -1,11 +1,10 @@
-name: Update stocks data
+name: Unified Data Update
 
 on:
   schedule:
-    # 4:30 PM EST (UTC-5) - November to March
-    - cron: "30 21 * 11-12,1-3 1-5"
-    # 4:30 PM EDT (UTC-4) - March to November
-    - cron: "30 20 * 3-11 1-5"
+    # Every 6 hours, Tuesday through Saturday (UTC)
+    # Runs at: 00:00, 06:00, 12:00, 18:00 UTC
+    - cron: "0 */6 * * 2-6"
   workflow_dispatch:
 
 env:
@@ -22,6 +21,16 @@ jobs:
       - name: Check out
         uses: actions/checkout@ff7abcd0c3c05ccf6adc123a8cd1fd4fb30fb493
 
+      - name: 📦 Download previous data artifact
+        uses: dawidd6/action-download-artifact@bf251b5aa9c2f7eeb574a96ee720e24f801b7c11 # v6
+        with:
+          name: tickerlake-data
+          path: ./data
+          workflow: main.yml
+          workflow_conclusion: success
+          if_no_artifact_found: warn
+        continue-on-error: true # First run won't have an artifact
+
       - name: Set up Python
         uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6
         with:
@@ -36,29 +45,25 @@ jobs:
       - name: Install the project
         run: uv sync --locked --all-extras --dev
 
-      - name: 🥉 Update bronze data
+      - name: 🥉 Update bronze layer
         run: uv run bronze
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+          POLYGON_ACCESS_KEY_ID: ${{ secrets.POLYGON_ACCESS_KEY_ID }}
+          POLYGON_SECRET_ACCESS_KEY: ${{ secrets.POLYGON_SECRET_ACCESS_KEY }}
 
       - name: 🥈 Update silver data
         run: uv run silver
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
 
       - name: 🥇 Update gold data
         run: uv run gold
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
 
-      - name: Inspect the database for datasette
-        run: uv run datasette inspect --inspect-file inspect-data.json hvcs.db
+      - name: 📊 Prepare Datasette databases
+        run: uv run python container/prepare_datasette.py
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
@@ -73,20 +78,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3
 
-      - name: Check for required files
-        run: |
-          ls -al
-          find . -name hvcs.db
-          find . -name inspect-data.json
-
-      - name: Build and push
+      - name: 🐳 Build and push datasette container
         id: build
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
         with:
           platforms: linux/amd64
           push: true
-          context: .
-          file: ./Containerfile
+          context: ./container
+          file: ./container/Containerfile
           cache-from: type=gha
           cache-to: type=gha,mode=min
           tags: |
@@ -117,3 +116,12 @@ jobs:
           git add apps/base/tickerlake/deployment.yaml
           git commit -m "Update tickerlake image to sha256:${SHORT_DIGEST}"
           git push
+
+      - name: 📦 Upload data artifact for next run
+        uses: actions/upload-artifact@ea0b2446fa7a7b51623e5bb83a8993bcd6c1ee92 # v4
+        if: success()
+        with:
+          name: tickerlake-data
+          path: ./data
+          retention-days: 50
+          compression-level: 9

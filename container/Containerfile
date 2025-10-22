@@ -1,0 +1,33 @@
+# Containerfile for TickerLake Datasette service
+FROM python:3.12-slim
+
+LABEL org.opencontainers.image.title="TickerLake Datasette"
+LABEL org.opencontainers.image.description="Stock analysis data explorer with Weinstein stages and HVCs"
+LABEL org.opencontainers.image.source="https://github.com/major/tickerlake"
+
+# Install datasette and useful plugins
+RUN pip install --no-cache-dir \
+    datasette==0.65.1 \
+    datasette-cluster-map \
+    datasette-vega
+
+# Create app directory
+WORKDIR /app
+
+# Copy databases and metadata
+COPY stage_analysis.db /app/stage_analysis.db
+COPY high_volume_close.db /app/high_volume_close.db
+COPY metadata.yml /app/metadata.yml
+
+# Expose datasette port
+EXPOSE 8001
+
+# Run datasette with both databases
+CMD ["datasette", "serve", \
+     "stage_analysis.db", \
+     "high_volume_close.db", \
+     "--metadata", "metadata.yml", \
+     "--host", "0.0.0.0", \
+     "--port", "8001", \
+     "--setting", "sql_time_limit_ms", "10000", \
+     "--setting", "max_returned_rows", "10000"]

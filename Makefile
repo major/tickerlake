@@ -1,4 +1,4 @@
-.PHONY: test lint typecheck complexity all
+.PHONY: test lint typecheck complexity deadcode deps all
 
 test:
 	uv run pytest
@@ -12,4 +12,10 @@ typecheck:
 complexity:
 	uv run radon cc src/ -s -a
 
-all: lint test typecheck
+deadcode:
+	uv run vulture src/ --min-confidence 80
+
+deps:
+	uv run deptry src/
+
+all: lint test typecheck deadcode deps

@@ -2,9 +2,13 @@ name: Tests
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - unified
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
+      - unified
   workflow_dispatch:
 
 jobs:

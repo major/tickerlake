@@ -1,748 +1,160 @@
-"""Bronze medallion layer for TickerLake."""
+"""Bronze layer flatfile processing for stocks data from Polygon.io."""
 
-from datetime import datetime
-from pathlib import PurePath
+from datetime import date
+from pathlib import Path
 
 import polars as pl
-import pytz
-import s3fs
-from polygon import RESTClient
+from tqdm import tqdm
 
-from tickerlake.config import s3_storage_options, settings
+from tickerlake.schemas import (
+    STOCKS_RAW_SCHEMA,
+    STOCKS_RAW_SCHEMA_MODIFIED,
+)
+from tickerlake.bronze.splits import load_splits
+from tickerlake.bronze.tickers import load_tickers
+from tickerlake.clients import (
+    POLYGON_STORAGE_OPTIONS,
+    setup_polygon_flatfiles_client,
+)
+from tickerlake.config import settings
 from tickerlake.logging_config import get_logger, setup_logging
-from tickerlake.utils import get_trading_days, is_data_available_for_today
 
 setup_logging()
 logger = get_logger(__name__)
 
+# Flip to verbose mode for Polars if needed
+pl.Config.set_verbose(False)
 
-class BronzeLayer:
-    """Bronze layer data ingestion from Polygon.io API to S3 storage."""
 
-    def __init__(self):
-        """Initialize Bronze layer with Polygon client and S3 filesystem."""
-        self.client = RESTClient(settings.polygon_api_key.get_secret_value())
-        self.fs = s3fs.S3FileSystem(
-            key=settings.aws_access_key_id.get_secret_value(),
-            secret=settings.aws_secret_access_key.get_secret_value(),
-        )
-        self.bucket_name = settings.s3_bucket_name
-
-    def download_daily_aggregates(self, date_str: str) -> pl.DataFrame:
-        """Download daily stock market aggregates from Polygon.io API.
-
-        Args:
-            date_str: Trading day in YYYY-MM-DD format.
-
-        Returns:
-            DataFrame containing daily aggregates sorted by ticker.
-
-        """
-        grouped = self.client.get_grouped_daily_aggs(
-            date_str,
-            adjusted=False,
-            include_otc=False,
-        )
-        df = pl.DataFrame(grouped)
-        if df.is_empty():
-            logger.warning(f"No data returned for {date_str}")
-            return df
-        return df.sort("ticker")
-
-    def store_daily_aggregates(self, df: pl.DataFrame, date_str: str) -> None:
-        """Store daily aggregates DataFrame to S3 as Parquet file.
-
-        Args:
-            df: DataFrame containing daily aggregates data.
-            date_str: Trading day in YYYY-MM-DD format for file path.
-
-        """
-        path = f"s3://{self.bucket_name}/bronze/daily/{date_str}/data.parquet"
-        df.write_parquet(
-            file=path,
-            storage_options=s3_storage_options,
-            compression="zstd",
-        )
-
-    def list_bronze_daily_folders(self) -> list[str]:
-        """List existing daily data folders in S3 bronze layer.
-
-        Returns:
-            List of folder names (dates) that exist in S3.
-
-        """
-        prefix = f"{self.bucket_name}/bronze/daily/"
-        try:
-            folders = self.fs.ls(prefix)
-        except FileNotFoundError:
-            return []
-        return [PurePath(folder).name for folder in folders if self.fs.isdir(folder)]
-
-    def get_valid_trading_days(self) -> list[str]:
-        """Get list of valid trading days from configured start date to today.
-
-        Returns:
-            List of trading days in YYYY-MM-DD format.
-
-        """
-        ny_tz = pytz.timezone("America/New_York")
-        today_ny = datetime.now(ny_tz).date()
-
-        return get_trading_days(
-            start_date=settings.data_start_date,
-            end_date=today_ny.strftime("%Y-%m-%d"),
-        )
-
-    def get_missing_trading_days(self) -> list[str]:
-        """
-        Identifies trading days for which daily data folders are missing.
-
-        Returns:
-            list: A sorted list of dates (as strings in 'YYYY-MM-DD' format) representing
-                  valid trading days that do not have corresponding bronze daily folders.
-                  Today's date is excluded unless sufficient time has passed since market
-                  close for the data to be available.
-        """
-        valid_days = set(self.get_valid_trading_days())
-
-        # Exclude today unless data is available (market closed + 30min processing time)
-        if not is_data_available_for_today():
-            ny_tz = pytz.timezone("America/New_York")
-            today_str = datetime.now(ny_tz).strftime("%Y-%m-%d")
-            valid_days.discard(today_str)
-
-        existing_days = set(self.list_bronze_daily_folders())
-        return sorted(valid_days - existing_days)
-
-    def get_missing_stock_aggs(self) -> None:
-        """
-        Identifies missing trading days, downloads daily stock aggregates for each missing day,
-        and stores the retrieved data.
-
-        This method performs the following steps:
-        1. Retrieves a list of trading days for which aggregate data is missing.
-        2. Logs the number of missing days found.
-        3. For each missing day:
-            a. Downloads the daily aggregate stock data.
-            b. Stores the downloaded data.
-            c. Logs the completion of data storage for that day.
-
-        Returns:
-            None
-        """
-        missing_days = self.get_missing_trading_days()
-        logger.info(f"Found {len(missing_days)} missing days.")
-
-        for day in missing_days:
-            daily_aggs = self.download_daily_aggregates(date_str=day)
-            self.store_daily_aggregates(daily_aggs, date_str=day)
-            logger.info(f"Stored data for {day}.")
-
-    def get_ticker_details(self) -> pl.DataFrame:
-        """
-        Fetches active stock tickers from the Polygon API and returns their details as a Polars DataFrame.
-
-        Returns:
-            pl.DataFrame: A DataFrame containing details of up to 1000 active stock tickers.
-
-        Raises:
-            Any exceptions raised by the Polygon API client during ticker retrieval.
-
-        Note:
-            The function logs the number of tickers fetched.
-        """
-        tickers = [
-            t
-            for t in self.client.list_tickers(
-                market="stocks",
-                active=True,
-                order="asc",
-                sort="ticker",
-                limit=1000,
-            )
-        ]
-
-        logger.info(f"Fetched {len(tickers)} active tickers")
-        return pl.DataFrame(tickers)
-
-    def write_ticker_details(self, df: pl.DataFrame) -> None:
-        """
-        Writes the provided Polars DataFrame containing ticker details to a Parquet file in an S3 bucket.
-
-        Args:
-            df (pl.DataFrame): The DataFrame containing ticker details to be written.
-
-        Returns:
-            None
-
-        Side Effects:
-            Saves the DataFrame as a Parquet file to the specified S3 path using the configured storage options.
-        """
-        path = f"s3://{self.bucket_name}/bronze/tickers/data.parquet"
-        df.write_parquet(
-            file=path,
-            storage_options=s3_storage_options,
-            compression="zstd",
-        )
-
-    def get_split_details(self) -> pl.DataFrame:
-        """
-        Fetches recent stock split details from the Polygon API and returns them as a Polars DataFrame.
-
-        Returns:
-            pl.DataFrame: A DataFrame containing the fetched split details, with at least an 'id' column of type string.
-
-        Logs:
-            The number of splits fetched.
-        """
-        splits = [
-            {
-                "ticker": s.ticker,  # type: ignore
-                "execution_date": datetime.strptime(s.execution_date, "%Y-%m-%d").date(),  # type: ignore
-                "split_from": s.split_from,  # type: ignore
-                "split_to": s.split_to,  # type: ignore
-            }
-            for s in self.client.list_splits(
-                execution_date_gte="2020-01-01",
-                order="asc",
-                sort="execution_date",
-                limit=1000,
-            )
-        ]
-
-        schema = {
-            "ticker": pl.String,
-            "execution_date": pl.Date,
-            "split_from": pl.Float32,
-            "split_to": pl.Float32,
-        }
-
-        logger.info(f"Fetched {len(splits)} recent splits")
-        return pl.DataFrame(splits, schema_overrides=schema)
-
-    def write_split_details(self, df: pl.DataFrame) -> None:
-        """
-        Writes the provided Polars DataFrame containing split details to a Parquet file in an S3 bucket.
-
-        Args:
-            df (pl.DataFrame): The DataFrame containing split details to be written.
-
-        Returns:
-            None
-
-        Side Effects:
-            Writes the DataFrame to the specified S3 location using the provided storage options.
-        """
-        path = f"s3://{self.bucket_name}/bronze/splits/data.parquet"
-        df.write_parquet(
-            file=path,
-            storage_options=s3_storage_options,
-            compression="zstd",
-        )
-
-    def write_ssga_holdings(self, source_url: str, etf_ticker: str) -> None:
-        """
-        Reads ETF holdings data from an Excel file, filters for USD-denominated tickers,
-        and writes the sorted list of tickers to a Parquet file in an S3 bucket.
-
-        Args:
-            source_url (str): The URL or path to the Excel file containing holdings data.
-            etf_ticker (str): The ticker symbol of the ETF whose holdings are being processed.
-
-        Returns:
-            None
-        """
-        logger.info(f"Writing {etf_ticker} holdings")
-        df = (
-            pl.read_excel(
-                source_url,
-                sheet_name="holdings",
-                read_options={"header_row": 4},
-            )
-            .rename({"Ticker": "ticker"})
-            .filter((pl.col("Local Currency") == "USD") & (pl.col("ticker") != "-"))
-            .select("ticker")
-            .sort("ticker")
-        )
-        path = f"s3://{self.bucket_name}/bronze/holdings/{etf_ticker.lower()}/data.parquet"
-        df.write_parquet(
-            file=path,
-            storage_options=s3_storage_options,
-            compression="zstd",
-        )
-
-    def write_qqq_holdings(self) -> None:
-        """Write QQQ holdings to bronze layer.
-
-        Reads QQQ holdings data from Direxion CSV, extracts ticker symbols,
-        and writes to S3 as Parquet.
-
-        Returns:
-            None
-        """
-        logger.info("Writing QQQ holdings")
-        df = (
-            pl.read_csv(settings.qqq_holdings_source, skip_rows=5)
-            .rename({"StockTicker": "ticker"})
-            .select(["ticker"])
-            .filter(pl.col("ticker").is_not_null())
-            .sort("ticker")
-        )
-        path = f"s3://{self.bucket_name}/bronze/holdings/qqq/data.parquet"
-        df.write_parquet(
-            file=path,
-            storage_options=s3_storage_options,
-            compression="zstd",
-        )
-
-    def write_iwm_holdings(self) -> None:
-        """
-        Reads IWM holdings data from a CSV file, filters for USD market currency and valid tickers,
-        sorts the tickers, and prepares the DataFrame for further processing.
-
-        The CSV source and column names are specified in the settings.
-        """
-        logger.info("Writing IWM holdings")
-        df = (
-            pl.read_csv(
-                settings.iwm_holdings_source,
-                skip_rows=9,
-                columns=["Ticker", "Market Currency"],
-            )
-            .rename({"Ticker": "ticker"})
-            .filter((pl.col("Market Currency") == "USD") & (pl.col("ticker") != "-"))
-            .select(["ticker"])
-            .sort("ticker")
-        )
-        path = f"s3://{self.bucket_name}/bronze/holdings/iwm/data.parquet"
-        df.write_parquet(
-            file=path,
-            storage_options=s3_storage_options,
-            compression="zstd",
-        )
-
-    def write_spy_holdings(self) -> None:
-        """
-        Writes the holdings data for the SPY ETF to the target destination.
-
-        This method retrieves SPY holdings from the source specified in the settings
-        and delegates the writing process to the `write_ssga_holdings` method.
-
-        Returns:
-            None
-        """
-        self.write_ssga_holdings(settings.spy_holdings_source, "SPY")
-
-    def write_mdy_holdings(self) -> None:
-        """
-        Writes the holdings data for the MDY fund to the target destination.
-
-        This method retrieves the MDY holdings from the source specified in the settings
-        and writes them using the `write_ssga_holdings` method.
-
-        Returns:
-            None
-        """
-        self.write_ssga_holdings(settings.mdy_holdings_source, "MDY")
-
-    def write_spsm_holdings(self) -> None:
-        """
-        Writes the holdings data for the SPSM fund by invoking the write_ssga_holdings method
-        with the SPSM holdings source and the fund identifier "SPSM".
-
-        Returns:
-            None
-        """
-        self.write_ssga_holdings(settings.spsm_holdings_source, "SPSM")
-
-    def run(self) -> None:
-        """
-        Execute bronze layer data ingestion pipeline.
-
-        This method performs the following tasks:
-        1. Retrieves and processes missing stock aggregate data.
-        2. Writes ticker details and split details to storage.
-        3. Writes holdings data for various ETFs including SPY, MDY, SPSM, QQQ, and IWM.
-        """
-        # Polygon data
-        self.get_missing_stock_aggs()
-        self.write_ticker_details(self.get_ticker_details())
-        self.write_split_details(self.get_split_details())
-
-        # ETF data
-        self.write_spy_holdings()
-        self.write_mdy_holdings()
-        self.write_spsm_holdings()
-        self.write_qqq_holdings()
-        self.write_iwm_holdings()
-
-
-# Legacy function wrappers for backward compatibility
-def build_polygon_client() -> RESTClient:
-    """Build and return a Polygon.io REST client."""
-    return RESTClient(settings.polygon_api_key.get_secret_value())
-
-
-def get_missing_stock_aggs() -> None:
-    """
-    Identifies missing trading days, downloads daily stock aggregates for each missing day,
-    and stores the retrieved data.
-
-    This function performs the following steps:
-    1. Retrieves a list of trading days for which aggregate data is missing.
-    2. Logs the number of missing days found.
-    3. For each missing day:
-        a. Downloads the daily aggregate stock data.
-        b. Stores the downloaded data.
-        c. Logs the completion of data storage for that day.
-
-    Returns:
-        None
-    """
-    missing_days = get_missing_trading_days()
-    logger.info(f"Found {len(missing_days)} missing days.")
-
-    for day in missing_days:
-        daily_aggs = download_daily_aggregates(date_str=day)
-        store_daily_aggregates(daily_aggs, date_str=day)
-        logger.info(f"Stored data for {day}.")
-
-
-def download_daily_aggregates(date_str: str) -> pl.DataFrame:
-    """Download daily stock market aggregates from Polygon.io API.
-
-    Args:
-        date_str: Trading day in YYYY-MM-DD format.
-
-    Returns:
-        DataFrame containing daily aggregates sorted by ticker.
-
-    """
-    client = build_polygon_client()
-    grouped = client.get_grouped_daily_aggs(
-        date_str,
-        adjusted=False,
-        include_otc=False,
-    )
-    df = pl.DataFrame(grouped)
-    if df.is_empty():
-        logger.warning(f"No data returned for {date_str}")
-        return df
-    return df.sort("ticker")
-
-
-def store_daily_aggregates(df: pl.DataFrame, date_str: str) -> None:
-    """Store daily aggregates DataFrame to S3 as Parquet file.
-
-    Args:
-        df: DataFrame containing daily aggregates data.
-        date_str: Trading day in YYYY-MM-DD format for file path.
-
-    """
-    path = f"s3://{settings.s3_bucket_name}/bronze/daily/{date_str}/data.parquet"
-    df.write_parquet(
-        file=path,
-        storage_options=s3_storage_options,
-        compression="zstd",
+def stocks_flatfiles_valid_years() -> list[int]:
+    return valid_flatfiles_years(
+        first_year_available=settings.polygon_flatfiles_stocks_first_year
     )
 
 
-def get_valid_trading_days():
-    """Get list of valid trading days from configured start date to today.
+def valid_flatfiles_years(first_year_available: int) -> list[int]:
+    valid_years = range(first_year_available, date.today().year + 1)
+    return sorted(valid_years, reverse=True)
 
-    Returns:
-        List of trading days in YYYY-MM-DD format.
 
-    """
-    ny_tz = pytz.timezone("America/New_York")
-    today_ny = datetime.now(ny_tz).date()
-
-    return get_trading_days(
-        start_date=settings.data_start_date,
-        end_date=today_ny.strftime("%Y-%m-%d"),
+def list_available_stocks_flatfiles() -> list[str]:
+    """List available stock flatfiles in the Polygon S3 bucket."""
+    return list_available_flatfiles(
+        flatfiles_path=settings.polygon_flatfiles_stocks,
+        valid_years=stocks_flatfiles_valid_years(),
     )
 
 
-def list_bronze_daily_folders():
-    """List existing daily data folders in S3 bronze layer.
+def list_available_flatfiles(flatfiles_path: str, valid_years: list[int]) -> list[str]:
+    """List available stock flatfiles in the Polygon S3 bucket."""
+    polygon_s3 = setup_polygon_flatfiles_client()
+    logger.info(f"Listing available flatfiles in polygon's s3 for {flatfiles_path}...")
 
-    Returns:
-        List of folder names (dates) that exist in S3.
-
-    """
-    fs = s3fs.S3FileSystem(
-        key=settings.aws_access_key_id.get_secret_value(),
-        secret=settings.aws_secret_access_key.get_secret_value(),
+    all_files = [
+        polygon_s3.glob(f"{flatfiles_path}/{year}/*/*.csv.gz") for year in valid_years
+    ]
+    path_list = sorted(
+        [f"s3://{path}" for sublist in all_files for path in sublist], reverse=True
     )
-    prefix = f"{settings.s3_bucket_name}/bronze/daily/"
-    try:
-        folders = fs.ls(prefix)
-    except FileNotFoundError:
-        return []
-    return [PurePath(folder).name for folder in folders if fs.isdir(folder)]
+    logger.info(f"Found {len(path_list)} flatfiles available.")
+    return path_list
 
 
-def get_missing_trading_days():
-    """
-    Identifies trading days for which daily data folders are missing.
-
-    Returns:
-        list: A sorted list of dates (as strings in 'YYYY-MM-DD' format) representing
-              valid trading days that do not have corresponding bronze daily folders.
-              Today's date is excluded unless sufficient time has passed since market
-              close for the data to be available.
-    """
-    valid_days = set(get_valid_trading_days())
-
-    # Exclude today unless data is available (market closed + 30min processing time)
-    if not is_data_available_for_today():
-        ny_tz = pytz.timezone("America/New_York")
-        today_str = datetime.now(ny_tz).strftime("%Y-%m-%d")
-        valid_days.discard(today_str)
-
-    existing_days = set(list_bronze_daily_folders())
-    return sorted(valid_days - existing_days)
-
-
-def get_ticker_details() -> pl.DataFrame:
-    """
-    Fetches active stock tickers from the Polygon API and returns their details as a Polars DataFrame.
-
-    Returns:
-        pl.DataFrame: A DataFrame containing details of up to 1000 active stock tickers.
-
-    Raises:
-        Any exceptions raised by the Polygon API client during ticker retrieval.
-
-    Note:
-        The function logs the number of tickers fetched.
-    """
-    client = build_polygon_client()
-
-    tickers = [
-        t
-        for t in client.list_tickers(
-            market="stocks",
-            active=True,
-            order="asc",
-            sort="ticker",
-            limit=1000,
-        )
+def get_missing_dates(
+    already_stored_dates: list[str], stored_files: list[str]
+) -> list[str]:
+    """Return files from stored_files that do not contain any date from already_stored_dates in their filename."""
+    return [
+        f
+        for f in stored_files
+        if not any(d in Path(f).name for d in already_stored_dates)
     ]
 
-    logger.info(f"Fetched {len(tickers)} active tickers")
-    return pl.DataFrame(tickers)
 
-
-def write_ticker_details(df: pl.DataFrame) -> None:
-    """
-    Writes the provided Polars DataFrame containing ticker details to a Parquet file in an S3 bucket.
-
-    Args:
-        df (pl.DataFrame): The DataFrame containing ticker details to be written.
-
-    Returns:
-        None
-
-    Side Effects:
-        Saves the DataFrame as a Parquet file to the specified S3 path using the configured storage options.
-    """
-    path = f"s3://{settings.s3_bucket_name}/bronze/tickers/data.parquet"
-    df.write_parquet(
-        file=path,
-        storage_options=s3_storage_options,
-        compression="zstd",
-    )
-
-
-def get_split_details() -> pl.DataFrame:
-    """
-    Fetches recent stock split details from the Polygon API and returns them as a Polars DataFrame.
-
-    Returns:
-        pl.DataFrame: A DataFrame containing the fetched split details, with at least an 'id' column of type string.
-
-    Logs:
-        The number of splits fetched.
-    """
-    client = build_polygon_client()
-
-    splits = [
-        {
-            "ticker": s.ticker,  # type: ignore
-            "execution_date": datetime.strptime(s.execution_date, "%Y-%m-%d").date(),  # type: ignore
-            "split_from": s.split_from,  # type: ignore
-            "split_to": s.split_to,  # type: ignore
-        }
-        for s in client.list_splits(
-            execution_date_gte="2020-01-01",
-            order="asc",
-            sort="execution_date",
-            limit=1000,
+def previously_stored_dates(destination: str, schema: dict) -> list:
+    """Retrieve previously stored dates from the destination Parquet files."""
+    logger.info("Retrieving previously stored dates...")
+    lf = (
+        pl.scan_parquet(
+            f"{destination}/date=*/*.parquet",
+            schema=schema,
         )
-    ]
-
-    schema = {
-        "ticker": pl.String,
-        "execution_date": pl.Date,
-        "split_from": pl.Float32,
-        "split_to": pl.Float32,
-    }
-
-    logger.info(f"Fetched {len(splits)} recent splits")
-    return pl.DataFrame(splits, schema_overrides=schema)
-
-
-def write_split_details(df: pl.DataFrame) -> None:
-    """
-    Writes the provided Polars DataFrame containing split details to a Parquet file in an S3 bucket.
-
-    Args:
-        df (pl.DataFrame): The DataFrame containing split details to be written.
-
-    Returns:
-        None
-
-    Side Effects:
-        Writes the DataFrame to the specified S3 location using the provided storage options.
-    """
-    path = f"s3://{settings.s3_bucket_name}/bronze/splits/data.parquet"
-    df.write_parquet(
-        file=path,
-        storage_options=s3_storage_options,
-        compression="zstd",
+        .select(pl.col("date").dt.strftime("%Y-%m-%d").alias("date"))
+        .unique()
+        .sort("date")
     )
+    return lf.collect().to_series().to_list()
 
 
-def write_ssga_holdings(source_url: str, etf_ticker: str) -> None:
-    """
-    Reads ETF holdings data from an Excel file, filters for USD-denominated tickers,
-    and writes the sorted list of tickers to a Parquet file in an S3 bucket.
+def load_polygon_flatfiles(
+    files_to_process: list[str], destination_path: str, schema: dict
+) -> None:
+    # Extract filename from S3 path for display
+    def get_filename(s3_path: str) -> str:
+        return Path(s3_path).name
 
-    Args:
-        source_url (str): The URL or path to the Excel file containing holdings data.
-        etf_ticker (str): The ticker symbol of the ETF whose holdings are being processed.
+    # Process files with progress bar showing detailed status
+    with tqdm(
+        files_to_process,
+        desc="Processing flatfiles",
+        unit="file",
+        bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}",
+    ) as pbar:
+        for source_path in pbar:
+            # Update progress bar to show current file being processed
+            filename = get_filename(source_path)
+            pbar.set_postfix_str(filename, refresh=True)
 
-    Returns:
-        None
-    """
-    logger.info(f"Writing {etf_ticker} holdings")
-    df = (
-        pl.read_excel(
-            source_url,
-            sheet_name="holdings",
-            read_options={"header_row": 4},
-        )
-        .rename({"Ticker": "ticker"})
-        .filter((pl.col("Local Currency") == "USD") & (pl.col("ticker") != "-"))
-        .select("ticker")
-        .sort("ticker")
+            lf = (
+                pl.scan_csv(
+                    source_path,
+                    storage_options=POLYGON_STORAGE_OPTIONS,
+                    schema_overrides=schema,
+                )
+                .with_columns(
+                    # Polygon uses nanosecond timestamps but all I need is the date (no time).
+                    pl.col("window_start")
+                    .cast(pl.Datetime("ns"))
+                    .cast(pl.Date)
+                    .alias("date")
+                )
+                .drop("window_start")
+            )
+
+            try:
+                lf.collect().write_parquet(
+                    destination_path,
+                    partition_by=["date"],
+                )
+            except OSError:
+                logger.info(f"✔️ Reached the last file: {filename}")
+                break
+
+
+def main() -> None:  # pragma: no cover
+    """Main function to load stocks flatfiles from Polygon.io into local storage."""
+    # Splits
+    load_splits()
+
+    # Tickers
+    load_tickers()
+
+    # Stocks - ensure directory exists before processing
+    stocks_path = Path(f"{settings.bronze_storage_path}/stocks")
+    stocks_path.mkdir(parents=True, exist_ok=True)
+
+    stocks_dates_already_stored = previously_stored_dates(
+        settings.bronze_storage_path + "/stocks", STOCKS_RAW_SCHEMA_MODIFIED
     )
-    path = f"s3://{settings.s3_bucket_name}/bronze/holdings/{etf_ticker.lower()}/data.parquet"
-    df.write_parquet(
-        file=path,
-        storage_options=s3_storage_options,
-        compression="zstd",
+    stocks_files_to_process = get_missing_dates(
+        already_stored_dates=stocks_dates_already_stored,
+        stored_files=list_available_stocks_flatfiles(),
     )
-
-
-def write_qqq_holdings() -> None:
-    """Write QQQ holdings to bronze layer.
-
-    Reads QQQ holdings data from Direxion CSV, extracts ticker symbols,
-    and writes to S3 as Parquet.
-
-    Returns:
-        None
-    """
-    logger.info("Writing QQQ holdings")
-    df = (
-        pl.read_csv(settings.qqq_holdings_source, skip_rows=5)
-        .rename({"StockTicker": "ticker"})
-        .select(["ticker"])
-        .filter(pl.col("ticker").is_not_null())
-        .sort("ticker")
+    load_polygon_flatfiles(
+        files_to_process=stocks_files_to_process,
+        destination_path=settings.bronze_storage_path + "/stocks",
+        schema=STOCKS_RAW_SCHEMA,
     )
-    path = f"s3://{settings.s3_bucket_name}/bronze/holdings/qqq/data.parquet"
-    df.write_parquet(
-        file=path,
-        storage_options=s3_storage_options,
-        compression="zstd",
-    )
-
-
-def write_iwm_holdings() -> None:
-    """
-    Reads IWM holdings data from a CSV file, filters for USD market currency and valid tickers,
-    sorts the tickers, and prepares the DataFrame for further processing.
-
-    The CSV source and column names are specified in the settings.
-    """
-    logger.info("Writing IWM holdings")
-    df = (
-        pl.read_csv(
-            settings.iwm_holdings_source,
-            skip_rows=9,
-            columns=["Ticker", "Market Currency"],
-        )
-        .rename({"Ticker": "ticker"})
-        .filter((pl.col("Market Currency") == "USD") & (pl.col("ticker") != "-"))
-        .select(["ticker"])
-        .sort("ticker")
-    )
-    path = f"s3://{settings.s3_bucket_name}/bronze/holdings/iwm/data.parquet"
-    df.write_parquet(
-        file=path,
-        storage_options=s3_storage_options,
-        compression="zstd",
-    )
-
-
-def write_spy_holdings() -> None:
-    """
-    Writes the holdings data for the SPY ETF to the target destination.
-
-    This function retrieves SPY holdings from the source specified in the settings
-    and delegates the writing process to the `write_ssga_holdings` function.
-
-    Returns:
-        None
-    """
-    write_ssga_holdings(settings.spy_holdings_source, "SPY")
-
-
-def write_mdy_holdings() -> None:
-    """
-    Writes the holdings data for the MDY fund to the target destination.
-
-    This function retrieves the MDY holdings from the source specified in the settings
-    and writes them using the `write_ssga_holdings` function.
-
-    Returns:
-        None
-    """
-    write_ssga_holdings(settings.mdy_holdings_source, "MDY")
-
-
-def write_spsm_holdings() -> None:
-    """
-    Writes the holdings data for the SPSM fund by invoking the write_ssga_holdings function
-    with the SPSM holdings source and the fund identifier "SPSM".
-
-    Returns:
-        None
-    """
-    write_ssga_holdings(settings.spsm_holdings_source, "SPSM")
-
-
-def main():
-    """
-    Main entry point for processing and writing financial data.
-
-    This function creates a BronzeLayer instance and runs the data ingestion pipeline.
-    """
-    bronze = BronzeLayer()
-    bronze.run()
 
 
 if __name__ == "__main__":  # pragma: no cover

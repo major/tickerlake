@@ -8,16 +8,6 @@ import pytest
 
 
 @pytest.fixture
-def sample_ticker_data():
-    """Create sample ticker details data."""
-    return pl.DataFrame({
-        "ticker": ["AAPL", "MSFT", "SPY", "QQQ"],
-        "name": ["Apple Inc.", "Microsoft Corp.", "SPDR S&P 500", "Invesco QQQ"],
-        "type": ["CS", "CS", "ETF", "ETF"],
-    })
-
-
-@pytest.fixture
 def sample_split_data():
     """Create sample split details data."""
     return pl.DataFrame({
@@ -29,400 +19,173 @@ def sample_split_data():
 
 
 @pytest.fixture
-def sample_daily_data():
-    """Create sample daily aggregates data."""
-    return pl.DataFrame({
-        "ticker": ["AAPL", "AAPL", "MSFT", "MSFT"],
-        "timestamp": [1735689600000, 1735776000000, 1735689600000, 1735776000000],
-        "open": [150.0, 151.0, 300.0, 301.0],
-        "high": [152.0, 153.0, 305.0, 306.0],
-        "low": [149.0, 150.0, 298.0, 299.0],
-        "close": [151.0, 152.0, 302.0, 303.0],
-        "volume": [50000000, 48000000, 30000000, 32000000],
-        "transactions": [1500, 1400, 1200, 1300],
-    })
-
-
-@pytest.fixture
-def sample_etf_holdings():
-    """Create sample ETF holdings data."""
-    return pl.DataFrame({
-        "ticker": ["AAPL", "MSFT", "GOOGL"],
-        "weight": [7.0, 6.5, 4.2],
-        "etf": ["spy", "spy", "spy"],
-    })
-
-
-@pytest.fixture
-def mock_s3_storage():
-    """Mock S3 storage configuration."""
-    with patch("tickerlake.silver.main.s3_storage_options") as mock_storage:
-        mock_storage.return_value = {
-            "key": "test_key",
-            "secret": "test_secret",
-            "endpoint_url": "http://localhost:9000",
-        }
-        yield mock_storage
-
-
-@pytest.fixture
 def mock_settings():
     """Mock application settings."""
     with patch("tickerlake.silver.main.settings") as mock_settings:
-        mock_settings.s3_bucket_name = "test-bucket"
-        mock_settings.etfs = ["SPY", "QQQ", "IWM"]
+        mock_settings.bronze_storage_path = "./data/bronze"
+        mock_settings.silver_storage_path = "./data/silver"
         yield mock_settings
 
 
-class TestTickerDetails:
-    """Test ticker details functions."""
-
-    @patch("tickerlake.silver.main.pl.scan_parquet")
-    def test_read_ticker_details(
-        self, mock_scan, sample_ticker_data, mock_s3_storage, mock_settings
-    ):
-        """Test reading ticker details filters for CS and ETF types."""
-        mock_scan.return_value.select.return_value.filter.return_value.collect.return_value = sample_ticker_data
-
-        from tickerlake.silver.main import read_ticker_details
-
-        result = read_ticker_details()
-
-        mock_scan.assert_called_once_with(
-            "s3://test-bucket/bronze/tickers/data.parquet",
-            storage_options=mock_s3_storage,
-        )
-        assert isinstance(result, pl.DataFrame)
-        # Check that ticker_type column is included
-        assert "ticker_type" in result.columns
-
-    @patch("tickerlake.silver.main.write_delta_table")
-    @patch("tickerlake.silver.main.delta_table_exists")
-    def test_write_ticker_details(
-        self,
-        mock_exists,
-        mock_write_delta,
-        sample_ticker_data,
-        mock_s3_storage,
-        mock_settings,
-    ):
-        """Test writing ticker details to Delta table."""
-        from tickerlake.silver.main import write_ticker_details
-
-        # Test overwrite mode when table doesn't exist
-        mock_exists.return_value = False
-        write_ticker_details(sample_ticker_data)
-        mock_write_delta.assert_called_once_with(
-            sample_ticker_data, "tickers", mode="overwrite"
-        )
-
-
-class TestSplitDetails:
-    """Test split details functions."""
-
-    @patch("tickerlake.silver.main.pl.scan_parquet")
-    def test_read_split_details(
-        self, mock_scan, sample_split_data, mock_s3_storage, mock_settings
-    ):
-        """Test reading split details with ticker filtering."""
-        mock_scan.return_value.filter.return_value.select.return_value.collect.return_value = sample_split_data
-
-        from tickerlake.silver.main import read_split_details
-
-        valid_tickers = ["AAPL", "MSFT"]
-        result = read_split_details(valid_tickers)
-
-        mock_scan.assert_called_once_with(
-            "s3://test-bucket/bronze/splits/data.parquet",
-            storage_options=mock_s3_storage,
-        )
-        assert isinstance(result, pl.DataFrame)
-
-    @patch("tickerlake.silver.main.write_delta_table")
-    @patch("tickerlake.silver.main.delta_table_exists")
-    def test_write_split_details(
-        self,
-        mock_exists,
-        mock_write_delta,
-        sample_split_data,
-        mock_s3_storage,
-        mock_settings,
-    ):
-        """Test writing split details to Delta table."""
-        from tickerlake.silver.main import write_split_details
-
-        # Test overwrite mode when table doesn't exist
-        mock_exists.return_value = False
-        write_split_details(sample_split_data)
-        mock_write_delta.assert_called_once_with(
-            sample_split_data, "splits", mode="overwrite"
-        )
-
-
-class TestETFHoldings:
-    """Test ETF holdings functions."""
+class TestReadSplits:
+    """Test read_splits function."""
 
     @patch("tickerlake.silver.main.pl.read_parquet")
-    def test_read_etf_holdings(
-        self, mock_read, sample_etf_holdings, mock_s3_storage, mock_settings
-    ):
-        """Test reading ETF holdings for a specific ETF."""
-        mock_read.return_value = sample_etf_holdings.drop("etf")
+    def test_read_splits(self, mock_read, sample_split_data, mock_settings):
+        """Test reading splits data from bronze layer."""
+        mock_read.return_value = sample_split_data
 
-        from tickerlake.silver.main import read_etf_holdings
+        from tickerlake.silver.main import read_splits
 
-        result = read_etf_holdings("SPY")
+        result = read_splits()
 
         mock_read.assert_called_once_with(
-            "s3://test-bucket/bronze/holdings/spy/data.parquet",
-            storage_options=mock_s3_storage,
+            "./data/bronze/splits/splits.parquet"
         )
         assert isinstance(result, pl.DataFrame)
 
-    @patch("tickerlake.silver.main.read_etf_holdings")
-    def test_read_all_etf_holdings(
-        self, mock_read_etf, sample_etf_holdings, mock_settings
-    ):
-        """Test reading and aggregating all ETF holdings."""
-        mock_read_etf.return_value = sample_etf_holdings
 
-        from tickerlake.silver.main import read_all_etf_holdings
+class TestReadTickers:
+    """Test read_tickers function."""
 
-        result = read_all_etf_holdings()
+    @patch("tickerlake.silver.main.pl.read_parquet")
+    def test_read_tickers(self, mock_read, mock_settings):
+        """Test reading tickers data from bronze layer."""
+        sample_tickers = pl.DataFrame({
+            "ticker": ["AAPL", "SPY", "AAPL.WS"],
+            "type": ["CS", "ETF", "WARRANT"],
+            "name": ["Apple Inc.", "SPDR S&P 500 ETF Trust", "Apple Warrant"],
+            "primary_exchange": ["NASDAQ", "NYSE", "NASDAQ"],
+            "active": [True, True, False],
+            "cik": ["0000320193", "0001064642", "0000320193"],
+        })
+        mock_read.return_value = sample_tickers
 
-        assert mock_read_etf.call_count == 3  # Called for SPY, QQQ, IWM
+        from tickerlake.silver.main import read_tickers
+
+        result = read_tickers()
+
+        mock_read.assert_called_once_with(
+            "./data/bronze/tickers/tickers.parquet"
+        )
         assert isinstance(result, pl.DataFrame)
 
 
-class TestDailyAggregates:
-    """Test daily aggregates functions."""
+class TestReadStocksLazy:
+    """Test read_stocks_lazy function."""
 
     @patch("tickerlake.silver.main.pl.scan_parquet")
-    def test_read_daily_aggs(
-        self, mock_scan, sample_daily_data, mock_s3_storage, mock_settings
-    ):
-        """Test reading daily aggregates with ticker filtering."""
-        mock_scan.return_value.select.return_value.filter.return_value.collect.return_value = (
-            sample_daily_data
+    def test_read_stocks_lazy(self, mock_scan, mock_settings):
+        """Test reading stocks data lazily from bronze layer."""
+        mock_lf = pl.LazyFrame()
+        mock_scan.return_value = mock_lf
+
+        from tickerlake.silver.main import read_stocks_lazy
+
+        result = read_stocks_lazy()
+
+        mock_scan.assert_called_once_with(
+            "./data/bronze/stocks/date=*/*.parquet"
         )
-
-        from tickerlake.silver.main import read_daily_aggs
-
-        valid_tickers = ["AAPL", "MSFT"]
-        result = read_daily_aggs(valid_tickers)
-        mock_scan.assert_called_once()
-        args, kwargs = mock_scan.call_args
-        assert args == ("s3://test-bucket/bronze/daily/*/data.parquet",)
-        assert kwargs["storage_options"] == mock_s3_storage
-        # Verify select was called with the correct columns
-        mock_scan.return_value.select.assert_called_once_with([
-            "timestamp",
-            "ticker",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "transactions",
-        ])
-        assert isinstance(result, pl.DataFrame)
-
-    @patch("tickerlake.silver.main.pl.scan_parquet")
-    def test_read_daily_aggs_with_ticker_details(
-        self,
-        mock_scan,
-        sample_daily_data,
-        sample_ticker_data,
-        mock_s3_storage,
-        mock_settings,
-    ):
-        """Test reading daily aggregates with ticker details for ticker_type."""
-        mock_scan.return_value.select.return_value.filter.return_value.collect.return_value = (
-            sample_daily_data
-        )
-
-        from tickerlake.silver.main import read_daily_aggs
-
-        # Create ticker details with ticker_type
-        ticker_details = sample_ticker_data.select([
-            "ticker",
-            pl.col("type").alias("ticker_type"),
-        ])
-        valid_tickers = ["AAPL", "MSFT"]
-        result = read_daily_aggs(valid_tickers, ticker_details)
-
-        assert isinstance(result, pl.DataFrame)
-        # Check that ticker_type column is added
-        assert "ticker_type" in result.columns
-
-    def test_apply_splits(self, sample_daily_data, sample_split_data):
-        """Test applying split adjustments to daily data."""
-        from tickerlake.silver.main import apply_splits
-
-        # Add date column to daily data
-        daily_with_date = sample_daily_data.with_columns(
-            pl.from_epoch(pl.col("timestamp"), time_unit="ms")
-            .cast(pl.Date)
-            .alias("date")
-        )
-
-        result = apply_splits(daily_with_date, sample_split_data)
-
-        assert isinstance(result, pl.DataFrame)
-        assert "date" in result.columns
-        assert "ticker" in result.columns
-
-    def test_apply_splits_with_ticker_type(
-        self, sample_daily_data, sample_split_data, sample_ticker_data
-    ):
-        """Test applying split adjustments preserves ticker_type column."""
-        from tickerlake.silver.main import apply_splits
-
-        # Add date and ticker_type columns to daily data
-        daily_with_date_and_type = sample_daily_data.with_columns(
-            pl.from_epoch(pl.col("timestamp"), time_unit="ms")
-            .cast(pl.Date)
-            .alias("date")
-        ).join(
-            sample_ticker_data.select(["ticker", pl.col("type").alias("ticker_type")]),
-            on="ticker",
-            how="left",
-        )
-
-        result = apply_splits(daily_with_date_and_type, sample_split_data)
-
-        assert isinstance(result, pl.DataFrame)
-        assert "date" in result.columns
-        assert "ticker" in result.columns
-        assert "ticker_type" in result.columns
-
-    @patch("tickerlake.silver.main.write_delta_table")
-    def test_write_daily_aggs(
-        self, mock_write_delta, sample_daily_data, mock_s3_storage, mock_settings
-    ):
-        """Test writing daily aggregates to Delta table."""
-        from tickerlake.silver.main import write_daily_aggs
-
-        write_daily_aggs(sample_daily_data, mode="overwrite")
-        mock_write_delta.assert_called_once_with(
-            sample_daily_data, "daily", mode="overwrite"
-        )
+        assert isinstance(result, pl.LazyFrame)
 
 
-class TestTimeAggregates:
-    """Test time-based aggregate functions."""
-
-    @pytest.mark.parametrize(
-        "period,table_name,function_name",
-        [
-            ("1w", "weekly", "write_weekly_aggs"),
-            ("1mo", "monthly", "write_monthly_aggs"),
-        ],
-    )
-    @patch("tickerlake.silver.main.write_delta_table")
-    def test_write_time_aggregates(
-        self,
-        mock_write_delta,
-        sample_daily_data,
-        mock_s3_storage,
-        mock_settings,
-        period,
-        table_name,
-        function_name,
-    ):
-        """Test writing weekly and monthly aggregates to Delta tables."""
-        from tickerlake.silver import main
-
-        # Add date column required for aggregation
-        daily_with_date = sample_daily_data.with_columns(
-            pl.from_epoch(pl.col("timestamp"), time_unit="ms")
-            .cast(pl.Date)
-            .alias("date")
-        )
-
-        # Get the appropriate function
-        write_function = getattr(main, function_name)
-        write_function(daily_with_date)
-
-        # Verify write_delta_table was called with correct table name
-        assert mock_write_delta.called
-        call_args = mock_write_delta.call_args
-        assert table_name in str(call_args)
-
-    @patch("tickerlake.silver.main.write_delta_table")
-    def test_write_time_aggs_direct(
-        self, mock_write_delta, sample_daily_data, mock_s3_storage, mock_settings
-    ):
-        """Test write_time_aggs function directly."""
-        from tickerlake.silver.main import write_time_aggs
-
-        # Add date column required for aggregation
-        daily_with_date = sample_daily_data.with_columns(
-            pl.from_epoch(pl.col("timestamp"), time_unit="ms")
-            .cast(pl.Date)
-            .alias("date")
-        )
-
-        write_time_aggs(daily_with_date, "1w", "weekly")
-
-        mock_write_delta.assert_called_once()
-        call_args = mock_write_delta.call_args
-        assert "weekly" in str(call_args)
-
-
-class TestMainFunction:
+class TestMain:
     """Test main pipeline function."""
 
-    @patch("tickerlake.silver.main.SilverLayer")
-    def test_main_pipeline_full_rebuild(
+    @patch("tickerlake.silver.main.aggregate_to_monthly")
+    @patch("tickerlake.silver.main.aggregate_to_weekly")
+    @patch("tickerlake.silver.main.calculate_all_indicators")
+    @patch("tickerlake.silver.main.pl.read_parquet")
+    @patch("tickerlake.silver.main.apply_splits_lazy")
+    @patch("tickerlake.silver.main.read_stocks_lazy")
+    @patch("tickerlake.silver.main.read_splits")
+    @patch("tickerlake.silver.main.read_tickers")
+    def test_main_calls_functions(
         self,
-        mock_silver_layer_class,
-        sample_ticker_data,
-        sample_split_data,
-        sample_daily_data,
-        sample_etf_holdings,
+        mock_read_tickers,
+        mock_read_splits,
+        mock_read_stocks,
+        mock_apply_splits,
+        mock_read_parquet,
+        mock_calc_indicators,
+        mock_agg_weekly,
+        mock_agg_monthly,
+        mock_settings,
     ):
-        """Test complete silver layer pipeline execution in full rebuild mode."""
-        # Create a mock instance
-        mock_silver_instance = mock_silver_layer_class.return_value
+        """Test main function calls the correct processing functions and filters splits."""
+        # Mock tickers data with different types
+        mock_tickers_df = pl.DataFrame({
+            "ticker": ["AAPL", "SPY", "AAPL.WS"],
+            "type": ["CS", "ETF", "WARRANT"],
+            "name": ["Apple Inc.", "SPDR S&P 500 ETF Trust", "Apple Warrant"],
+            "primary_exchange": ["NASDAQ", "NYSE", "NASDAQ"],
+            "active": [True, True, False],
+            "cik": ["0000320193", "0001064642", "0000320193"],
+        })
+        mock_read_tickers.return_value = mock_tickers_df
+
+        # Mock splits data including splits for a warrant (should be filtered out)
+        mock_splits_df = pl.DataFrame({
+            "ticker": ["AAPL", "SPY", "AAPL.WS"],
+            "execution_date": [date(2024, 1, 1), date(2024, 2, 1), date(2024, 3, 1)],
+            "split_from": [2.0, 3.0, 4.0],
+            "split_to": [1.0, 1.0, 1.0],
+        })
+        mock_read_splits.return_value = mock_splits_df
+
+        # Create a LazyFrame with sample stock data
+        stock_data = pl.DataFrame({
+            "ticker": ["AAPL", "SPY", "AAPL.WS"],
+            "date": [date(2024, 1, 1)] * 3,
+            "open": [99.0, 199.0, 49.0],
+            "high": [101.0, 201.0, 51.0],
+            "low": [98.0, 198.0, 48.0],
+            "close": [100.0, 200.0, 50.0],
+            "volume": [1000000, 2000000, 500000],
+            "transactions": [10000, 20000, 5000],
+        })
+        mock_read_stocks.return_value = stock_data.lazy()
+
+        # Mock read_parquet to return the same stock data for daily aggregates
+        mock_read_parquet.return_value = stock_data
+
+        # Mock indicator calculations to return simple DataFrames
+        mock_indicators = pl.DataFrame({
+            "ticker": ["AAPL", "SPY"],
+            "date": [date(2024, 1, 1)] * 2,
+            "sma_20": [100.0, 200.0],
+            "sma_50": [100.0, 200.0],
+            "sma_200": [100.0, 200.0],
+            "atr_14": [2.0, 4.0],
+            "volume_ma_20": [1000000, 2000000],
+            "volume_ratio": [1.0, 1.0],
+            "is_hvc": [False, False],
+        })
+        mock_calc_indicators.return_value = mock_indicators
+
+        # Mock aggregations to return simple DataFrames
+        mock_agg_weekly.return_value = stock_data.head(2)
+        mock_agg_monthly.return_value = stock_data.head(2)
 
         from tickerlake.silver.main import main
 
-        main(full_rebuild=True)
+        main()
 
-        # Verify SilverLayer was instantiated and run was called with full_rebuild=True
-        mock_silver_layer_class.assert_called_once()
-        mock_silver_instance.run.assert_called_once_with(full_rebuild=True)
+        mock_read_tickers.assert_called_once()
+        mock_read_splits.assert_called_once()
+        mock_read_stocks.assert_called_once()
 
+        # Verify apply_splits was called and check that splits were filtered
+        mock_apply_splits.assert_called_once()
+        call_args = mock_apply_splits.call_args
+        splits_passed = call_args.kwargs['splits_df']
 
-class TestDataTransformations:
-    """Test data transformation logic."""
+        # Verify that only CS and ETF splits were passed (AAPL.WS should be filtered out)
+        assert len(splits_passed) == 2
+        assert "AAPL.WS" not in splits_passed["ticker"].to_list()
 
-    def test_daily_data_type_conversions(self):
-        """Test that daily data types are properly converted."""
-        raw_data = pl.DataFrame({
-            "ticker": ["AAPL", "MSFT"],
-            "timestamp": [1735689600000, 1735689600000],
-            "open": ["150.5", "300.25"],
-            "high": ["152.75", "305.50"],
-            "low": ["149.25", "298.75"],
-            "close": ["151.50", "302.00"],
-            "volume": ["50000000", "30000000"],
-        })
-
-        # Simulate the transformations done in read_daily_aggs
-        result = raw_data.with_columns(
-            pl.from_epoch(pl.col("timestamp"), time_unit="ms")
-            .cast(pl.Date)
-            .alias("date"),
-            pl.col("volume").cast(pl.UInt64),
-            pl.col("open").cast(pl.Float64),
-            pl.col("close").cast(pl.Float64),
-            pl.col("high").cast(pl.Float64),
-            pl.col("low").cast(pl.Float64),
-        )
-
-        assert result["date"].dtype == pl.Date
-        assert result["ticker"].dtype == pl.String
-        assert result["volume"].dtype == pl.UInt64
-        assert result["open"].dtype == pl.Float64
+        # Verify indicators and aggregations were calculated
+        assert mock_calc_indicators.call_count == 3  # daily, weekly, monthly
+        assert mock_agg_weekly.call_count == 1
+        assert mock_agg_monthly.call_count == 1
