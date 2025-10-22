@@ -9,12 +9,27 @@ from pathlib import Path
 
 import duckdb
 
-from tickerlake.config import settings
 from tickerlake.gold.main import get_duckdb_path
 from tickerlake.logging_config import get_logger, setup_logging
 
 setup_logging()
 logger = get_logger(__name__)
+
+
+def round_float_columns(df, decimals: int = 2):
+    """Round all float columns to specified decimal places.
+
+    Args:
+        df: Pandas DataFrame to round.
+        decimals: Number of decimal places.
+
+    Returns:
+        DataFrame with rounded float columns.
+    """
+    float_cols = df.select_dtypes(include=['float64', 'float32']).columns
+    for col in float_cols:
+        df[col] = df[col].round(decimals)
+    return df
 
 
 def create_datasette_db(
@@ -80,6 +95,7 @@ def create_datasette_db(
           AND close >= 5.0
         ORDER BY weeks_in_stage DESC, ticker
     """).df()
+    stage_1_df = round_float_columns(stage_1_df)
     stage_1_df.to_sql("stage_1_stocks", stage_con, if_exists="replace", index=False)
     logger.info(f"  ✅ Exported {len(stage_1_df)} Stage 1 stocks")
 
@@ -105,6 +121,7 @@ def create_datasette_db(
           AND close >= 5.0
         ORDER BY weeks_in_stage DESC, ticker
     """).df()
+    stage_2_df = round_float_columns(stage_2_df)
     stage_2_df.to_sql("stage_2_stocks", stage_con, if_exists="replace", index=False)
     logger.info(f"  ✅ Exported {len(stage_2_df)} Stage 2 stocks")
 
@@ -130,6 +147,7 @@ def create_datasette_db(
           AND close >= 5.0
         ORDER BY weeks_in_stage DESC, ticker
     """).df()
+    stage_3_df = round_float_columns(stage_3_df)
     stage_3_df.to_sql("stage_3_stocks", stage_con, if_exists="replace", index=False)
     logger.info(f"  ✅ Exported {len(stage_3_df)} Stage 3 stocks")
 
@@ -155,6 +173,7 @@ def create_datasette_db(
           AND close >= 5.0
         ORDER BY weeks_in_stage DESC, ticker
     """).df()
+    stage_4_df = round_float_columns(stage_4_df)
     stage_4_df.to_sql("stage_4_stocks", stage_con, if_exists="replace", index=False)
     logger.info(f"  ✅ Exported {len(stage_4_df)} Stage 4 stocks")
 
@@ -177,6 +196,7 @@ def create_datasette_db(
           AND close >= 5.0
         ORDER BY date DESC, volume_ratio DESC
     """).df()
+    daily_hvcs_df = round_float_columns(daily_hvcs_df)
     daily_hvcs_df.to_sql("daily_hvcs", hvc_con, if_exists="replace", index=False)
     logger.info(f"  ✅ Exported {len(daily_hvcs_df)} Daily HVCs")
 
@@ -201,6 +221,7 @@ def create_datasette_db(
           AND close >= 5.0
         ORDER BY date DESC, volume_ratio DESC
     """).df()
+    weekly_hvcs_df = round_float_columns(weekly_hvcs_df)
     weekly_hvcs_df.to_sql("weekly_hvcs", hvc_con, if_exists="replace", index=False)
     logger.info(f"  ✅ Exported {len(weekly_hvcs_df)} Weekly HVCs")
 
@@ -229,14 +250,14 @@ def create_datasette_db(
     }
     stage_summary_df = pd.DataFrame(stage_summary_data)
     stage_summary_df.to_sql("summary", stage_con, if_exists="replace", index=False)
-    logger.info(f"  ✅ Created stage summary table")
+    logger.info("  ✅ Created stage summary table")
 
     # Close connections
     duck_con.close()
     stage_con.close()
     hvc_con.close()
 
-    logger.info(f"✅ Datasette databases ready:")
+    logger.info("✅ Datasette databases ready:")
     logger.info(f"  📊 Stage Analysis: {stage_db_path}")
     logger.info(f"     Size: {stage_file.stat().st_size / 1024 / 1024:.2f} MB")
     logger.info(f"  🔥 High Volume Close: {hvc_db_path}")

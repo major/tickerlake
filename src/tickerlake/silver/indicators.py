@@ -1,7 +1,6 @@
 """Technical indicator calculations for stock data."""
 
 import polars as pl
-import polars_talib as plta
 
 from tickerlake.config import settings
 from tickerlake.logging_config import get_logger
@@ -199,7 +198,7 @@ def calculate_weinstein_stage(df: pl.DataFrame) -> pl.DataFrame:
     # Calculate 30-period MA using polars-talib
     logger.info("Calculating 30-period moving average...")
     df_with_ma = df_sorted.with_columns([
-        pl.col("close").ta.sma(timeperiod=30).over("ticker").alias("ma_30")
+        pl.col("close").ta.sma(timeperiod=30).over("ticker").alias("ma_30")  # pyright: ignore[reportAttributeAccessIssue]
     ])
 
     # Calculate price distance from MA as percentage

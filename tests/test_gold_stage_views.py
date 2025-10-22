@@ -1,7 +1,7 @@
 """Tests for Weinstein Stage Analysis gold layer views and queries."""
 
 from datetime import date, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import duckdb
 import polars as pl
@@ -10,7 +10,6 @@ import pytest
 from tickerlake.gold.query import (
     get_stage_2_stocks,
     get_stage_history,
-    get_stage_transitions,
     get_stocks_by_stage,
 )
 from tickerlake.gold.views import (

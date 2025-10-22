@@ -666,10 +666,10 @@ def main() -> None:
         print("\n" + "=" * 80)
         print("✅ Report generation complete! 🎉")
         print("=" * 80)
-        print(f"\n📊 Summary:")
+        print("\n📊 Summary:")
         print(f"   Buy Candidates (Stage 2): {len(buy_df)}")
         print(f"   Watchlist (Stage 1): {len(watchlist_df)}")
-        print(f"\n💡 Tip: Open the HTML report in your browser for the best viewing experience!")
+        print("\n💡 Tip: Open the HTML report in your browser for the best viewing experience!")
 
     except Exception as e:
         print(f"\n❌ Error: {e}")
