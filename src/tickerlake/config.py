@@ -9,13 +9,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Application configuration settings using Pydantic BaseSettings."""
 
-    # Polygon API + flatfiles access
+    # Polygon API access
     polygon_api_key: SecretStr = SecretStr("")
-    polygon_access_key_id: SecretStr = SecretStr("")
-    polygon_secret_access_key: SecretStr = SecretStr("")
-    polygon_flatfiles_endpoint_url: str = "https://files.polygon.io"
-    polygon_flatfiles_stocks: str = "s3://flatfiles/us_stocks_sip/day_aggs_v1"
-    polygon_flatfiles_stocks_first_year: int = date.today().year - 1
+    data_start_year: int = date.today().year - 5
 
     # Local storage paths
     bronze_storage_path: str = "./data/bronze"

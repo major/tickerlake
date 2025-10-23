@@ -1,11 +1,15 @@
 """Technical indicator calculations for stock data."""
 
 import polars as pl
+import polars_talib as plta
 
 from tickerlake.config import settings
 from tickerlake.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+# Leave this here or ruff might remove the import above.
+logger.info("Using polars-talib version %s", plta.version)
 
 
 def calculate_sma(df: pl.DataFrame, periods: int) -> pl.DataFrame:
@@ -64,9 +68,7 @@ def calculate_atr(df: pl.DataFrame, periods: int = 14) -> pl.DataFrame:
     return result
 
 
-def calculate_volume_indicators(
-    df: pl.DataFrame, periods: int = 20
-) -> pl.DataFrame:
+def calculate_volume_indicators(df: pl.DataFrame, periods: int = 20) -> pl.DataFrame:
     """Calculate volume-based indicators.
 
     Calculates:
@@ -213,12 +215,15 @@ def calculate_weinstein_stage(df: pl.DataFrame) -> pl.DataFrame:
     logger.info("Calculating MA slope over 4 periods...")
     df_with_slope = df_with_pct.with_columns([
         pl.when(
-            (pl.col("ma_30").is_not_null()) &
-            (pl.col("ma_30").shift(4).over("ticker").is_not_null())
+            (pl.col("ma_30").is_not_null())
+            & (pl.col("ma_30").shift(4).over("ticker").is_not_null())
         )
         .then(
-            ((pl.col("ma_30") - pl.col("ma_30").shift(4).over("ticker")) /
-             pl.col("ma_30").shift(4).over("ticker") * 100.0)
+            (
+                (pl.col("ma_30") - pl.col("ma_30").shift(4).over("ticker"))
+                / pl.col("ma_30").shift(4).over("ticker")
+                * 100.0
+            )
         )
         .otherwise(None)
         .alias("ma_slope_pct")
@@ -230,9 +235,7 @@ def calculate_weinstein_stage(df: pl.DataFrame) -> pl.DataFrame:
 
     # Apply anti-whipsaw logic per ticker
     logger.info("Applying anti-whipsaw filter (2-week minimum)...")
-    df_with_stage = df_with_raw_stage.group_by("ticker").map_groups(
-        _apply_anti_whipsaw
-    )
+    df_with_stage = df_with_raw_stage.group_by("ticker").map_groups(_apply_anti_whipsaw)
 
     # Calculate stage change flag and weeks in stage
     df_final = df_with_stage.with_columns([
@@ -243,21 +246,27 @@ def calculate_weinstein_stage(df: pl.DataFrame) -> pl.DataFrame:
     ])
 
     # Calculate weeks in stage using run-length encoding per ticker
-    df_final = (
-        df_final.group_by("ticker", maintain_order=True)
-        .map_groups(lambda ticker_df: ticker_df.with_columns([
+    df_final = df_final.group_by("ticker", maintain_order=True).map_groups(
+        lambda ticker_df: ticker_df.with_columns([
             pl.col("stage").rle_id().alias("_stage_group_id")
-        ]).with_columns([
+        ])
+        .with_columns([
             pl.col("_stage_group_id")
             .cum_count()
             .over("_stage_group_id")
             .alias("weeks_in_stage")
-        ]).drop("_stage_group_id"))
+        ])
+        .drop("_stage_group_id")
     )
 
-    # Log stage distribution
-    stage_counts = df_final.group_by("stage").agg(pl.count().alias("count"))
-    logger.info(f"Stage distribution: {stage_counts.to_dicts()}")
+    # Log stage distribution (using latest stage for each ticker)
+    latest_stages = df_final.sort("date").group_by("ticker").last()
+    stage_counts = (
+        latest_stages.group_by("stage")
+        .agg(pl.count().alias("count"))
+        .sort("stage")
+    )
+    logger.info(f"Stage distribution (current): {stage_counts.to_dicts()}")
 
     logger.info(f"Completed Weinstein stage analysis for {df_final.height:,} rows")
     return df_final
@@ -281,14 +290,12 @@ def _classify_raw_stage(df: pl.DataFrame) -> pl.DataFrame:
     df_with_stage = df.with_columns([
         pl.when(
             # Stage 2: Price >2% above MA AND MA rising >0.5%
-            (pl.col("price_vs_ma_pct") > 2.0) &
-            (pl.col("ma_slope_pct") > 0.5)
+            (pl.col("price_vs_ma_pct") > 2.0) & (pl.col("ma_slope_pct") > 0.5)
         )
         .then(pl.lit(2, dtype=pl.UInt8))
         .when(
             # Stage 4: Price <-2% below MA AND MA falling <-0.5%
-            (pl.col("price_vs_ma_pct") < -2.0) &
-            (pl.col("ma_slope_pct") < -0.5)
+            (pl.col("price_vs_ma_pct") < -2.0) & (pl.col("ma_slope_pct") < -0.5)
         )
         .then(pl.lit(4, dtype=pl.UInt8))
         .when(
@@ -329,10 +336,7 @@ def _apply_anti_whipsaw(ticker_df: pl.DataFrame) -> pl.DataFrame:
 
     # Count the length of each run
     df_with_run_length = df_with_rle.with_columns([
-        pl.col("_rle_id")
-        .cum_count()
-        .over("_rle_id")
-        .alias("_run_length")
+        pl.col("_rle_id").cum_count().over("_rle_id").alias("_run_length")
     ])
 
     # Only confirm stage if run length >= 2, otherwise use previous confirmed stage

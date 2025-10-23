@@ -54,7 +54,7 @@ df = con.execute('SELECT * FROM daily_enriched LIMIT 10').pl()
 
 ### GitHub Actions
 - Workflow runs on push/PR to main branch
-- Requires GitHub secret: `POLYGON_API_KEY` (for Polygon.io flat file access)
+- Requires GitHub secret: `POLYGON_API_KEY` (for Polygon.io grouped daily aggregates API)
 
 ## Architecture
 
@@ -62,7 +62,8 @@ df = con.execute('SELECT * FROM daily_enriched LIMIT 10').pl()
 TickerLake follows a medallion architecture for financial data processing:
 
 - **Bronze Layer** (`src/tickerlake/bronze/`): Raw data ingestion from Polygon.io API
-  - Downloads daily stock aggregates for NYSE trading days from Polygon S3 flat files
+  - Fetches unadjusted daily stock aggregates for NYSE trading days via `get_grouped_daily_aggs()` API
+  - Data available ~30 minutes after market close each trading day
   - Stores data as Parquet files in local `./data/bronze` directory
   - Implements incremental loading by checking existing vs. required trading days
 
@@ -101,8 +102,7 @@ TickerLake follows a medallion architecture for financial data processing:
 - Uses Pydantic Settings with `.env` file support (`src/tickerlake/config.py`)
 - All sensitive credentials handled as `SecretStr` types
 - Local filesystem storage in `./data/bronze` and `./data/silver` directories
-- Polygon.io S3 credentials required for accessing flat files
-- Default data window: 5 years from current date
+- Default data window: 5 years from current date (configurable via `data_start_year`)
 
 ### Key Components
 
@@ -115,7 +115,6 @@ TickerLake follows a medallion architecture for financial data processing:
 - Bronze path structure: `./data/bronze/stocks/date={YYYY-MM-DD}/*.parquet`
 - Silver path structure: `./data/silver/{table_name}/_delta_log/...`
 - Uses Polars for efficient Parquet/Delta I/O with local filesystem
-- Polygon S3 access: Fetches flat files from Polygon.io S3 bucket (read-only)
 
 **Delta Lake Integration** (`src/tickerlake/delta_utils.py`):
 - `write_delta_table()`: Write DataFrames to Delta tables with overwrite/append modes
@@ -127,28 +126,27 @@ TickerLake follows a medallion architecture for financial data processing:
 - `vacuum_delta_table()`: Clean up old file versions
 
 ### Data Sources
-- **Polygon.io**: Primary source for US stock market data (via S3 flat files)
+- **Polygon.io**: Primary source for US stock market data (via grouped daily aggregates API)
 - **pandas_market_calendars**: NYSE trading calendar and hours
 - **Storage**: Local filesystem in `./data` directory
 
 **Important Polygon.io API Limitations**:
-- ⚠️ **Current Day Data**: The Polygon API does NOT allow requesting daily aggregate bars for the current day until the market has closed
+- ⚠️ **Data Availability**: Data from `get_grouped_daily_aggs()` is typically available ~30 minutes after market close
+- The bronze layer uses `is_data_available_for_today()` to intelligently include today's data only when ready
 - When the market is still open or hasn't closed yet, you can only request data up to yesterday's date
-- Any validation scripts or API calls that attempt to fetch today's data will fail
-- This is why the validation script uses `get_last_trading_day()` to find the most recent complete trading day from the silver data
+- **Unadjusted Data**: Bronze layer fetches unadjusted prices (adjusted=False); silver layer applies split adjustments
+- **No OTC**: Bronze layer excludes OTC stocks (include_otc=False) to focus on exchange-traded securities
 - **Timezone Note**: Polygon returns timestamps in UTC. Always use `datetime.fromtimestamp(timestamp/1000, tz=timezone.utc)` when converting Polygon timestamps to avoid off-by-one date errors
 
 ### Environment Variables
 ```
 POLYGON_API_KEY=your_api_key
-POLYGON_ACCESS_KEY_ID=your_polygon_s3_access_key
-POLYGON_SECRET_ACCESS_KEY=your_polygon_s3_secret_key
 GITHUB_PAT=your_github_personal_access_token
 ```
 
 Notes:
-- Polygon S3 credentials are only used for accessing Polygon.io flat files, not for data storage
-- GitHub PAT is used for pushing report updates to the Hugo blog repository
+- `POLYGON_API_KEY` is used for accessing Polygon.io's grouped daily aggregates API
+- `GITHUB_PAT` is used for pushing report updates to the Hugo blog repository
 
 The bronze layer automatically identifies and downloads missing trading days on each run, making it safe for scheduled execution.
 

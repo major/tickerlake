@@ -63,7 +63,7 @@ TICKERS_RAW_SCHEMA: dict[str, Any] = {
 # Silver/Gold Layer Schemas (Processed data)
 # =============================================================================
 DAILY_AGGREGATE_SCHEMA: dict[str, Any] = {
-    "ticker": pl.String,
+    "ticker": pl.Categorical,
     "date": pl.Date,
     "open": pl.Float64,
     "high": pl.Float64,
@@ -75,7 +75,7 @@ DAILY_AGGREGATE_SCHEMA: dict[str, Any] = {
 
 DAILY_AGGREGATE_WITH_TICKER_TYPE_SCHEMA: dict[str, Any] = {
     **DAILY_AGGREGATE_SCHEMA,
-    "ticker_type": pl.String,
+    "ticker_type": pl.Categorical,
 }
 
 DAILY_AGGREGATE_WITH_VOLUME_RATIO_SCHEMA: dict[str, Any] = {
@@ -85,16 +85,16 @@ DAILY_AGGREGATE_WITH_VOLUME_RATIO_SCHEMA: dict[str, Any] = {
 }
 
 SPLIT_SCHEMA: dict[str, Any] = {
-    "ticker": pl.String,
+    "ticker": pl.Categorical,
     "execution_date": pl.Date,
     "split_from": pl.Float32,
     "split_to": pl.Float32,
 }
 
 TICKER_DETAILS_SCHEMA: dict[str, Any] = {
-    "ticker": pl.String,
+    "ticker": pl.Categorical,
     "name": pl.String,
-    "ticker_type": pl.String,
+    "ticker_type": pl.Categorical,
 }
 
 TICKER_DETAILS_WITH_ETFS_SCHEMA: dict[str, Any] = {
@@ -103,14 +103,14 @@ TICKER_DETAILS_WITH_ETFS_SCHEMA: dict[str, Any] = {
 }
 
 ETF_HOLDING_SCHEMA: dict[str, Any] = {
-    "ticker": pl.String,
-    "etf": pl.String,
+    "ticker": pl.Categorical,
+    "etf": pl.Categorical,
 }
 
 HIGH_VOLUME_CLOSE_SCHEMA: dict[str, Any] = {
     "date": pl.Date,
-    "ticker": pl.String,
-    "ticker_type": pl.String,
+    "ticker": pl.Categorical,
+    "ticker_type": pl.Categorical,
     "close": pl.Float64,
     "volume_avg_ratio": pl.Float64,
     "volume": pl.UInt64,
@@ -118,7 +118,7 @@ HIGH_VOLUME_CLOSE_SCHEMA: dict[str, Any] = {
 }
 
 INDICATORS_SCHEMA: dict[str, Any] = {
-    "ticker": pl.String,
+    "ticker": pl.Categorical,
     "date": pl.Date,
     "sma_20": pl.Float64,
     "sma_50": pl.Float64,
@@ -224,7 +224,7 @@ def validate_indicators(df: pl.DataFrame, include_stages: bool = False) -> pl.Da
     else:
         # Daily/monthly indicators don't have stage analysis columns
         basic_schema = {
-            "ticker": pl.String,
+            "ticker": pl.Categorical,
             "date": pl.Date,
             "sma_20": pl.Float64,
             "sma_50": pl.Float64,
