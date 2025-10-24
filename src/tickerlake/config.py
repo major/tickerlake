@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from pydantic import SecretStr
+from pydantic import SecretStr, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,8 +13,15 @@ class Settings(BaseSettings):
     polygon_api_key: SecretStr = SecretStr("")
     data_start_year: int = date.today().year - 5
 
+    # Postgres configuration (replaces bronze_storage_path)
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_database: str = "tickerlake"
+    postgres_user: SecretStr = SecretStr("")
+    postgres_password: SecretStr = SecretStr("")
+    postgres_sslmode: str = "require"  # require/verify-ca/verify-full/disable
+
     # Local storage paths
-    bronze_storage_path: str = "./data/bronze"
     silver_storage_path: str = "./data/silver"
 
     # Technical indicators configuration
@@ -28,6 +35,19 @@ class Settings(BaseSettings):
     # Using QQQE for this since Invesco got all protective of their data.
     qqq_holdings_source: str = "https://www.direxion.com/holdings/QQQE.csv"
     iwm_holdings_source: str = "https://www.ishares.com/us/products/239710/ishares-russell-2000-etf/1467271812596.ajax?fileType=csv&fileName=IWM_holdings&dataType=fund"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def postgres_url(self) -> str:
+        """Build SQLAlchemy connection URL with TLS."""
+        return (
+            f"postgresql+psycopg://"
+            f"{self.postgres_user.get_secret_value()}:"
+            f"{self.postgres_password.get_secret_value()}@"
+            f"{self.postgres_host}:{self.postgres_port}/"
+            f"{self.postgres_database}"
+            f"?sslmode={self.postgres_sslmode}"
+        )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

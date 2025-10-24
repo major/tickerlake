@@ -13,6 +13,7 @@ dependencies = [
     "polars>=1.33.1",
     "polars-talib>=0.1.5",
     "polygon-api-client>=1.15.3",
+    "psycopg[binary]>=3.2.0",
     "pyarrow>=21.0.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.10.1",
@@ -27,6 +28,7 @@ bronze = "tickerlake.bronze.main:main"
 silver = "tickerlake.silver.main:main"
 gold = "tickerlake.gold.main:main"
 validate = "tickerlake.silver.validation:main"
+clean = "tickerlake.bronze.clean:main"
 
 [build-system]
 requires = ["uv_build>=0.9.0,<0.10.0"]

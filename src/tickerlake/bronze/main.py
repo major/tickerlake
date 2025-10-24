@@ -1,16 +1,13 @@
 """Bronze layer data ingestion from Polygon.io grouped daily aggregates API."""
 
-from datetime import date, datetime
-from pathlib import Path
+from datetime import date
 
 import polars as pl
 from tqdm import tqdm
 
-from tickerlake.schemas import (
-    STOCKS_RAW_SCHEMA_MODIFIED,
-)
-from tickerlake.bronze.splits import load_splits
-from tickerlake.bronze.tickers import load_tickers
+from tickerlake.bronze import postgres
+from tickerlake.bronze.splits import get_splits
+from tickerlake.bronze.tickers import get_tickers
 from tickerlake.clients import setup_polygon_api_client
 from tickerlake.config import settings
 from tickerlake.logging_config import get_logger, setup_logging
@@ -37,33 +34,6 @@ def get_required_trading_days() -> list[str]:
     return get_trading_days(start_date, end_date)
 
 
-def previously_stored_dates(destination: str, schema: dict) -> list[str]:
-    """Retrieve previously stored dates from the destination Parquet files.
-
-    Args:
-        destination: Path to the parquet files.
-        schema: Schema to use for reading.
-
-    Returns:
-        List of dates already stored in YYYY-MM-DD format.
-    """
-    logger.info("Retrieving previously stored dates...")
-
-    try:
-        lf = (
-            pl.scan_parquet(
-                f"{destination}/date=*/*.parquet",
-                schema=schema,
-            )
-            .select(pl.col("date").dt.strftime("%Y-%m-%d").alias("date"))
-            .unique()
-            .sort("date")
-        )
-        return lf.collect().to_series().to_list()
-    except Exception:
-        # No existing data
-        logger.info("No existing data found, will fetch all required dates.")
-        return []
 
 
 def get_missing_trading_days(
@@ -83,17 +53,14 @@ def get_missing_trading_days(
     return sorted(missing)
 
 
-def load_grouped_daily_aggs(
-    dates_to_fetch: list[str], destination_path: str
-) -> None:
-    """Fetch grouped daily aggregates from Polygon API and save to parquet.
+def load_grouped_daily_aggs(dates_to_fetch: list[str]) -> None:
+    """Fetch grouped daily aggregates from Polygon API and save to Postgres.
 
     Fetches data from newest to oldest, stopping when a 403 error is encountered
     (indicating the historical data limit for the API subscription).
 
     Args:
         dates_to_fetch: List of dates to fetch in YYYY-MM-DD format.
-        destination_path: Path to write parquet files.
     """
     if not dates_to_fetch:
         logger.info("✅ No missing dates to fetch.")
@@ -156,11 +123,8 @@ def load_grouped_daily_aggs(
                     .drop("window_start")
                 )
 
-                # Write to parquet with date partitioning
-                df.write_parquet(
-                    destination_path,
-                    partition_by=["date"],
-                )
+                # Write to Postgres via COPY BINARY
+                postgres.bulk_load_stocks(df)
 
             except Exception as e:
                 # 🛑 Check if we hit a 403 (API subscription limit reached)
@@ -182,31 +146,24 @@ def validate_bronze_data() -> None:
     Checks each day's record count against statistical norms and absolute thresholds
     to detect potential data quality issues.
     """
-    stocks_path = f"{settings.bronze_storage_path}/stocks"
-
     try:
-        # Read all bronze data and count records per day
-        df = (
-            pl.scan_parquet(
-                f"{stocks_path}/date=*/*.parquet",
-                schema=STOCKS_RAW_SCHEMA_MODIFIED,
-            )
-            .select("date")
-            .group_by("date")
-            .agg(pl.len().alias("record_count"))
-            .sort("date")
-            .collect()
-        )
+        # Get record counts per day from Postgres
+        stats = postgres.get_validation_stats()
 
-        if len(df) == 0:
+        if not stats:
             logger.warning("⚠️  No data found for validation")
             return
 
+        # Extract dates and counts
+        dates = [s[0] for s in stats]
+        counts = [s[1] for s in stats]
+
         # Calculate statistical measures
-        mean_count = df["record_count"].mean()
-        std_count = df["record_count"].std()
-        min_count = df["record_count"].min()
-        max_count = df["record_count"].max()
+        mean_count = sum(counts) / len(counts)
+        variance = sum((x - mean_count) ** 2 for x in counts) / len(counts)
+        std_count = variance**0.5
+        min_count = min(counts)
+        max_count = max(counts)
 
         logger.info(f"📊 Record count statistics:")
         logger.info(f"   Mean: {mean_count:.0f} ± {std_count:.0f}")
@@ -221,17 +178,21 @@ def validate_bronze_data() -> None:
         absolute_min = 5000
 
         # Check for anomalies (only serious issues)
-        anomalies = df.filter(
-            (pl.col("record_count") < relative_min) |
-            (pl.col("record_count") > relative_max) |
-            (pl.col("record_count") < absolute_min)
-        )
+        anomalies = []
+        for date_obj, count in stats:
+            if (
+                count < relative_min
+                or count > relative_max
+                or count < absolute_min
+            ):
+                anomalies.append((date_obj, count))
 
         if len(anomalies) > 0:
-            logger.warning(f"⚠️  Found {len(anomalies)} day(s) with abnormal record counts:")
-            for row in anomalies.iter_rows(named=True):
-                date_str = row["date"].strftime("%Y-%m-%d")
-                count = row["record_count"]
+            logger.warning(
+                f"⚠️  Found {len(anomalies)} day(s) with abnormal record counts:"
+            )
+            for date_obj, count in anomalies:
+                date_str = date_obj.strftime("%Y-%m-%d")
                 pct_of_mean = (count / mean_count) * 100
 
                 reasons = []
@@ -242,7 +203,9 @@ def validate_bronze_data() -> None:
                 if count > relative_max:
                     reasons.append(f"{pct_of_mean:.0f}% of mean (unusually high)")
 
-                logger.warning(f"   📅 {date_str}: {count} records ({', '.join(reasons)})")
+                logger.warning(
+                    f"   📅 {date_str}: {count} records ({', '.join(reasons)})"
+                )
         else:
             logger.info("✅ All days have reasonable record counts")
 
@@ -251,35 +214,33 @@ def validate_bronze_data() -> None:
 
 
 def main() -> None:  # pragma: no cover
-    """Main function to load stocks data from Polygon.io API into local storage."""
-    # Splits
-    load_splits()
+    """Main function to load stocks data from Polygon.io API into Postgres."""
+    # Initialize Postgres schema (idempotent)
+    logger.info("🔧 Initializing database schema...")
+    postgres.init_schema()
 
-    # Tickers
-    load_tickers()
+    # Load splits
+    logger.info("📥 Loading splits...")
+    splits_df = get_splits()
+    postgres.upsert_splits(splits_df)
 
-    # Stocks - ensure directory exists before processing
-    stocks_path = Path(f"{settings.bronze_storage_path}/stocks")
-    stocks_path.mkdir(parents=True, exist_ok=True)
+    # Load tickers
+    logger.info("📥 Loading tickers...")
+    tickers_df = get_tickers()
+    postgres.upsert_tickers(tickers_df)
 
     # Determine what dates we need
     required_dates = get_required_trading_days()
     logger.info(f"📅 Required trading days: {len(required_dates)} dates")
 
-    stored_dates = previously_stored_dates(
-        f"{settings.bronze_storage_path}/stocks",
-        STOCKS_RAW_SCHEMA_MODIFIED,
-    )
+    stored_dates = postgres.get_existing_dates()
     logger.info(f"💾 Already stored: {len(stored_dates)} dates")
 
     missing_dates = get_missing_trading_days(required_dates, stored_dates)
     logger.info(f"📥 Missing dates to fetch: {len(missing_dates)}")
 
-    # Fetch missing data
-    load_grouped_daily_aggs(
-        dates_to_fetch=missing_dates,
-        destination_path=f"{settings.bronze_storage_path}/stocks",
-    )
+    # Fetch missing data and write to Postgres
+    load_grouped_daily_aggs(dates_to_fetch=missing_dates)
 
     # 🔍 Validate data quality
     logger.info("🔍 Validating bronze data quality...")

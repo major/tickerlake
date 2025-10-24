@@ -6,10 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Development
 - `uv sync` - Install all dependencies
-- `uv run bronze` - Run the bronze layer (data ingestion)
+- `uv run bronze` - Run the bronze layer (data ingestion to Postgres)
 - `uv run silver` - Run the silver layer (incremental processing by default)
 - `uv run gold` - Run the gold layer (analytics and exports)
 - `uv run publish` - Run the publish layer (generate and publish Hugo blog reports)
+- `uv run clean` - Reset bronze layer by dropping all Postgres tables
 
 ### Silver Layer Modes
 - **Incremental mode** (default): Processes only new data since last run
@@ -61,11 +62,13 @@ df = con.execute('SELECT * FROM daily_enriched LIMIT 10').pl()
 ### Data Pipeline Structure
 TickerLake follows a medallion architecture for financial data processing:
 
-- **Bronze Layer** (`src/tickerlake/bronze/`): Raw data ingestion from Polygon.io API
+- **Bronze Layer** (`src/tickerlake/bronze/`): Raw data ingestion from Polygon.io API to Postgres
   - Fetches unadjusted daily stock aggregates for NYSE trading days via `get_grouped_daily_aggs()` API
   - Data available ~30 minutes after market close each trading day
-  - Stores data as Parquet files in local `./data/bronze` directory
-  - Implements incremental loading by checking existing vs. required trading days
+  - Stores data in Postgres database using SQLAlchemy + psycopg COPY BINARY (1-2M rows/sec)
+  - Implements incremental loading by checking existing dates in Postgres
+  - Schema initialization on first run (idempotent)
+  - Three tables: `stocks` (daily OHLCV), `tickers` (reference data), `splits` (stock splits)
 
 - **Silver Layer** (`src/tickerlake/silver/`): Cleaned and enriched data using Delta Lake
   - Uses Delta tables for ACID transactions and efficient incremental updates
@@ -101,8 +104,10 @@ TickerLake follows a medallion architecture for financial data processing:
 ### Configuration Management
 - Uses Pydantic Settings with `.env` file support (`src/tickerlake/config.py`)
 - All sensitive credentials handled as `SecretStr` types
-- Local filesystem storage in `./data/bronze` and `./data/silver` directories
+- Postgres database for bronze layer (host, port, database, user, password, sslmode)
+- Local filesystem storage in `./data/silver` directory for Delta Lake tables
 - Default data window: 5 years from current date (configurable via `data_start_year`)
+- TLS/SSL enabled by default for Postgres connections (`sslmode=require`)
 
 ### Key Components
 
@@ -111,10 +116,15 @@ TickerLake follows a medallion architecture for financial data processing:
 - `is_market_open()`: Real-time market status using pandas_market_calendars
 - Handles timezone conversion automatically (NYSE uses US/Eastern)
 
-**Local Storage**:
-- Bronze path structure: `./data/bronze/stocks/date={YYYY-MM-DD}/*.parquet`
+**Bronze Storage (Postgres)**:
+- Postgres database with three tables: `stocks`, `tickers`, `splits`
+- SQLAlchemy Core for schema management and queries
+- Raw psycopg COPY BINARY for bulk inserts (1-2M rows/sec performance)
+- Connection pooling via SQLAlchemy (pool_size=5, max_overflow=10)
+
+**Silver Storage (Local Filesystem)**:
 - Silver path structure: `./data/silver/{table_name}/_delta_log/...`
-- Uses Polars for efficient Parquet/Delta I/O with local filesystem
+- Uses Polars for efficient Delta Lake I/O with local filesystem
 
 **Delta Lake Integration** (`src/tickerlake/delta_utils.py`):
 - `write_delta_table()`: Write DataFrames to Delta tables with overwrite/append modes
@@ -128,7 +138,10 @@ TickerLake follows a medallion architecture for financial data processing:
 ### Data Sources
 - **Polygon.io**: Primary source for US stock market data (via grouped daily aggregates API)
 - **pandas_market_calendars**: NYSE trading calendar and hours
-- **Storage**: Local filesystem in `./data` directory
+- **Storage**:
+  - Bronze: Postgres database (TLS encrypted)
+  - Silver: Local filesystem in `./data/silver` directory (Delta Lake)
+  - Gold: Local filesystem in `./data/gold` directory (DuckDB)
 
 **Important Polygon.io API Limitations**:
 - ⚠️ **Data Availability**: Data from `get_grouped_daily_aggs()` is typically available ~30 minutes after market close
@@ -140,12 +153,25 @@ TickerLake follows a medallion architecture for financial data processing:
 
 ### Environment Variables
 ```
+# Polygon.io API (required)
 POLYGON_API_KEY=your_api_key
+
+# Postgres Database (required for bronze layer)
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DATABASE=tickerlake
+POSTGRES_USER=tickerlake_user
+POSTGRES_PASSWORD=your_secure_password
+POSTGRES_SSLMODE=require  # require/verify-ca/verify-full/disable
+
+# GitHub (required for publish layer)
 GITHUB_PAT=your_github_personal_access_token
 ```
 
 Notes:
 - `POLYGON_API_KEY` is used for accessing Polygon.io's grouped daily aggregates API
+- `POSTGRES_*` variables configure the Postgres connection for bronze layer storage
+- `POSTGRES_SSLMODE=require` enables TLS encryption by default (recommended)
 - `GITHUB_PAT` is used for pushing report updates to the Hugo blog repository
 
 The bronze layer automatically identifies and downloads missing trading days on each run, making it safe for scheduled execution.
