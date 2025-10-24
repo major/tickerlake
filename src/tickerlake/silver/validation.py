@@ -1,4 +1,4 @@
-"""Spot check prices for stocks adjusted for splits."""
+"""Spot check prices for stocks adjusted for splits. 🔍"""
 
 from datetime import datetime
 
@@ -8,11 +8,10 @@ from rich.table import Table
 from sqlalchemy import func, select
 
 from tickerlake.bronze.models import splits as bronze_splits
-from tickerlake.bronze.postgres import get_engine as get_bronze_engine
 from tickerlake.clients import setup_polygon_api_client
+from tickerlake.db import get_engine
 from tickerlake.logging_config import get_logger, setup_logging
 from tickerlake.silver.models import daily_aggregates, weekly_aggregates, weekly_indicators
-from tickerlake.silver.postgres import get_engine as get_silver_engine
 from tickerlake.utils import get_trading_days
 
 setup_logging()
@@ -22,7 +21,7 @@ console = Console()
 
 def get_last_trading_day() -> str:
     """Get the most recent trading day from the silver Postgres layer."""
-    engine = get_silver_engine()
+    engine = get_engine()
 
     with engine.connect() as conn:
         result = conn.execute(
@@ -45,7 +44,7 @@ def get_high_volume_tickers(min_volume: int = 250_000, min_price: float = 20.0) 
     last_trading_day = get_last_trading_day()
     logger.info(f"📊 Getting high volume tickers from {last_trading_day}...")
 
-    engine = get_silver_engine()
+    engine = get_engine()
 
     with engine.connect() as conn:
         result = conn.execute(
@@ -88,7 +87,7 @@ def build_split_list_to_check(num_splits: int = 25) -> pl.DataFrame:
     from datetime import timedelta
 
     # Get the last trading day from silver data
-    engine = get_silver_engine()
+    engine = get_engine()
     with engine.connect() as conn:
         silver_max_date = conn.execute(
             select(func.max(daily_aggregates.c.date))
@@ -123,8 +122,8 @@ def build_split_list_to_check(num_splits: int = 25) -> pl.DataFrame:
     )
 
     # Then get splits for those tickers within the date range from bronze Postgres
-    bronze_engine = get_bronze_engine()
-    with bronze_engine.connect() as conn:
+    engine = get_engine()
+    with engine.connect() as conn:
         result = conn.execute(
             select(bronze_splits)
             .where(bronze_splits.c.ticker.in_(high_volume_tickers))
@@ -254,7 +253,7 @@ def get_silver_stock_prices_around_split(
     start_date = datetime.strptime(min(dates_list), "%Y-%m-%d").date()
     end_date = datetime.strptime(max(dates_list), "%Y-%m-%d").date()
 
-    engine = get_silver_engine()
+    engine = get_engine()
     with engine.connect() as conn:
         result = conn.execute(
             select(daily_aggregates.c.date, daily_aggregates.c.close)
@@ -518,7 +517,7 @@ def validate_hvc_calculations() -> bool:
     ]
 
     # Read weekly indicators from Postgres
-    engine = get_silver_engine()
+    engine = get_engine()
     with engine.connect() as conn:
         # Read weekly indicators
         ind_result = conn.execute(select(weekly_indicators))

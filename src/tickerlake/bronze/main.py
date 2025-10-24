@@ -1,4 +1,4 @@
-"""Bronze layer data ingestion from Polygon.io grouped daily aggregates API."""
+"""Bronze layer data ingestion from Polygon.io grouped daily aggregates API. 🥉"""
 
 from datetime import date
 
@@ -6,10 +6,12 @@ import polars as pl
 from tqdm import tqdm
 
 from tickerlake.bronze import postgres
+from tickerlake.bronze.models import stocks
 from tickerlake.bronze.splits import get_splits
 from tickerlake.bronze.tickers import get_tickers
 from tickerlake.clients import setup_polygon_api_client
 from tickerlake.config import settings
+from tickerlake.db import bulk_load
 from tickerlake.logging_config import get_logger, setup_logging
 from tickerlake.utils import get_trading_days, is_data_available_for_today
 
@@ -123,8 +125,8 @@ def load_grouped_daily_aggs(dates_to_fetch: list[str]) -> None:
                     .drop("window_start")
                 )
 
-                # Write to Postgres via COPY BINARY
-                postgres.bulk_load_stocks(df)
+                # Write to Postgres via COPY BINARY 🚀
+                bulk_load(stocks, df)
 
             except Exception as e:
                 # 🛑 Check if we hit a 403 (API subscription limit reached)
@@ -217,7 +219,7 @@ def main() -> None:  # pragma: no cover
     """Main function to load stocks data from Polygon.io API into Postgres."""
     # Initialize Postgres schema (idempotent)
     logger.info("🔧 Initializing database schema...")
-    postgres.init_schema()
+    postgres.init_bronze_schema()
 
     # Load splits
     logger.info("📥 Loading splits...")

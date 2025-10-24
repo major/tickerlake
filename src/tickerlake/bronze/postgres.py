@@ -1,72 +1,25 @@
-"""Postgres storage backend using SQLAlchemy + psycopg COPY for bronze layer."""
+"""Postgres storage backend for bronze layer. 🥉
+
+Uses shared database utilities from tickerlake.db for common operations.
+Bronze-specific functions remain here (upserts, queries, etc.).
+"""
 
 from datetime import date
-from typing import Optional
 
 import polars as pl
-from sqlalchemy import create_engine, delete, func, select
-from sqlalchemy.engine import Engine
-from sqlalchemy.pool import QueuePool
+from sqlalchemy import delete, func, select
 
 from tickerlake.bronze.models import metadata, splits, stocks, tickers
-from tickerlake.config import settings
+from tickerlake.db import get_engine, init_schema  # noqa: F401
 from tickerlake.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# Singleton engine with connection pooling
-_engine: Optional[Engine] = None
 
-
-def get_engine() -> Engine:
-    """Get or create SQLAlchemy engine with connection pooling."""
-    global _engine
-    if _engine is None:
-        _engine = create_engine(
-            settings.postgres_url,
-            poolclass=QueuePool,
-            pool_size=5,
-            max_overflow=10,
-            echo=False,  # Set to True for SQL debugging
-        )
-        logger.info(f"🔗 Connected to Postgres at {settings.postgres_host}:{settings.postgres_port}")
-    return _engine
-
-
-def init_schema() -> None:
-    """Create all tables if they don't exist (idempotent)."""
-    engine = get_engine()
-    metadata.create_all(engine)
-    logger.info("✅ Database schema initialized")
-
-
-def bulk_load_stocks(df: pl.DataFrame) -> None:
-    """Fast bulk load using raw psycopg COPY BINARY (1-2M rows/sec).
-
-    Args:
-        df: Polars DataFrame with stocks data to load.
-    """
-    if len(df) == 0:
-        logger.warning("⚠️  No stock data to load")
-        return
-
-    logger.info(f"💾 Loading {len(df):,} stock records...")
-
-    engine = get_engine()
-
-    # Access raw psycopg connection from SQLAlchemy
-    with engine.raw_connection() as raw_conn:
-        with raw_conn.cursor().copy(
-            "COPY stocks (ticker, date, open, high, low, close, volume, transactions) "
-            "FROM STDIN (FORMAT BINARY)"
-        ) as copy:
-            # Stream Arrow batches for memory efficiency
-            for batch in df.to_arrow().to_batches(max_chunksize=50000):
-                copy.write_arrow(batch)
-
-        raw_conn.commit()
-
-    logger.info(f"✅ Loaded {len(df):,} stock records")
+# Re-export for backward compatibility (convenience)
+def init_bronze_schema() -> None:
+    """Initialize bronze layer database schema (idempotent). ✨"""
+    init_schema(metadata, "bronze")
 
 
 def get_existing_dates() -> list[str]:

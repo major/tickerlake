@@ -1,4 +1,4 @@
-"""Silver layer processing to adjust historical stock data for splits."""
+"""Silver layer processing to adjust historical stock data for splits. 🥈"""
 
 import polars as pl
 from sqlalchemy import select
@@ -6,7 +6,7 @@ from sqlalchemy import select
 from tickerlake.bronze.models import splits as bronze_splits
 from tickerlake.bronze.models import stocks as bronze_stocks
 from tickerlake.bronze.models import tickers as bronze_tickers
-from tickerlake.bronze.postgres import get_engine as get_bronze_engine
+from tickerlake.db import bulk_load, get_engine
 from tickerlake.logging_config import get_logger, setup_logging
 from tickerlake.schemas import validate_daily_aggregates, validate_indicators
 from tickerlake.silver.aggregates import aggregate_to_monthly, aggregate_to_weekly
@@ -14,17 +14,16 @@ from tickerlake.silver.indicators import (
     calculate_all_indicators,
     calculate_weinstein_stage,
 )
-from tickerlake.silver.postgres import (
-    bulk_load_daily_aggregates,
-    bulk_load_daily_indicators,
-    bulk_load_monthly_aggregates,
-    bulk_load_monthly_indicators,
-    bulk_load_ticker_metadata,
-    bulk_load_weekly_aggregates,
-    bulk_load_weekly_indicators,
-    clear_all_tables,
-    init_schema,
+from tickerlake.silver.models import (
+    daily_aggregates as daily_aggregates_table,
+    daily_indicators as daily_indicators_table,
+    monthly_aggregates as monthly_aggregates_table,
+    monthly_indicators as monthly_indicators_table,
+    ticker_metadata as ticker_metadata_table,
+    weekly_aggregates as weekly_aggregates_table,
+    weekly_indicators as weekly_indicators_table,
 )
+from tickerlake.silver.postgres import clear_all_tables, init_silver_schema
 
 setup_logging()
 logger = get_logger(__name__)
@@ -35,7 +34,7 @@ pl.Config.set_verbose(False)
 def read_splits() -> pl.DataFrame:
     """Read splits data from bronze Postgres layer."""
     logger.info("📥 Reading splits from bronze Postgres...")
-    engine = get_bronze_engine()
+    engine = get_engine()
 
     with engine.connect() as conn:
         result = conn.execute(select(bronze_splits))
@@ -48,7 +47,7 @@ def read_splits() -> pl.DataFrame:
 def read_tickers() -> pl.DataFrame:
     """Read tickers data from bronze Postgres layer."""
     logger.info("📥 Reading tickers from bronze Postgres...")
-    engine = get_bronze_engine()
+    engine = get_engine()
 
     with engine.connect() as conn:
         result = conn.execute(select(bronze_tickers))
@@ -71,7 +70,7 @@ def read_tickers() -> pl.DataFrame:
 def read_stocks() -> pl.DataFrame:
     """Read stock data from bronze Postgres layer."""
     logger.info("📥 Reading stocks from bronze Postgres...")
-    engine = get_bronze_engine()
+    engine = get_engine()
 
     with engine.connect() as conn:
         result = conn.execute(select(bronze_stocks))
@@ -176,8 +175,8 @@ def create_ticker_metadata(tickers_df: pl.DataFrame) -> pl.DataFrame:
         "cik",
     ])
 
-    # Write to silver Postgres
-    bulk_load_ticker_metadata(ticker_metadata)
+    # Write to silver Postgres 🚀
+    bulk_load(ticker_metadata_table, ticker_metadata)
 
     return ticker_metadata
 
@@ -187,7 +186,7 @@ def main() -> None:  # pragma: no cover
     logger.info("🚀 Starting silver layer processing...")
 
     # Initialize silver schema
-    init_schema()
+    init_silver_schema()
 
     # Clear all existing data for full rebuild
     clear_all_tables()
@@ -227,20 +226,20 @@ def main() -> None:  # pragma: no cover
     daily_df = apply_splits(stocks_df=stocks_df, splits_df=splits_df)
     daily_df = validate_daily_aggregates(daily_df)
 
-    # Write daily aggregates to Postgres
-    bulk_load_daily_aggregates(daily_df)
+    # Write daily aggregates to Postgres 🚀
+    bulk_load(daily_aggregates_table, daily_df)
 
     # Calculate and write daily indicators
     logger.info("📈 Calculating daily technical indicators...")
     daily_indicators = calculate_all_indicators(daily_df)
     daily_indicators = validate_indicators(daily_indicators)
-    bulk_load_daily_indicators(daily_indicators)
+    bulk_load(daily_indicators_table, daily_indicators)
 
     # Create weekly aggregates
     logger.info("📅 Creating weekly aggregates...")
     weekly_df = aggregate_to_weekly(daily_df)
     weekly_df = validate_daily_aggregates(weekly_df)
-    bulk_load_weekly_aggregates(weekly_df)
+    bulk_load(weekly_aggregates_table, weekly_df)
 
     # Calculate and write weekly indicators
     logger.info("📊 Calculating weekly technical indicators...")
@@ -258,19 +257,19 @@ def main() -> None:  # pragma: no cover
     weekly_indicators = weekly_with_stages.drop(["close", "volume"])
 
     weekly_indicators = validate_indicators(weekly_indicators, include_stages=True)
-    bulk_load_weekly_indicators(weekly_indicators)
+    bulk_load(weekly_indicators_table, weekly_indicators)
 
     # Create monthly aggregates
     logger.info("📆 Creating monthly aggregates...")
     monthly_df = aggregate_to_monthly(daily_df)
     monthly_df = validate_daily_aggregates(monthly_df)
-    bulk_load_monthly_aggregates(monthly_df)
+    bulk_load(monthly_aggregates_table, monthly_df)
 
     # Calculate and write monthly indicators
     logger.info("📊 Calculating monthly technical indicators...")
     monthly_indicators = calculate_all_indicators(monthly_df)
     monthly_indicators = validate_indicators(monthly_indicators)
-    bulk_load_monthly_indicators(monthly_indicators)
+    bulk_load(monthly_indicators_table, monthly_indicators)
 
     logger.info("✅ Silver layer processing complete! 🎉")
 

@@ -10,7 +10,7 @@ from sqlalchemy import (
     Integer,
     MetaData,
     PrimaryKeyConstraint,
-    SmallInt,
+    SmallInteger,
     String,
     Table,
 )
@@ -97,8 +97,8 @@ weekly_indicators = Table(
     Column("ma_30", DOUBLE_PRECISION),
     Column("price_vs_ma_pct", DOUBLE_PRECISION),
     Column("ma_slope_pct", DOUBLE_PRECISION),
-    Column("raw_stage", SmallInt),  # 1-4
-    Column("stage", SmallInt, nullable=False),  # 1-4
+    Column("raw_stage", SmallInteger),  # 1-4
+    Column("stage", SmallInteger, nullable=False),  # 1-4
     Column("stage_changed", Boolean, nullable=False),
     Column("weeks_in_stage", Integer, nullable=False),
     PrimaryKeyConstraint("ticker", "date"),
