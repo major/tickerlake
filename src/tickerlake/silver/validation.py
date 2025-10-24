@@ -5,10 +5,14 @@ from datetime import datetime
 import polars as pl
 from rich.console import Console
 from rich.table import Table
+from sqlalchemy import func, select
 
+from tickerlake.bronze.models import splits as bronze_splits
+from tickerlake.bronze.postgres import get_engine as get_bronze_engine
 from tickerlake.clients import setup_polygon_api_client
-from tickerlake.config import settings
 from tickerlake.logging_config import get_logger, setup_logging
+from tickerlake.silver.models import daily_aggregates, weekly_aggregates, weekly_indicators
+from tickerlake.silver.postgres import get_engine as get_silver_engine
 from tickerlake.utils import get_trading_days
 
 setup_logging()
@@ -17,16 +21,15 @@ console = Console()
 
 
 def get_last_trading_day() -> str:
-    """Get the most recent trading day from the silver data."""
-    df = (
-        pl.scan_parquet(
-            f"{settings.silver_storage_path}/stocks/daily_aggregates.parquet",
-        )
-        .select(pl.col("date").max())
-        .collect()
-    )
+    """Get the most recent trading day from the silver Postgres layer."""
+    engine = get_silver_engine()
 
-    return df["date"][0].strftime("%Y-%m-%d")
+    with engine.connect() as conn:
+        result = conn.execute(
+            select(func.max(daily_aggregates.c.date))
+        ).scalar()
+
+    return result.strftime("%Y-%m-%d")
 
 
 def get_high_volume_tickers(min_volume: int = 250_000, min_price: float = 20.0) -> list[str]:
@@ -38,23 +41,21 @@ def get_high_volume_tickers(min_volume: int = 250_000, min_price: float = 20.0) 
 
     Returns:
         List of ticker symbols meeting volume and price criteria.
-
     """
     last_trading_day = get_last_trading_day()
     logger.info(f"📊 Getting high volume tickers from {last_trading_day}...")
 
-    df = (
-        pl.scan_parquet(
-            f"{settings.silver_storage_path}/stocks/daily_aggregates.parquet",
-        )
-        .filter(pl.col("date") == pl.lit(last_trading_day).cast(pl.Date))
-        .filter(pl.col("volume") >= min_volume)
-        .filter(pl.col("close") >= min_price)
-        .select("ticker")
-        .collect()
-    )
+    engine = get_silver_engine()
 
-    tickers = df["ticker"].to_list()
+    with engine.connect() as conn:
+        result = conn.execute(
+            select(daily_aggregates.c.ticker)
+            .where(daily_aggregates.c.date == datetime.strptime(last_trading_day, "%Y-%m-%d").date())
+            .where(daily_aggregates.c.volume >= min_volume)
+            .where(daily_aggregates.c.close >= min_price)
+        )
+        tickers = [row[0] for row in result]
+
     logger.info(f"✅ Found {len(tickers)} tickers with volume >= {min_volume:,} and price >= ${min_price:.2f}")
     return tickers
 
@@ -87,13 +88,11 @@ def build_split_list_to_check(num_splits: int = 25) -> pl.DataFrame:
     from datetime import timedelta
 
     # Get the last trading day from silver data
-    silver_max_date = (
-        pl.scan_parquet(
-            f"{settings.silver_storage_path}/stocks/daily_aggregates.parquet",
-        )
-        .select(pl.col("date").max())
-        .collect()["date"][0]
-    )
+    engine = get_silver_engine()
+    with engine.connect() as conn:
+        silver_max_date = conn.execute(
+            select(func.max(daily_aggregates.c.date))
+        ).scalar()
 
     # Calculate date range: past 2 years, excluding last 5 trading days
     two_years_ago = (datetime.now() - timedelta(days=730)).date()
@@ -123,16 +122,16 @@ def build_split_list_to_check(num_splits: int = 25) -> pl.DataFrame:
         f"(past 2 years, excluding last 5 trading days)..."
     )
 
-    # Then get splits for those tickers within the date range
-    df = (
-        pl.scan_parquet(
-            f"{settings.bronze_storage_path}/splits/splits.parquet",
+    # Then get splits for those tickers within the date range from bronze Postgres
+    bronze_engine = get_bronze_engine()
+    with bronze_engine.connect() as conn:
+        result = conn.execute(
+            select(bronze_splits)
+            .where(bronze_splits.c.ticker.in_(high_volume_tickers))
+            .where(bronze_splits.c.execution_date >= cutoff_date_min)
+            .where(bronze_splits.c.execution_date <= cutoff_date_max)
         )
-        .filter(pl.col("ticker").is_in(high_volume_tickers))
-        .filter(pl.col("execution_date") >= pl.lit(cutoff_date_min))
-        .filter(pl.col("execution_date") <= pl.lit(cutoff_date_max))
-        .collect()
-    )
+        df = pl.DataFrame(result.fetchall(), schema=["ticker", "execution_date", "split_from", "split_to"])
 
     if df.is_empty():
         logger.warning("⚠️  No splits found for high volume tickers in date range!")
@@ -235,7 +234,7 @@ def get_official_stock_prices_around_split(
 def get_silver_stock_prices_around_split(
     ticker: str, split_date: str
 ) -> dict[str, float | None]:
-    """Retrieve silver stock prices around split date.
+    """Retrieve silver stock prices around split date from Postgres.
 
     Args:
         ticker: Stock ticker symbol.
@@ -243,7 +242,6 @@ def get_silver_stock_prices_around_split(
 
     Returns:
         Dictionary mapping date keys ('before', 'split', 'after') to closing prices.
-
     """
     # Get actual trading days around the split
     trading_dates = get_trading_days_around_split(split_date)
@@ -253,26 +251,23 @@ def get_silver_stock_prices_around_split(
     if not dates_list:
         return {}
 
-    start_date = min(dates_list)
-    end_date = max(dates_list)
+    start_date = datetime.strptime(min(dates_list), "%Y-%m-%d").date()
+    end_date = datetime.strptime(max(dates_list), "%Y-%m-%d").date()
 
-    df = (
-        pl.scan_parquet(
-            f"{settings.silver_storage_path}/stocks/daily_aggregates.parquet",
+    engine = get_silver_engine()
+    with engine.connect() as conn:
+        result = conn.execute(
+            select(daily_aggregates.c.date, daily_aggregates.c.close)
+            .where(daily_aggregates.c.ticker == ticker)
+            .where(daily_aggregates.c.date >= start_date)
+            .where(daily_aggregates.c.date <= end_date)
         )
-        .filter(
-            (pl.col("ticker") == ticker)
-            & (pl.col("date") >= pl.lit(start_date).cast(pl.Date))
-            & (pl.col("date") <= pl.lit(end_date).cast(pl.Date))
-        )
-        .select(["date", "close"])
-        .collect()
-    )
+        rows = result.fetchall()
 
     # Build price lookup
     price_lookup = {
-        row["date"].strftime("%Y-%m-%d"): row["close"]
-        for row in df.select(["date", "close"]).iter_rows(named=True)
+        row[0].strftime("%Y-%m-%d"): float(row[1])
+        for row in rows
     }
 
     # Map to before/split/after structure
@@ -522,15 +517,26 @@ def validate_hvc_calculations() -> bool:
         },
     ]
 
-    # Read weekly indicators
-    df = pl.scan_parquet(
-        f"{settings.silver_storage_path}/stocks/weekly_indicators.parquet",
-    ).collect()
+    # Read weekly indicators from Postgres
+    engine = get_silver_engine()
+    with engine.connect() as conn:
+        # Read weekly indicators
+        ind_result = conn.execute(select(weekly_indicators))
+        df = pl.DataFrame(
+            ind_result.fetchall(),
+            schema=[
+                "ticker", "date", "sma_20", "sma_50", "sma_200", "atr_14",
+                "volume_ma_20", "volume_ratio", "is_hvc", "ma_30", "price_vs_ma_pct",
+                "ma_slope_pct", "raw_stage", "stage", "stage_changed", "weeks_in_stage"
+            ]
+        )
 
-    # Read weekly aggregates for volume
-    agg_df = pl.scan_parquet(
-        f"{settings.silver_storage_path}/stocks/weekly_aggregates.parquet",
-    ).collect()
+        # Read weekly aggregates for volume
+        agg_result = conn.execute(select(weekly_aggregates))
+        agg_df = pl.DataFrame(
+            agg_result.fetchall(),
+            schema=["ticker", "date", "open", "high", "low", "close", "volume", "transactions"]
+        )
 
     # Join to get volume with indicators
     df = df.join(

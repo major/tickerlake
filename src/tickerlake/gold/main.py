@@ -18,7 +18,7 @@ def get_duckdb_path() -> str:
     Returns:
         Path to gold.duckdb file.
     """
-    db_path = Path(settings.silver_storage_path).parent / "gold" / "gold.duckdb"
+    db_path = Path(settings.data_root_path) / "gold" / "gold.duckdb"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return str(db_path)
 

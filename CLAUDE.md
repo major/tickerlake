@@ -7,21 +7,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Development
 - `uv sync` - Install all dependencies
 - `uv run bronze` - Run the bronze layer (data ingestion to Postgres)
-- `uv run silver` - Run the silver layer (incremental processing by default)
+- `uv run silver` - Run the silver layer (full rebuild, processes all data)
 - `uv run gold` - Run the gold layer (analytics and exports)
 - `uv run publish` - Run the publish layer (generate and publish Hugo blog reports)
 - `uv run clean` - Reset bronze layer by dropping all Postgres tables
 
-### Silver Layer Modes
-- **Incremental mode** (default): Processes only new data since last run
-  - Checks max date in Delta table
-  - Only reads new bronze data
-  - Appends to existing Delta tables
-  - Rebuilds weekly/monthly aggregates from full dataset
-
-- **Full rebuild mode**: Reprocesses all data from scratch
-  - Use when schema changes or data corrections needed
-  - Add `full_rebuild=True` parameter to `main()` function
+### Silver Layer Mode
+- **Full rebuild mode** (only mode): Reprocesses all data from scratch on each run
+  - Clears all silver layer Postgres tables before processing
+  - Reads all data from bronze Postgres tables
+  - Simpler architecture, easier to maintain
+  - Suitable for scheduled daily runs
 
 ### Gold Layer Usage
 
@@ -70,24 +66,26 @@ TickerLake follows a medallion architecture for financial data processing:
   - Schema initialization on first run (idempotent)
   - Three tables: `stocks` (daily OHLCV), `tickers` (reference data), `splits` (stock splits)
 
-- **Silver Layer** (`src/tickerlake/silver/`): Cleaned and enriched data using Delta Lake
-  - Uses Delta tables for ACID transactions and efficient incremental updates
+- **Silver Layer** (`src/tickerlake/silver/`): Cleaned and enriched data using Postgres
+  - Stores data in Postgres database using SQLAlchemy + psycopg COPY BINARY (1-2M rows/sec)
   - Applies split adjustments to historical price data
   - Calculates volume ratios and technical indicators
-  - Incremental mode: Only processes new data since last run
-  - Full rebuild mode: Reprocesses all data from bronze layer
+  - Full rebuild mode: Reprocesses all data from bronze Postgres on each run
   - Automatically generates weekly and monthly aggregates
+  - Seven tables: `silver_ticker_metadata`, `silver_daily_aggregates`, `silver_daily_indicators`, `silver_weekly_aggregates`, `silver_weekly_indicators`, `silver_monthly_aggregates`, `silver_monthly_indicators`
 
 - **Gold Layer** (`src/tickerlake/gold/`): DuckDB views for analytics and querying
+  - Reads data from silver Postgres tables via DuckDB's postgres_scanner extension
   - Creates pure views (query-time joins) for always-fresh data
-  - **Ticker Metadata**: Dimension table with CS/ETF ticker info from bronze layer
-  - **Enriched Views**: Joins OHLCV aggregates + technical indicators + ticker metadata
+  - **Enriched Views**: Joins OHLCV aggregates + technical indicators + ticker metadata from Postgres
     - `daily_enriched`, `weekly_enriched`, `monthly_enriched`
   - **Analysis Views**: Specialized views for common patterns
     - `recent_hvcs`: High volume closes (3x+ avg volume) from last 30 days
     - `liquid_stocks`: CS stocks with 200K+ volume, $5+ price; ETFs with 50K+ volume
     - `trending_stocks`: Stocks with price above all SMAs (20/50/200)
     - `latest_prices`: Most recent data for each ticker
+    - `latest_stage`: Most recent Weinstein stage for each ticker
+    - `stage_2_stocks`: Stocks currently in Stage 2 (Advancing)
   - Python helper functions for ad-hoc queries and backtesting
   - Persistent DuckDB database at `./data/gold/gold.duckdb`
 
@@ -104,8 +102,8 @@ TickerLake follows a medallion architecture for financial data processing:
 ### Configuration Management
 - Uses Pydantic Settings with `.env` file support (`src/tickerlake/config.py`)
 - All sensitive credentials handled as `SecretStr` types
-- Postgres database for bronze layer (host, port, database, user, password, sslmode)
-- Local filesystem storage in `./data/silver` directory for Delta Lake tables
+- Postgres database for bronze and silver layers (host, port, database, user, password, sslmode)
+- Local filesystem storage in `./data/gold` directory for DuckDB database
 - Default data window: 5 years from current date (configurable via `data_start_year`)
 - TLS/SSL enabled by default for Postgres connections (`sslmode=require`)
 
@@ -122,26 +120,27 @@ TickerLake follows a medallion architecture for financial data processing:
 - Raw psycopg COPY BINARY for bulk inserts (1-2M rows/sec performance)
 - Connection pooling via SQLAlchemy (pool_size=5, max_overflow=10)
 
-**Silver Storage (Local Filesystem)**:
-- Silver path structure: `./data/silver/{table_name}/_delta_log/...`
-- Uses Polars for efficient Delta Lake I/O with local filesystem
+**Silver Storage (Postgres)**:
+- Same Postgres database as bronze layer with seven tables
+- Tables: `silver_ticker_metadata`, `silver_daily_aggregates`, `silver_daily_indicators`, `silver_weekly_aggregates`, `silver_weekly_indicators`, `silver_monthly_aggregates`, `silver_monthly_indicators`
+- SQLAlchemy Core for schema management
+- Raw psycopg COPY BINARY for bulk inserts (1-2M rows/sec performance)
+- Indexes on ticker, date, and stage columns for fast queries
+- Full rebuild on each run (clears all tables before processing)
 
-**Delta Lake Integration** (`src/tickerlake/delta_utils.py`):
-- `write_delta_table()`: Write DataFrames to Delta tables with overwrite/append modes
-- `read_delta_table()`: Read Delta tables into Polars DataFrames
-- `scan_delta_table()`: Lazy scanning for query optimization
-- `merge_to_delta_table()`: Upsert operations for reference data
-- `get_max_date_from_delta()`: Track incremental processing state
-- `optimize_delta_table()`: Compact small files for better performance
-- `vacuum_delta_table()`: Clean up old file versions
+**Gold Storage (DuckDB + Postgres)**:
+- Persistent DuckDB database at `./data/gold/gold.duckdb`
+- Reads from silver Postgres tables via DuckDB's postgres_scanner extension
+- Creates views with query-time joins for always-fresh data
+- No data duplication (views query Postgres directly)
 
 ### Data Sources
 - **Polygon.io**: Primary source for US stock market data (via grouped daily aggregates API)
 - **pandas_market_calendars**: NYSE trading calendar and hours
 - **Storage**:
   - Bronze: Postgres database (TLS encrypted)
-  - Silver: Local filesystem in `./data/silver` directory (Delta Lake)
-  - Gold: Local filesystem in `./data/gold` directory (DuckDB)
+  - Silver: Postgres database (same as bronze, TLS encrypted)
+  - Gold: DuckDB database at `./data/gold/gold.duckdb` (reads from Postgres via postgres_scanner)
 
 **Important Polygon.io API Limitations**:
 - ⚠️ **Data Availability**: Data from `get_grouped_daily_aggs()` is typically available ~30 minutes after market close
@@ -156,7 +155,7 @@ TickerLake follows a medallion architecture for financial data processing:
 # Polygon.io API (required)
 POLYGON_API_KEY=your_api_key
 
-# Postgres Database (required for bronze layer)
+# Postgres Database (required for bronze and silver layers)
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_DATABASE=tickerlake
@@ -170,11 +169,11 @@ GITHUB_PAT=your_github_personal_access_token
 
 Notes:
 - `POLYGON_API_KEY` is used for accessing Polygon.io's grouped daily aggregates API
-- `POSTGRES_*` variables configure the Postgres connection for bronze layer storage
+- `POSTGRES_*` variables configure the Postgres connection for both bronze and silver layer storage
 - `POSTGRES_SSLMODE=require` enables TLS encryption by default (recommended)
 - `GITHUB_PAT` is used for pushing report updates to the Hugo blog repository
 
-The bronze layer automatically identifies and downloads missing trading days on each run, making it safe for scheduled execution.
+The bronze layer automatically identifies and downloads missing trading days on each run, making it safe for scheduled execution. The silver layer performs a full rebuild on each run for simplicity.
 
 ## Code Standards
 

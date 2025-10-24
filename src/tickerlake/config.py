@@ -21,8 +21,8 @@ class Settings(BaseSettings):
     postgres_password: SecretStr = SecretStr("")
     postgres_sslmode: str = "require"  # require/verify-ca/verify-full/disable
 
-    # Local storage paths
-    silver_storage_path: str = "./data/silver"
+    # Local storage paths (for gold layer only)
+    data_root_path: str = "./data"
 
     # Technical indicators configuration
     hvc_volume_ratio_threshold: float = 3.0

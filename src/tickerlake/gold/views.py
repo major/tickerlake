@@ -1,7 +1,5 @@
 """DuckDB view definitions for enriched data analysis."""
 
-from pathlib import Path
-
 import duckdb
 import polars as pl
 
@@ -11,35 +9,31 @@ from tickerlake.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-def get_data_path(filename: str) -> str:
-    """Get absolute path to a data file.
-
-    Args:
-        filename: Name of the file (e.g., 'daily_aggregates.parquet').
-
-    Returns:
-        Absolute path to the file.
-    """
-    if "ticker_metadata" in filename:
-        return str(Path(f"{settings.silver_storage_path}/{filename}").resolve())
-    return str(Path(f"{settings.silver_storage_path}/stocks/{filename}").resolve())
-
-
 def create_enriched_view(
     con: duckdb.DuckDBPyConnection, timeframe: str = "daily"
 ) -> None:
     """Create enriched view joining aggregates, indicators, and ticker metadata.
+
+    Reads data from Postgres silver layer tables via postgres_scanner extension.
 
     Args:
         con: DuckDB connection.
         timeframe: Timeframe for the view ('daily', 'weekly', or 'monthly').
     """
     view_name = f"{timeframe}_enriched"
-    aggs_path = get_data_path(f"{timeframe}_aggregates.parquet")
-    indicators_path = get_data_path(f"{timeframe}_indicators.parquet")
-    metadata_path = get_data_path("ticker_metadata.parquet")
+    aggs_table = f"silver_{timeframe}_aggregates"
+    indicators_table = f"silver_{timeframe}_indicators"
+    metadata_table = "silver_ticker_metadata"
 
     logger.info(f"Creating view: {view_name}")
+
+    # Install and load postgres_scanner extension if not already loaded
+    con.execute("INSTALL postgres_scanner")
+    con.execute("LOAD postgres_scanner")
+
+    # Attach Postgres database
+    postgres_conn_str = settings.postgres_url
+    con.execute(f"ATTACH '{postgres_conn_str}' AS pg (TYPE POSTGRES)")
 
     # Base columns for all timeframes
     base_columns = """
@@ -59,7 +53,7 @@ def create_enriched_view(
             i.volume_ratio,
             i.is_hvc,
             t.name,
-            t.type,
+            t.ticker_type as type,
             t.primary_exchange,
             t.active,
             t.cik"""
@@ -77,15 +71,15 @@ def create_enriched_view(
     else:
         columns = base_columns
 
-    # Create the enriched view with all data joined
+    # Create the enriched view with all data joined from Postgres
     con.execute(f"""
         CREATE OR REPLACE VIEW {view_name} AS
         SELECT
 {columns}
-        FROM read_parquet('{aggs_path}') a
-        JOIN read_parquet('{indicators_path}') i
+        FROM pg.{aggs_table} a
+        JOIN pg.{indicators_table} i
             ON a.ticker = i.ticker AND a.date = i.date
-        JOIN read_parquet('{metadata_path}') t
+        JOIN pg.{metadata_table} t
             ON a.ticker = t.ticker
         ORDER BY a.ticker, a.date
     """)

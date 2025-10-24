@@ -1,16 +1,29 @@
 """Silver layer processing to adjust historical stock data for splits."""
 
-from pathlib import Path
-
 import polars as pl
+from sqlalchemy import select
 
-from tickerlake.config import settings
+from tickerlake.bronze.models import splits as bronze_splits
+from tickerlake.bronze.models import stocks as bronze_stocks
+from tickerlake.bronze.models import tickers as bronze_tickers
+from tickerlake.bronze.postgres import get_engine as get_bronze_engine
 from tickerlake.logging_config import get_logger, setup_logging
 from tickerlake.schemas import validate_daily_aggregates, validate_indicators
 from tickerlake.silver.aggregates import aggregate_to_monthly, aggregate_to_weekly
 from tickerlake.silver.indicators import (
     calculate_all_indicators,
     calculate_weinstein_stage,
+)
+from tickerlake.silver.postgres import (
+    bulk_load_daily_aggregates,
+    bulk_load_daily_indicators,
+    bulk_load_monthly_aggregates,
+    bulk_load_monthly_indicators,
+    bulk_load_ticker_metadata,
+    bulk_load_weekly_aggregates,
+    bulk_load_weekly_indicators,
+    clear_all_tables,
+    init_schema,
 )
 
 setup_logging()
@@ -20,34 +33,61 @@ pl.Config.set_verbose(False)
 
 
 def read_splits() -> pl.DataFrame:
-    """Read splits data from bronze layer."""
-    logger.info("Reading splits data...")
-    splits_parquet = f"{settings.bronze_storage_path}/splits/splits.parquet"
-    df = pl.read_parquet(splits_parquet)
+    """Read splits data from bronze Postgres layer."""
+    logger.info("📥 Reading splits from bronze Postgres...")
+    engine = get_bronze_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(select(bronze_splits))
+        df = pl.DataFrame(result.fetchall(), schema=["ticker", "execution_date", "split_from", "split_to"])
+
+    logger.info(f"✅ Loaded {len(df):,} splits")
     return df
 
 
 def read_tickers() -> pl.DataFrame:
-    """Read tickers data from bronze layer."""
-    logger.info("Reading tickers data...")
-    tickers_parquet = f"{settings.bronze_storage_path}/tickers/tickers.parquet"
-    df = pl.read_parquet(tickers_parquet)
+    """Read tickers data from bronze Postgres layer."""
+    logger.info("📥 Reading tickers from bronze Postgres...")
+    engine = get_bronze_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(select(bronze_tickers))
+        # Map column names from bronze to expected schema
+        rows = result.fetchall()
+        df = pl.DataFrame(
+            rows,
+            schema=[
+                "ticker", "name", "type", "active", "locale", "market",
+                "primary_exchange", "currency_name", "currency_symbol", "cik",
+                "composite_figi", "share_class_figi", "base_currency_name",
+                "base_currency_symbol", "delisted_utc", "last_updated_utc"
+            ]
+        )
+
+    logger.info(f"✅ Loaded {len(df):,} tickers")
     return df
 
 
-def read_stocks_lazy() -> pl.LazyFrame:
-    """Read stock data lazily from bronze layer."""
-    logger.info("Reading stocks data lazily...")
-    stocks_parquet = f"{settings.bronze_storage_path}/stocks/date=*/*.parquet"
-    lf = pl.scan_parquet(stocks_parquet)
-    return lf
+def read_stocks() -> pl.DataFrame:
+    """Read stock data from bronze Postgres layer."""
+    logger.info("📥 Reading stocks from bronze Postgres...")
+    engine = get_bronze_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(select(bronze_stocks))
+        df = pl.DataFrame(
+            result.fetchall(),
+            schema=["ticker", "date", "open", "high", "low", "close", "volume", "transactions"]
+        )
+
+    logger.info(f"✅ Loaded {len(df):,} stock records")
+    return df
 
 
-def apply_splits_lazy(
-    stocks_lf: pl.LazyFrame,
+def apply_splits(
+    stocks_df: pl.DataFrame,
     splits_df: pl.DataFrame,
-    output_path: str,
-) -> None:
+) -> pl.DataFrame:
     """Apply split adjustments to stock data.
 
     For each stock date, multiplies prices by the ratio (split_from/split_to) for
@@ -55,17 +95,19 @@ def apply_splits_lazy(
     match current split-adjusted prices.
 
     Args:
-        stocks_lf: LazyFrame with stock data.
+        stocks_df: DataFrame with stock data.
         splits_df: DataFrame with splits data.
-        output_path: Path to write adjusted data.
+
+    Returns:
+        DataFrame with split-adjusted OHLCV data.
     """
-    logger.info("Applying split adjustments...")
+    logger.info("⚙️  Applying split adjustments...")
 
     # Join stocks with all splits for that ticker
     # Then calculate adjustment factor: for each date, apply split_from/split_to
     # if the split occurred AFTER that date
-    adjusted_lazy = (
-        stocks_lf
+    adjusted_df = (
+        stocks_df.lazy()
         .join(
             splits_df.select(["ticker", "execution_date", "split_from", "split_to"]).lazy(),
             on="ticker",
@@ -99,28 +141,28 @@ def apply_splits_lazy(
             .cast(pl.UInt64)
             .alias("volume"),
             (pl.col("transactions") / pl.col("total_adjustment"))
-            .cast(pl.UInt32)
+            .cast(pl.UInt64)
             .alias("transactions"),
         ])
         .drop("total_adjustment")
         .select(["ticker", "date", "open", "high", "low", "close", "volume", "transactions"])
+        .collect()
     )
 
-    # Ensure output directory exists
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-
-    # Stream to output without collecting
-    logger.info("Writing adjusted stock data to Parquet...")
-    adjusted_lazy.sink_parquet(output_path)
+    logger.info(f"✅ Applied split adjustments to {len(adjusted_df):,} records")
+    return adjusted_df
 
 
-def create_ticker_metadata(tickers_df: pl.DataFrame) -> None:
+def create_ticker_metadata(tickers_df: pl.DataFrame) -> pl.DataFrame:
     """Create ticker metadata dimension table in silver layer.
 
     Args:
         tickers_df: DataFrame with ticker data from bronze layer.
+
+    Returns:
+        DataFrame with ticker metadata for CS/ETF tickers.
     """
-    logger.info("Creating ticker metadata dimension table...")
+    logger.info("📊 Creating ticker metadata dimension table...")
 
     # Filter to CS/ETF and select relevant columns
     ticker_metadata = tickers_df.filter(
@@ -134,29 +176,33 @@ def create_ticker_metadata(tickers_df: pl.DataFrame) -> None:
         "cik",
     ])
 
-    # Write to silver layer
-    metadata_path = f"{settings.silver_storage_path}/ticker_metadata.parquet"
-    Path(metadata_path).parent.mkdir(parents=True, exist_ok=True)
-    ticker_metadata.write_parquet(metadata_path)
+    # Write to silver Postgres
+    bulk_load_ticker_metadata(ticker_metadata)
 
-    logger.info(f"✅ Wrote {len(ticker_metadata)} ticker metadata records to {metadata_path}")
+    return ticker_metadata
 
 
 def main() -> None:  # pragma: no cover
     """Main function to adjust historical stock data for splits."""
+    logger.info("🚀 Starting silver layer processing...")
+
+    # Initialize silver schema
+    init_schema()
+
+    # Clear all existing data for full rebuild
+    clear_all_tables()
+
     # Read tickers and filter to only CS (Common Stock) and ETF types
     tickers_df = read_tickers()
 
     # Create ticker metadata dimension table
-    create_ticker_metadata(tickers_df)
+    ticker_metadata = create_ticker_metadata(tickers_df)
 
-    valid_tickers = tickers_df.filter(
-        pl.col("type").is_in(["CS", "ETF"])
-    ).select("ticker")
+    valid_tickers = ticker_metadata.select("ticker")
 
     logger.info(
-        f"Filtering to {len(valid_tickers)} tickers with type CS or ETF "
-        f"(from {len(tickers_df)} total tickers)"
+        f"🎯 Filtering to {len(valid_tickers):,} tickers with type CS or ETF "
+        f"(from {len(tickers_df):,} total tickers)"
     )
 
     # Read splits and stocks
@@ -167,49 +213,41 @@ def main() -> None:  # pragma: no cover
     original_splits_count = len(splits_df)
     splits_df = splits_df.join(valid_tickers, on="ticker", how="semi")
     logger.info(
-        f"Filtered splits to {len(splits_df)} splits for CS/ETF tickers "
-        f"(from {original_splits_count} total splits)"
+        f"✂️  Filtered splits to {len(splits_df):,} splits for CS/ETF tickers "
+        f"(from {original_splits_count:,} total splits)"
     )
 
-    stocks_lf = read_stocks_lazy()
+    stocks_df = read_stocks()
 
     # Filter stocks to only valid ticker types using semi-join
-    stocks_lf = stocks_lf.join(valid_tickers.lazy(), on="ticker", how="semi")
+    stocks_df = stocks_df.join(valid_tickers, on="ticker", how="semi")
+    logger.info(f"📊 Filtered to {len(stocks_df):,} stock records for CS/ETF tickers")
 
-    # Process all years at once - write daily aggregates (split-adjusted OHLCV)
-    daily_path = f"{settings.silver_storage_path}/stocks/daily_aggregates.parquet"
-    apply_splits_lazy(
-        stocks_lf=stocks_lf,
-        splits_df=splits_df,
-        output_path=daily_path,
-    )
+    # Apply split adjustments to create daily aggregates
+    daily_df = apply_splits(stocks_df=stocks_df, splits_df=splits_df)
+    daily_df = validate_daily_aggregates(daily_df)
 
-    # Read back the daily aggregates to calculate indicators and create weekly/monthly data
-    logger.info("Reading daily aggregates for indicator and aggregate calculations...")
-    daily_df = pl.read_parquet(daily_path)
+    # Write daily aggregates to Postgres
+    bulk_load_daily_aggregates(daily_df)
 
     # Calculate and write daily indicators
-    logger.info("Calculating daily technical indicators...")
+    logger.info("📈 Calculating daily technical indicators...")
     daily_indicators = calculate_all_indicators(daily_df)
     daily_indicators = validate_indicators(daily_indicators)
-    daily_indicators_path = f"{settings.silver_storage_path}/stocks/daily_indicators.parquet"
-    logger.info(f"Writing daily indicators to {daily_indicators_path}...")
-    daily_indicators.write_parquet(daily_indicators_path)
+    bulk_load_daily_indicators(daily_indicators)
 
     # Create weekly aggregates
-    logger.info("Creating weekly aggregates...")
+    logger.info("📅 Creating weekly aggregates...")
     weekly_df = aggregate_to_weekly(daily_df)
     weekly_df = validate_daily_aggregates(weekly_df)
-    weekly_path = f"{settings.silver_storage_path}/stocks/weekly_aggregates.parquet"
-    logger.info(f"Writing weekly aggregates to {weekly_path}...")
-    weekly_df.write_parquet(weekly_path)
+    bulk_load_weekly_aggregates(weekly_df)
 
     # Calculate and write weekly indicators
-    logger.info("Calculating weekly technical indicators...")
+    logger.info("📊 Calculating weekly technical indicators...")
     weekly_indicators = calculate_all_indicators(weekly_df)
 
     # Add Weinstein Stage Analysis for weekly data (needs close prices)
-    logger.info("Adding Weinstein Stage Analysis to weekly indicators...")
+    logger.info("🎯 Adding Weinstein Stage Analysis to weekly indicators...")
     # Join close prices back for Weinstein calculation
     weekly_with_close = weekly_df.select(["ticker", "date", "close", "volume"]).join(
         weekly_indicators, on=["ticker", "date"], how="inner"
@@ -220,27 +258,21 @@ def main() -> None:  # pragma: no cover
     weekly_indicators = weekly_with_stages.drop(["close", "volume"])
 
     weekly_indicators = validate_indicators(weekly_indicators, include_stages=True)
-    weekly_indicators_path = f"{settings.silver_storage_path}/stocks/weekly_indicators.parquet"
-    logger.info(f"Writing weekly indicators to {weekly_indicators_path}...")
-    weekly_indicators.write_parquet(weekly_indicators_path)
+    bulk_load_weekly_indicators(weekly_indicators)
 
     # Create monthly aggregates
-    logger.info("Creating monthly aggregates...")
+    logger.info("📆 Creating monthly aggregates...")
     monthly_df = aggregate_to_monthly(daily_df)
     monthly_df = validate_daily_aggregates(monthly_df)
-    monthly_path = f"{settings.silver_storage_path}/stocks/monthly_aggregates.parquet"
-    logger.info(f"Writing monthly aggregates to {monthly_path}...")
-    monthly_df.write_parquet(monthly_path)
+    bulk_load_monthly_aggregates(monthly_df)
 
     # Calculate and write monthly indicators
-    logger.info("Calculating monthly technical indicators...")
+    logger.info("📊 Calculating monthly technical indicators...")
     monthly_indicators = calculate_all_indicators(monthly_df)
     monthly_indicators = validate_indicators(monthly_indicators)
-    monthly_indicators_path = f"{settings.silver_storage_path}/stocks/monthly_indicators.parquet"
-    logger.info(f"Writing monthly indicators to {monthly_indicators_path}...")
-    monthly_indicators.write_parquet(monthly_indicators_path)
+    bulk_load_monthly_indicators(monthly_indicators)
 
-    logger.info("Silver layer processing complete! ✅")
+    logger.info("✅ Silver layer processing complete! 🎉")
 
 
 if __name__ == "__main__":  # pragma: no cover
