@@ -12,10 +12,10 @@ logger = get_logger(__name__)
 
 
 def bulk_load(table: Table, df: pl.DataFrame) -> None:
-    """Fast bulk load using raw psycopg COPY BINARY (1-2M rows/sec). ⚡
+    """Fast bulk load using SQLAlchemy bulk insert. ⚡
 
     This generic function replaces all the layer-specific bulk load functions
-    by dynamically building the COPY statement from the table schema.
+    by using SQLAlchemy's bulk insert operations.
 
     Args:
         table: SQLAlchemy Table object (contains schema info).
@@ -29,24 +29,19 @@ def bulk_load(table: Table, df: pl.DataFrame) -> None:
         logger.warning(f"⚠️  No data to load for {table.name}")
         return
 
-    logger.info(f"💾 Loading {len(df):,} records into {table.name}...")
-
-    # Build COPY statement dynamically from table columns
-    column_names = ", ".join([col.name for col in table.columns])
-    copy_stmt = f"COPY {table.name} ({column_names}) FROM STDIN (FORMAT BINARY)"
+    # Convert Polars DataFrame to list of dictionaries for SQLAlchemy
+    # Using Polars' native method for best performance 🚀
+    records = df.to_dicts()
 
     engine = get_engine()
 
-    # Access raw psycopg connection from SQLAlchemy 🔌
-    with engine.raw_connection() as raw_conn:
-        with raw_conn.cursor().copy(copy_stmt) as copy:
-            # Stream Arrow batches for memory efficiency (50k chunks) 🚀
-            for batch in df.to_arrow().to_batches(max_chunksize=50000):
-                copy.write_arrow(batch)
-
-        raw_conn.commit()
-
-    logger.info(f"✅ Loaded {len(df):,} records into {table.name}")
+    # Use SQLAlchemy's bulk insert with executemany (10k chunks for optimal performance)
+    with engine.begin() as conn:
+        # Process in chunks to avoid memory issues with large datasets
+        chunk_size = 10000
+        for i in range(0, len(records), chunk_size):
+            chunk = records[i : i + chunk_size]
+            conn.execute(table.insert(), chunk)
 
 
 def execute_query(query: Any, scalar: bool = False) -> Any:

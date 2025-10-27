@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 
-from tickerlake.gold.main import main as gold_main
+from tickerlake.gold.main import initialize_gold_layer
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -15,7 +15,7 @@ def test_view_creation() -> None:
     print("🧪 Testing gold layer view creation...")
 
     # Create views (in-memory for testing)
-    con = gold_main(in_memory=True)
+    con = initialize_gold_layer(in_memory=True)
 
     # List all views
     views = con.execute("""

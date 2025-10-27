@@ -24,9 +24,6 @@ class Settings(BaseSettings):
     # Local storage paths (for gold layer only)
     data_root_path: str = "./data"
 
-    # Technical indicators configuration
-    hvc_volume_ratio_threshold: float = 3.0
-
     # Index holdings data source URLs
     etfs: list = ["SPY", "MDY", "SPSM", "QQQ", "IWM"]
     spy_holdings_source: str = "https://www.ssga.com/us/en/individual/library-content/products/fund-data/etfs/us/holdings-daily-us-en-spy.xlsx"

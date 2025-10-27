@@ -50,21 +50,24 @@ def upsert_tickers(df: pl.DataFrame) -> None:
 
     logger.info(f"💾 Loading {len(df):,} tickers...")
 
+    # Rename 'type' column to 'ticker_type' to match database schema
+    df = df.rename({"type": "ticker_type"})
+
+    # Convert to list of dictionaries for bulk insert
+    records = df.to_dicts()
+
     engine = get_engine()
 
+    # Delete and insert in the same transaction to avoid conflicts
     with engine.begin() as conn:
         # Delete all existing tickers
         conn.execute(delete(tickers))
 
-        # Bulk insert via raw COPY
-        raw_conn = conn.connection
-        with raw_conn.cursor().copy(
-            "COPY tickers (ticker, name, ticker_type, active, locale, market, "
-            "primary_exchange, currency_name, currency_symbol, cik, composite_figi, "
-            "share_class_figi, base_currency_name, base_currency_symbol, "
-            "delisted_utc, last_updated_utc) FROM STDIN (FORMAT BINARY)"
-        ) as copy:
-            copy.write_arrow(df.to_arrow())
+        # Bulk insert in chunks
+        chunk_size = 10000
+        for i in range(0, len(records), chunk_size):
+            chunk = records[i : i + chunk_size]
+            conn.execute(tickers.insert(), chunk)
 
     logger.info(f"✅ Loaded {len(df):,} tickers")
 
@@ -81,19 +84,21 @@ def upsert_splits(df: pl.DataFrame) -> None:
 
     logger.info(f"💾 Loading {len(df):,} splits...")
 
+    # Convert to list of dictionaries for bulk insert
+    records = df.to_dicts()
+
     engine = get_engine()
 
+    # Delete and insert in the same transaction to avoid conflicts
     with engine.begin() as conn:
         # Delete all existing splits
         conn.execute(delete(splits))
 
-        # Bulk insert via raw COPY
-        raw_conn = conn.connection
-        with raw_conn.cursor().copy(
-            "COPY splits (ticker, execution_date, split_from, split_to) "
-            "FROM STDIN (FORMAT BINARY)"
-        ) as copy:
-            copy.write_arrow(df.to_arrow())
+        # Bulk insert in chunks
+        chunk_size = 10000
+        for i in range(0, len(records), chunk_size):
+            chunk = records[i : i + chunk_size]
+            conn.execute(splits.insert(), chunk)
 
     logger.info(f"✅ Loaded {len(df):,} splits")
 

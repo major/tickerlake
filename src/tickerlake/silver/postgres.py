@@ -4,7 +4,6 @@ Uses shared database utilities from tickerlake.db for common operations.
 Silver-specific functions remain here (clear_all_tables, etc.).
 """
 
-import polars as pl
 from sqlalchemy import delete
 
 from tickerlake.db import get_engine, init_schema  # noqa: F401

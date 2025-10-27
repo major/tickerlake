@@ -3,14 +3,12 @@
 from datetime import date
 from unittest.mock import MagicMock, Mock, patch
 
-import polars as pl
 import pytest
 
 from tickerlake.bronze.main import (
     get_missing_trading_days,
     get_required_trading_days,
     load_grouped_daily_aggs,
-    previously_stored_dates,
     validate_bronze_data,
 )
 
@@ -148,39 +146,43 @@ class TestGetMissingTradingDays:
         assert result == ["2024-01-02", "2024-01-05", "2024-01-08"]
 
 
-class TestPreviouslyStoredDates:
-    """Test cases for retrieving previously stored dates."""
+class TestGetExistingDates:
+    """Test cases for retrieving previously stored dates from Postgres."""
 
-    @patch("tickerlake.bronze.main.pl.scan_parquet")
-    def test_previously_stored_dates_success(self, mock_scan_parquet):
-        """Test previously_stored_dates retrieves dates from Parquet files."""
-        # Create mock DataFrame with dates
-        mock_dates = pl.DataFrame({"date": [date(2024, 1, 2), date(2024, 1, 3)]})
-        test_schema = {"ticker": pl.Utf8, "date": pl.Date}
+    @patch("tickerlake.bronze.postgres.get_engine")
+    def test_get_existing_dates_success(self, mock_get_engine):
+        """Test get_existing_dates retrieves dates from Postgres."""
+        from tickerlake.bronze.postgres import get_existing_dates
 
-        # Setup mock lazy frame
-        mock_lf = MagicMock()
-        mock_lf.select.return_value = mock_lf
-        mock_lf.unique.return_value = mock_lf
-        mock_lf.sort.return_value = mock_lf
-        mock_lf.collect.return_value = mock_dates.with_columns(
-            pl.col("date").dt.strftime("%Y-%m-%d").alias("date")
-        )
+        # Create mock connection and result
+        mock_conn = MagicMock()
+        mock_engine = MagicMock()
+        mock_engine.connect.return_value.__enter__.return_value = mock_conn
+        mock_get_engine.return_value = mock_engine
 
-        mock_scan_parquet.return_value = mock_lf
+        # Mock query results
+        mock_result = [(date(2024, 1, 2),), (date(2024, 1, 3),)]
+        mock_conn.execute.return_value.fetchall.return_value = mock_result
 
-        result = previously_stored_dates("./data/test/destination", test_schema)
+        result = get_existing_dates()
 
         assert result == ["2024-01-02", "2024-01-03"]
-        mock_scan_parquet.assert_called_once()
+        mock_conn.execute.assert_called_once()
 
-    @patch("tickerlake.bronze.main.pl.scan_parquet")
-    def test_previously_stored_dates_no_data(self, mock_scan_parquet):
-        """Test previously_stored_dates handles missing data gracefully."""
-        mock_scan_parquet.side_effect = Exception("No parquet files found")
-        test_schema = {"ticker": pl.Utf8, "date": pl.Date}
+    @patch("tickerlake.bronze.postgres.get_engine")
+    def test_get_existing_dates_no_data(self, mock_get_engine):
+        """Test get_existing_dates handles empty database gracefully."""
+        from tickerlake.bronze.postgres import get_existing_dates
 
-        result = previously_stored_dates("./data/test/destination", test_schema)
+        # Create mock connection with no results
+        mock_conn = MagicMock()
+        mock_engine = MagicMock()
+        mock_engine.connect.return_value.__enter__.return_value = mock_conn
+        mock_get_engine.return_value = mock_engine
+
+        mock_conn.execute.return_value.fetchall.return_value = []
+
+        result = get_existing_dates()
 
         assert result == []
 
@@ -188,36 +190,29 @@ class TestPreviouslyStoredDates:
 class TestLoadGroupedDailyAggs:
     """Test cases for loading grouped daily aggregates from API."""
 
-    @patch("tickerlake.bronze.main.pl.DataFrame")
+    @patch("tickerlake.bronze.main.bulk_load")
     @patch("tickerlake.bronze.main.setup_polygon_api_client")
     @patch("tickerlake.bronze.main.tqdm")
     def test_load_grouped_daily_aggs_single_date(
         self,
         mock_tqdm,
         mock_setup_client,
-        mock_polars_df,
+        mock_bulk_load,
         mock_polygon_client,
         mock_api_response,
     ):
         """Test load_grouped_daily_aggs fetches data for a single date."""
         dates = ["2024-01-02"]
-        destination = "./data/bronze/stocks"
 
         mock_setup_client.return_value = mock_polygon_client
         mock_polygon_client.get_grouped_daily_aggs.return_value = mock_api_response
-
-        # Mock Polars DataFrame operations
-        mock_df = MagicMock()
-        mock_df.with_columns.return_value = mock_df
-        mock_df.drop.return_value = mock_df
-        mock_polars_df.return_value = mock_df
 
         # Mock tqdm
         mock_pbar = MagicMock()
         mock_tqdm.return_value.__enter__.return_value = mock_pbar
         mock_pbar.__iter__ = Mock(return_value=iter(dates))
 
-        load_grouped_daily_aggs(dates, destination)
+        load_grouped_daily_aggs(dates)
 
         # Verify API was called with correct parameters
         mock_polygon_client.get_grouped_daily_aggs.assert_called_once_with(
@@ -226,47 +221,37 @@ class TestLoadGroupedDailyAggs:
             include_otc=False,
         )
 
-        # Verify DataFrame was written
-        mock_df.write_parquet.assert_called_once_with(
-            destination,
-            partition_by=["date"],
-        )
+        # Verify bulk_load was called
+        mock_bulk_load.assert_called_once()
 
-    @patch("tickerlake.bronze.main.pl.DataFrame")
+    @patch("tickerlake.bronze.main.bulk_load")
     @patch("tickerlake.bronze.main.setup_polygon_api_client")
     @patch("tickerlake.bronze.main.tqdm")
     def test_load_grouped_daily_aggs_multiple_dates(
         self,
         mock_tqdm,
         mock_setup_client,
-        mock_polars_df,
+        mock_bulk_load,
         mock_polygon_client,
         mock_api_response,
     ):
         """Test load_grouped_daily_aggs fetches data for multiple dates."""
         dates = ["2024-01-02", "2024-01-03"]
-        destination = "./data/bronze/stocks"
 
         mock_setup_client.return_value = mock_polygon_client
         mock_polygon_client.get_grouped_daily_aggs.return_value = mock_api_response
-
-        # Mock Polars DataFrame
-        mock_df = MagicMock()
-        mock_df.with_columns.return_value = mock_df
-        mock_df.drop.return_value = mock_df
-        mock_polars_df.return_value = mock_df
 
         # Mock tqdm
         mock_pbar = MagicMock()
         mock_tqdm.return_value.__enter__.return_value = mock_pbar
         mock_pbar.__iter__ = Mock(return_value=iter(dates))
 
-        load_grouped_daily_aggs(dates, destination)
+        load_grouped_daily_aggs(dates)
 
         # Should call API for each date
         assert mock_polygon_client.get_grouped_daily_aggs.call_count == 2
-        # Should write parquet for each date
-        assert mock_df.write_parquet.call_count == 2
+        # Should call bulk_load for each date
+        assert mock_bulk_load.call_count == 2
 
     @patch("tickerlake.bronze.main.setup_polygon_api_client")
     @patch("tickerlake.bronze.main.tqdm")
@@ -275,9 +260,8 @@ class TestLoadGroupedDailyAggs:
     ):
         """Test load_grouped_daily_aggs handles empty date list."""
         dates = []
-        destination = "./data/bronze/stocks"
 
-        load_grouped_daily_aggs(dates, destination)
+        load_grouped_daily_aggs(dates)
 
         # Should not call API at all
         mock_setup_client.assert_not_called()
@@ -290,7 +274,6 @@ class TestLoadGroupedDailyAggs:
     ):
         """Test load_grouped_daily_aggs handles API errors gracefully."""
         dates = ["2024-01-02", "2024-01-03"]
-        destination = "./data/bronze/stocks"
 
         mock_setup_client.return_value = mock_polygon_client
         # First call fails, second succeeds
@@ -305,19 +288,19 @@ class TestLoadGroupedDailyAggs:
         mock_pbar.__iter__ = Mock(return_value=iter(dates))
 
         # Should not raise, just log and continue
-        load_grouped_daily_aggs(dates, destination)
+        load_grouped_daily_aggs(dates)
 
         # Should have tried both dates
         assert mock_polygon_client.get_grouped_daily_aggs.call_count == 2
 
+    @patch("tickerlake.bronze.main.bulk_load")
     @patch("tickerlake.bronze.main.setup_polygon_api_client")
     @patch("tickerlake.bronze.main.tqdm")
     def test_load_grouped_daily_aggs_handles_empty_response(
-        self, mock_tqdm, mock_setup_client, mock_polygon_client
+        self, mock_tqdm, mock_setup_client, mock_bulk_load, mock_polygon_client
     ):
         """Test load_grouped_daily_aggs handles empty API response."""
         dates = ["2024-01-02"]
-        destination = "./data/bronze/stocks"
 
         mock_setup_client.return_value = mock_polygon_client
         mock_polygon_client.get_grouped_daily_aggs.return_value = []
@@ -327,10 +310,12 @@ class TestLoadGroupedDailyAggs:
         mock_tqdm.return_value.__enter__.return_value = mock_pbar
         mock_pbar.__iter__ = Mock(return_value=iter(dates))
 
-        load_grouped_daily_aggs(dates, destination)
+        load_grouped_daily_aggs(dates)
 
         # Should call API but not write anything
         mock_polygon_client.get_grouped_daily_aggs.assert_called_once()
+        # Should not call bulk_load for empty response
+        mock_bulk_load.assert_not_called()
 
     @patch("tickerlake.bronze.main.setup_polygon_api_client")
     @patch("tickerlake.bronze.main.tqdm")
@@ -340,7 +325,6 @@ class TestLoadGroupedDailyAggs:
         """Test load_grouped_daily_aggs stops fetching when 403 error encountered."""
         # Reversed dates (newest first)
         dates = ["2024-01-05", "2024-01-04", "2024-01-03"]
-        destination = "./data/bronze/stocks"
 
         mock_setup_client.return_value = mock_polygon_client
         # First two succeed, third gets 403
@@ -355,7 +339,7 @@ class TestLoadGroupedDailyAggs:
         mock_tqdm.return_value.__enter__.return_value = mock_pbar
         mock_pbar.__iter__ = Mock(return_value=iter(dates))
 
-        load_grouped_daily_aggs(dates, destination)
+        load_grouped_daily_aggs(dates)
 
         # Should stop after the 403, so only 3 calls (not continuing after)
         assert mock_polygon_client.get_grouped_daily_aggs.call_count == 3
@@ -364,94 +348,66 @@ class TestLoadGroupedDailyAggs:
 class TestValidateBronzeData:
     """Test cases for bronze data validation."""
 
-    @patch("tickerlake.bronze.main.pl.scan_parquet")
-    def test_validate_bronze_data_all_normal(self, mock_scan_parquet, mock_settings):
+    @patch("tickerlake.bronze.postgres.get_validation_stats")
+    def test_validate_bronze_data_all_normal(self, mock_get_stats, mock_settings):
         """Test validate_bronze_data when all record counts are normal."""
-        # Create mock data with consistent record counts
-        mock_data = pl.DataFrame({
-            "date": [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)],
-            "record_count": [10000, 10100, 9900],
-        })
+        # Mock validation stats from Postgres
+        mock_stats = [
+            (date(2024, 1, 2), 10000),
+            (date(2024, 1, 3), 10100),
+            (date(2024, 1, 4), 9900),
+        ]
 
-        # Setup mock lazy frame
-        mock_lf = MagicMock()
-        mock_lf.select.return_value = mock_lf
-        mock_lf.group_by.return_value = mock_lf
-        mock_lf.agg.return_value = mock_lf
-        mock_lf.sort.return_value = mock_lf
-        mock_lf.collect.return_value = mock_data
-
-        mock_scan_parquet.return_value = mock_lf
+        mock_get_stats.return_value = mock_stats
 
         # Should not raise any exceptions
         validate_bronze_data()
 
-        mock_scan_parquet.assert_called_once()
+        mock_get_stats.assert_called_once()
 
-    @patch("tickerlake.bronze.main.pl.scan_parquet")
-    def test_validate_bronze_data_detects_low_count(self, mock_scan_parquet, mock_settings):
+    @patch("tickerlake.bronze.postgres.get_validation_stats")
+    def test_validate_bronze_data_detects_low_count(self, mock_get_stats, mock_settings):
         """Test validate_bronze_data detects abnormally low record counts."""
-        # Create mock data with one suspiciously low count (< 50% of mean)
-        mock_data = pl.DataFrame({
-            "date": [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)],
-            "record_count": [10000, 4000, 10100],  # 4000 is < 50% of mean (~6700)
-        })
+        # Mock stats with one suspiciously low count (< 50% of mean)
+        mock_stats = [
+            (date(2024, 1, 2), 10000),
+            (date(2024, 1, 3), 4000),  # 4000 is < 50% of mean (~8033)
+            (date(2024, 1, 4), 10100),
+        ]
 
-        mock_lf = MagicMock()
-        mock_lf.select.return_value = mock_lf
-        mock_lf.group_by.return_value = mock_lf
-        mock_lf.agg.return_value = mock_lf
-        mock_lf.sort.return_value = mock_lf
-        mock_lf.collect.return_value = mock_data
-
-        mock_scan_parquet.return_value = mock_lf
+        mock_get_stats.return_value = mock_stats
 
         # Should log warnings but not raise
         validate_bronze_data()
 
-    @patch("tickerlake.bronze.main.pl.scan_parquet")
-    def test_validate_bronze_data_detects_high_count(self, mock_scan_parquet, mock_settings):
+    @patch("tickerlake.bronze.postgres.get_validation_stats")
+    def test_validate_bronze_data_detects_high_count(self, mock_get_stats, mock_settings):
         """Test validate_bronze_data detects abnormally high record counts."""
-        # Create mock data with one suspiciously high count (> 200% of mean)
-        mock_data = pl.DataFrame({
-            "date": [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)],
-            "record_count": [10000, 22000, 10100],  # 22000 is > 200% of mean (~13367)
-        })
+        # Mock stats with one suspiciously high count (> 200% of mean)
+        mock_stats = [
+            (date(2024, 1, 2), 10000),
+            (date(2024, 1, 3), 22000),  # 22000 is > 200% of mean (~14033)
+            (date(2024, 1, 4), 10100),
+        ]
 
-        mock_lf = MagicMock()
-        mock_lf.select.return_value = mock_lf
-        mock_lf.group_by.return_value = mock_lf
-        mock_lf.agg.return_value = mock_lf
-        mock_lf.sort.return_value = mock_lf
-        mock_lf.collect.return_value = mock_data
-
-        mock_scan_parquet.return_value = mock_lf
+        mock_get_stats.return_value = mock_stats
 
         # Should log warnings but not raise
         validate_bronze_data()
 
-    @patch("tickerlake.bronze.main.pl.scan_parquet")
-    def test_validate_bronze_data_handles_no_data(self, mock_scan_parquet, mock_settings):
+    @patch("tickerlake.bronze.postgres.get_validation_stats")
+    def test_validate_bronze_data_handles_no_data(self, mock_get_stats, mock_settings):
         """Test validate_bronze_data handles case with no data gracefully."""
-        # Empty DataFrame
-        mock_data = pl.DataFrame({"date": [], "record_count": []})
-
-        mock_lf = MagicMock()
-        mock_lf.select.return_value = mock_lf
-        mock_lf.group_by.return_value = mock_lf
-        mock_lf.agg.return_value = mock_lf
-        mock_lf.sort.return_value = mock_lf
-        mock_lf.collect.return_value = mock_data
-
-        mock_scan_parquet.return_value = mock_lf
+        # Empty stats
+        mock_get_stats.return_value = []
 
         # Should not raise, just log warning
         validate_bronze_data()
 
-    @patch("tickerlake.bronze.main.pl.scan_parquet")
-    def test_validate_bronze_data_handles_scan_error(self, mock_scan_parquet, mock_settings):
-        """Test validate_bronze_data handles parquet scan errors gracefully."""
-        mock_scan_parquet.side_effect = Exception("No parquet files found")
+    @patch("tickerlake.bronze.postgres.get_validation_stats")
+    def test_validate_bronze_data_handles_query_error(self, mock_get_stats, mock_settings):
+        """Test validate_bronze_data handles database query errors gracefully."""
+        mock_get_stats.side_effect = Exception("Database connection error")
 
         # Should not raise, just log warning
         validate_bronze_data()

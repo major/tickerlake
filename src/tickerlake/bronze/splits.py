@@ -37,4 +37,16 @@ def get_splits() -> pl.DataFrame:
     ]
 
     logger.info(f"Retrieved {len(splits)} stock splits.")
-    return pl.DataFrame(splits, schema_overrides=SPLITS_RAW_SCHEMA)
+    df = pl.DataFrame(splits, schema_overrides=SPLITS_RAW_SCHEMA)
+
+    # Remove duplicates based on ticker and execution_date (primary key)
+    # Only call unique() if DataFrame is not empty to avoid ColumnNotFoundError
+    if len(df) > 0:
+        df = df.unique(subset=["ticker", "execution_date"], keep="last")
+        logger.info(f"After deduplication: {len(df)} unique stock splits.")
+        # Sort by execution_date to maintain consistent order (API returns sorted)
+        df = df.sort("execution_date")
+    else:
+        logger.info("No splits data to deduplicate.")
+
+    return df

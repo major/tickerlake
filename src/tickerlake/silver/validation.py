@@ -11,7 +11,7 @@ from tickerlake.bronze.models import splits as bronze_splits
 from tickerlake.clients import setup_polygon_api_client
 from tickerlake.db import get_engine
 from tickerlake.logging_config import get_logger, setup_logging
-from tickerlake.silver.models import daily_aggregates, weekly_aggregates, weekly_indicators
+from tickerlake.silver.models import daily_aggregates, weekly_aggregates
 from tickerlake.utils import get_trading_days
 
 setup_logging()
@@ -27,6 +27,9 @@ def get_last_trading_day() -> str:
         result = conn.execute(
             select(func.max(daily_aggregates.c.date))
         ).scalar()
+
+    if result is None:
+        raise ValueError("No trading days found in silver layer")
 
     return result.strftime("%Y-%m-%d")
 
@@ -98,6 +101,10 @@ def build_split_list_to_check(num_splits: int = 25) -> pl.DataFrame:
 
     # Get last 5 trading days to exclude
     from datetime import date as date_class
+
+    # Handle case where silver_max_date might be None
+    if silver_max_date is None:
+        raise ValueError("No data found in silver layer")
 
     end_date_for_trading_days = min(silver_max_date, date_class.today())
     start_date_for_trading_days = (datetime.now() - timedelta(days=10)).date()
@@ -472,164 +479,6 @@ def _display_results_table(results: list[dict], skipped_tickers: list[str]) -> N
         console.print()
 
 
-def validate_hvc_calculations() -> bool:
-    """Validate HVC (High Volume Close) calculations against known test cases.
-
-    This validates that volume moving averages and HVC flags match expected
-    values from TradingView for specific historical weeks. These serve as
-    regression tests to catch calculation bugs.
-
-    Returns:
-        True if all validations pass, False otherwise.
-
-    """
-    console.print("\n[bold cyan]📊 Validating HVC Calculations[/bold cyan]\n")
-
-    # Define test cases: (ticker, date, expected_volume, expected_ma, expected_ratio, expected_hvc)
-    test_cases = [
-        {
-            "ticker": "VOX",
-            "date": "2024-01-29",
-            "expected_volume": 3_032_104,
-            "expected_ma": 999_520,  # TradingView value
-            "expected_ratio": 3.03,
-            "expected_hvc": True,
-            "description": "VOX week ending Jan 29, 2024 (HVC test case)",
-        },
-        {
-            "ticker": "META",
-            "date": "2024-10-21",
-            "expected_volume": 49_490_000,
-            "expected_ma": 62_750_000,  # TradingView value
-            "expected_ratio": 0.79,
-            "expected_hvc": False,
-            "description": "META week ending Oct 21, 2024 (low volume test case)",
-        },
-        {
-            "ticker": "RDDT",
-            "date": "2024-10-28",
-            "expected_volume": 86_108_942,
-            "expected_ma": 21_790_801,  # Calculated with current bar included
-            "expected_ratio": 3.95,
-            "expected_hvc": True,
-            "description": "RDDT week ending Oct 28, 2024 (extreme HVC test case)",
-        },
-    ]
-
-    # Read weekly indicators from Postgres
-    engine = get_engine()
-    with engine.connect() as conn:
-        # Read weekly indicators
-        ind_result = conn.execute(select(weekly_indicators))
-        df = pl.DataFrame(
-            ind_result.fetchall(),
-            schema=[
-                "ticker", "date", "sma_20", "sma_50", "sma_200", "atr_14",
-                "volume_ma_20", "volume_ratio", "is_hvc", "ma_30", "price_vs_ma_pct",
-                "ma_slope_pct", "raw_stage", "stage", "stage_changed", "weeks_in_stage"
-            ]
-        )
-
-        # Read weekly aggregates for volume
-        agg_result = conn.execute(select(weekly_aggregates))
-        agg_df = pl.DataFrame(
-            agg_result.fetchall(),
-            schema=["ticker", "date", "open", "high", "low", "close", "volume", "transactions"]
-        )
-
-    # Join to get volume with indicators
-    df = df.join(
-        agg_df.select(["ticker", "date", "volume"]),
-        on=["ticker", "date"],
-        how="inner"
-    )
-
-    all_passed = True
-    results_table = Table(
-        title="🎯 HVC Validation Results",
-        show_header=True,
-        header_style="bold magenta",
-    )
-    results_table.add_column("Test Case", style="cyan", width=40)
-    results_table.add_column("Volume", justify="right")
-    results_table.add_column("MA (20-week)", justify="right")
-    results_table.add_column("Ratio", justify="right")
-    results_table.add_column("HVC", justify="center")
-    results_table.add_column("Status", justify="center")
-
-    for test in test_cases:
-        # Filter for this test case
-        from datetime import datetime
-        test_date = datetime.strptime(test["date"], "%Y-%m-%d").date()
-
-        result = df.filter(
-            (pl.col("ticker") == test["ticker"]) &
-            (pl.col("date") == test_date)
-        )
-
-        if len(result) == 0:
-            results_table.add_row(
-                test["description"],
-                "N/A",
-                "N/A",
-                "N/A",
-                "N/A",
-                "[red]❌ MISSING[/red]"
-            )
-            all_passed = False
-            continue
-
-        row = result.to_dicts()[0]
-
-        # Check each value (allow 5% tolerance for volume/MA, 0.1 for ratio)
-        volume_match = abs(row["volume"] - test["expected_volume"]) / test["expected_volume"] < 0.05
-        ma_match = abs(row["volume_ma_20"] - test["expected_ma"]) / test["expected_ma"] < 0.05
-        ratio_match = abs(row["volume_ratio"] - test["expected_ratio"]) < 0.1
-        hvc_match = row["is_hvc"] == test["expected_hvc"]
-
-        all_match = volume_match and ma_match and ratio_match and hvc_match
-
-        # Format values with color coding
-        status = "[bold green]✅ PASS[/bold green]" if all_match else "[red]❌ FAIL[/red]"
-
-        volume_display = f"{row['volume']:,}"
-        if not volume_match:
-            volume_display = f"[red]{volume_display}[/red]"
-
-        ma_display = f"{row['volume_ma_20']:,}"
-        if not ma_match:
-            ma_display = f"[red]{ma_display}[/red]"
-
-        ratio_display = f"{row['volume_ratio']:.2f}x"
-        if not ratio_match:
-            ratio_display = f"[red]{ratio_display}[/red]"
-
-        hvc_display = "✅ YES" if row["is_hvc"] else "❌ NO"
-        if not hvc_match:
-            hvc_display = f"[red]{hvc_display}[/red]"
-
-        results_table.add_row(
-            test["description"],
-            volume_display,
-            ma_display,
-            ratio_display,
-            hvc_display,
-            status
-        )
-
-        if not all_match:
-            all_passed = False
-
-    console.print(results_table)
-
-    if all_passed:
-        console.print("\n[bold green]✅ All HVC validations passed![/bold green]\n")
-    else:
-        console.print("\n[bold red]❌ Some HVC validations failed![/bold red]\n")
-
-    return all_passed
-
-
 def main() -> None:  # pragma: no cover
     """Run split validation checks and display summary results."""
     console.print("\n[bold cyan]🔍 Starting Split Validation[/bold cyan]\n")
@@ -661,9 +510,6 @@ def main() -> None:  # pragma: no cover
                 console.print(f"[red]❌ Error processing {ticker}: {e}[/red]\n")
 
     _display_results_table(results, skipped_tickers)
-
-    # Run HVC validation
-    validate_hvc_calculations()
 
 
 if __name__ == "__main__":  # pragma: no cover

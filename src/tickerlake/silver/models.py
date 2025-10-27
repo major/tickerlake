@@ -23,7 +23,7 @@ ticker_metadata = Table(
     metadata,
     Column("ticker", String(10), primary_key=True),
     Column("name", String),
-    Column("ticker_type", String(10)),  # CS or ETF
+    Column("ticker_type", String(10)),  # CS, ETF, PFD, WARRANT, ADRC, ADRP, ETN
     Column("primary_exchange", String(10)),
     Column("active", Boolean),
     Column("cik", String(20)),
@@ -58,10 +58,8 @@ daily_indicators = Table(
     Column("atr_14", DOUBLE_PRECISION),
     Column("volume_ma_20", BigInteger),
     Column("volume_ratio", DOUBLE_PRECISION),
-    Column("is_hvc", Boolean, nullable=False),
     PrimaryKeyConstraint("ticker", "date"),
     Index("idx_silver_daily_ind_date", "date"),
-    Index("idx_silver_daily_ind_hvc", "is_hvc"),
 )
 
 # 📊 Weekly aggregates
@@ -80,7 +78,7 @@ weekly_aggregates = Table(
     Index("idx_silver_weekly_aggs_date", "date"),
 )
 
-# 🎯 Weekly technical indicators (includes Weinstein Stage Analysis)
+# 🎯 Weekly technical indicators
 weekly_indicators = Table(
     "silver_weekly_indicators",
     metadata,
@@ -92,19 +90,8 @@ weekly_indicators = Table(
     Column("atr_14", DOUBLE_PRECISION),
     Column("volume_ma_20", BigInteger),
     Column("volume_ratio", DOUBLE_PRECISION),
-    Column("is_hvc", Boolean, nullable=False),
-    # Weinstein Stage Analysis columns
-    Column("ma_30", DOUBLE_PRECISION),
-    Column("price_vs_ma_pct", DOUBLE_PRECISION),
-    Column("ma_slope_pct", DOUBLE_PRECISION),
-    Column("raw_stage", SmallInteger),  # 1-4
-    Column("stage", SmallInteger, nullable=False),  # 1-4
-    Column("stage_changed", Boolean, nullable=False),
-    Column("weeks_in_stage", Integer, nullable=False),
     PrimaryKeyConstraint("ticker", "date"),
     Index("idx_silver_weekly_ind_date", "date"),
-    Index("idx_silver_weekly_ind_stage", "stage"),
-    Index("idx_silver_weekly_ind_hvc", "is_hvc"),
 )
 
 # 📅 Monthly aggregates
@@ -135,8 +122,6 @@ monthly_indicators = Table(
     Column("atr_14", DOUBLE_PRECISION),
     Column("volume_ma_20", BigInteger),
     Column("volume_ratio", DOUBLE_PRECISION),
-    Column("is_hvc", Boolean, nullable=False),
     PrimaryKeyConstraint("ticker", "date"),
     Index("idx_silver_monthly_ind_date", "date"),
-    Index("idx_silver_monthly_ind_hvc", "is_hvc"),
 )

@@ -94,14 +94,14 @@ def load_grouped_daily_aggs(dates_to_fetch: list[str]) -> None:
                 # Convert response to list of dicts
                 results = [
                     {
-                        "ticker": r.ticker,
-                        "volume": r.volume,
-                        "open": r.open,
-                        "close": r.close,
-                        "high": r.high,
-                        "low": r.low,
-                        "window_start": r.timestamp,  # Unix timestamp in milliseconds
-                        "transactions": r.transactions,
+                        "ticker": r.ticker,  # type: ignore[attr-defined]
+                        "volume": r.volume,  # type: ignore[attr-defined]
+                        "open": r.open,  # type: ignore[attr-defined]
+                        "close": r.close,  # type: ignore[attr-defined]
+                        "high": r.high,  # type: ignore[attr-defined]
+                        "low": r.low,  # type: ignore[attr-defined]
+                        "window_start": r.timestamp,  # type: ignore[attr-defined]  # Unix timestamp in milliseconds
+                        "transactions": r.transactions if r.transactions is not None else 0,  # type: ignore[attr-defined]
                     }
                     for r in response
                 ]
@@ -156,8 +156,7 @@ def validate_bronze_data() -> None:
             logger.warning("⚠️  No data found for validation")
             return
 
-        # Extract dates and counts
-        dates = [s[0] for s in stats]
+        # Extract counts for statistics
         counts = [s[1] for s in stats]
 
         # Calculate statistical measures
@@ -167,7 +166,7 @@ def validate_bronze_data() -> None:
         min_count = min(counts)
         max_count = max(counts)
 
-        logger.info(f"📊 Record count statistics:")
+        logger.info("📊 Record count statistics:")
         logger.info(f"   Mean: {mean_count:.0f} ± {std_count:.0f}")
         logger.info(f"   Range: {min_count} to {max_count}")
 
