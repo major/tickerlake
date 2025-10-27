@@ -48,6 +48,7 @@ def get_tickers() -> pl.DataFrame:
         }
         for t in polygon_client.list_tickers(
             market="stocks",
+            active=True,
             order="asc",
             sort="ticker",
             limit=1000,

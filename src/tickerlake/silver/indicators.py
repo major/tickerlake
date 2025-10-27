@@ -1,14 +1,10 @@
 """Technical indicator calculations for stock data."""
 
 import polars as pl
-import polars_talib as plta
 
 from tickerlake.logging_config import get_logger
 
 logger = get_logger(__name__)
-
-# Leave this here or ruff might remove the import above.
-logger.info("Using polars-talib version %s", plta.version)
 
 
 def calculate_sma(df: pl.DataFrame, periods: int) -> pl.DataFrame:
@@ -120,23 +116,18 @@ def calculate_all_indicators(df: pl.DataFrame) -> pl.DataFrame:
     Returns:
         DataFrame with ticker, date, and all indicator columns.
     """
-    logger.info("Calculating all technical indicators...")
-
     # Sort by ticker and date to ensure proper rolling calculations
     df_sorted = df.sort(["ticker", "date"])
 
     # Calculate SMAs
-    logger.info("Calculating SMAs (20, 50, 200)...")
     df_with_sma = df_sorted
     for periods in [20, 50, 200]:
         df_with_sma = calculate_sma(df_with_sma, periods)
 
     # Calculate ATR
-    logger.info("Calculating ATR (14)...")
     df_with_atr = calculate_atr(df_with_sma, periods=14)
 
     # Calculate volume indicators
-    logger.info("Calculating volume indicators (MA 20, ratio)...")
     df_with_all = calculate_volume_indicators(df_with_atr, periods=20)
 
     # Select only indicator columns (plus ticker and date)
@@ -151,7 +142,6 @@ def calculate_all_indicators(df: pl.DataFrame) -> pl.DataFrame:
         "volume_ratio",
     ])
 
-    logger.info(f"Calculated indicators for {indicators.height:,} rows")
     return indicators
 
 

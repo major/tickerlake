@@ -11,7 +11,7 @@ from tickerlake.bronze.models import splits as bronze_splits
 from tickerlake.clients import setup_polygon_api_client
 from tickerlake.db import get_engine
 from tickerlake.logging_config import get_logger, setup_logging
-from tickerlake.silver.models import daily_aggregates, weekly_aggregates
+from tickerlake.silver.models import daily_aggregates
 from tickerlake.utils import get_trading_days
 
 setup_logging()

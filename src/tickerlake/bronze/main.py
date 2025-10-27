@@ -161,14 +161,6 @@ def validate_bronze_data() -> None:
 
         # Calculate statistical measures
         mean_count = sum(counts) / len(counts)
-        variance = sum((x - mean_count) ** 2 for x in counts) / len(counts)
-        std_count = variance**0.5
-        min_count = min(counts)
-        max_count = max(counts)
-
-        logger.info("📊 Record count statistics:")
-        logger.info(f"   Mean: {mean_count:.0f} ± {std_count:.0f}")
-        logger.info(f"   Range: {min_count} to {max_count}")
 
         # Define thresholds for catching REAL problems
         # Relative thresholds: flag if < 50% or > 200% of mean (extreme outliers only)
@@ -207,8 +199,6 @@ def validate_bronze_data() -> None:
                 logger.warning(
                     f"   📅 {date_str}: {count} records ({', '.join(reasons)})"
                 )
-        else:
-            logger.info("✅ All days have reasonable record counts")
 
     except Exception as e:
         logger.warning(f"⚠️  Could not validate bronze data: {e}")
@@ -217,37 +207,29 @@ def validate_bronze_data() -> None:
 def main() -> None:  # pragma: no cover
     """Main function to load stocks data from Polygon.io API into Postgres."""
     # Initialize Postgres schema (idempotent)
-    logger.info("🔧 Initializing database schema...")
     postgres.init_bronze_schema()
 
-    # Load splits
-    logger.info("📥 Loading splits...")
+    # Load splits and tickers
     splits_df = get_splits()
     postgres.upsert_splits(splits_df)
 
-    # Load tickers
-    logger.info("📥 Loading tickers...")
     tickers_df = get_tickers()
     postgres.upsert_tickers(tickers_df)
 
     # Determine what dates we need
     required_dates = get_required_trading_days()
-    logger.info(f"📅 Required trading days: {len(required_dates)} dates")
-
     stored_dates = postgres.get_existing_dates()
-    logger.info(f"💾 Already stored: {len(stored_dates)} dates")
-
     missing_dates = get_missing_trading_days(required_dates, stored_dates)
-    logger.info(f"📥 Missing dates to fetch: {len(missing_dates)}")
+
+    logger.info(f"📊 Trading days: {len(required_dates)} required, {len(stored_dates)} stored, {len(missing_dates)} to fetch")
 
     # Fetch missing data and write to Postgres
     load_grouped_daily_aggs(dates_to_fetch=missing_dates)
 
-    # 🔍 Validate data quality
-    logger.info("🔍 Validating bronze data quality...")
+    # Validate data quality
     validate_bronze_data()
 
-    logger.info("✅ Bronze layer data ingestion complete!")
+    logger.info("✅ Bronze layer complete!")
 
 
 if __name__ == "__main__":  # pragma: no cover

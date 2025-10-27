@@ -30,7 +30,6 @@ pl.Config.set_verbose(False)
 
 def read_splits() -> pl.DataFrame:
     """Read splits data from bronze Postgres layer."""
-    logger.info("📥 Reading splits from bronze Postgres...")
     engine = get_engine()
 
     with engine.connect() as conn:
@@ -47,7 +46,6 @@ def read_splits() -> pl.DataFrame:
 
 def read_tickers() -> pl.DataFrame:
     """Read tickers data from bronze Postgres layer."""
-    logger.info("📥 Reading tickers from bronze Postgres...")
     engine = get_engine()
 
     with engine.connect() as conn:
@@ -79,11 +77,6 @@ def read_stocks(ticker_list: list[str] | None = None) -> pl.DataFrame:
     Returns:
         DataFrame with stock data for the specified tickers.
     """
-    if ticker_list is not None:
-        logger.info(f"📥 Reading stocks from bronze Postgres for {len(ticker_list):,} tickers...")
-    else:
-        logger.info("📥 Reading stocks from bronze Postgres...")
-
     engine = get_engine()
 
     with engine.connect() as conn:
@@ -99,7 +92,6 @@ def read_stocks(ticker_list: list[str] | None = None) -> pl.DataFrame:
             orient="row"
         )
 
-    logger.info(f"✅ Loaded {len(df):,} stock records")
     return df
 
 
@@ -120,8 +112,6 @@ def apply_splits(
     Returns:
         DataFrame with split-adjusted OHLCV data.
     """
-    logger.info("⚙️  Applying split adjustments...")
-
     # Join stocks with all splits for that ticker
     # Then calculate adjustment factor: for each date, apply split_from/split_to
     # if the split occurred AFTER that date
@@ -168,7 +158,6 @@ def apply_splits(
         .collect()
     )
 
-    logger.info(f"✅ Applied split adjustments to {len(adjusted_df):,} records")
     return adjusted_df
 
 
@@ -181,21 +170,6 @@ def create_ticker_metadata(tickers_df: pl.DataFrame) -> pl.DataFrame:
     Returns:
         DataFrame with ticker metadata for tradeable securities (CS, ETF, PFD, WARRANT, ADRC, ADRP, ETN).
     """
-    logger.info("📊 Creating ticker metadata dimension table...")
-
-    # Debug: Show what types we have and the dtype
-    if len(tickers_df) > 0:
-        logger.info(f"🔍 Type column dtype: {tickers_df['type'].dtype}")
-        # Cast to string to ensure consistent comparison
-        type_counts = (
-            tickers_df
-            .with_columns(pl.col("type").cast(pl.Utf8))
-            .group_by("type")
-            .agg(pl.count())
-            .sort("count", descending=True)
-        )
-        logger.info(f"📋 Ticker types found:\n{type_counts.head(10)}")
-
     # Filter to tradeable securities - cast type to string for reliable filtering
     # (categorical columns from Postgres might have different encoding)
     # Include: CS (Common Stock), ETF, PFD (Preferred), WARRANT, ADRC/ADRP (ADRs), ETN
@@ -213,8 +187,6 @@ def create_ticker_metadata(tickers_df: pl.DataFrame) -> pl.DataFrame:
             "cik",
         ])
     )
-
-    logger.info(f"✅ Filtered to {len(ticker_metadata):,} tradeable tickers ({', '.join(allowed_types)})")
 
     # Write to silver Postgres 🚀
     bulk_load(ticker_metadata_table, ticker_metadata)
@@ -239,11 +211,6 @@ def process_ticker_batch(
     Returns:
         Tuple of (daily_df, weekly_df, monthly_df) for this batch.
     """
-    logger.info(
-        f"🔄 Processing batch {batch_num}/{total_batches} "
-        f"({len(ticker_batch):,} tickers)..."
-    )
-
     # Read stocks for this batch only 📊
     stocks_df = read_stocks(ticker_list=ticker_batch)
 
@@ -263,7 +230,7 @@ def process_ticker_batch(
     monthly_df = validate_daily_aggregates(monthly_df)
 
     logger.info(
-        f"✅ Batch {batch_num}/{total_batches} complete: "
+        f"📦 Batch {batch_num}/{total_batches}: "
         f"{len(daily_df):,} daily, {len(weekly_df):,} weekly, "
         f"{len(monthly_df):,} monthly records"
     )
@@ -278,8 +245,7 @@ def main(batch_size: int = 250) -> None:  # pragma: no cover
         batch_size: Number of tickers to process in each batch (default: 250).
                    Lower values use less RAM but take slightly longer.
     """
-    logger.info("🚀 Starting silver layer processing (memory-efficient batch mode)...")
-    logger.info(f"⚙️  Batch size: {batch_size:,} tickers per batch")
+    logger.info("🚀 Starting silver layer processing...")
 
     # Initialize silver schema
     init_silver_schema()
@@ -296,25 +262,16 @@ def main(batch_size: int = 250) -> None:  # pragma: no cover
     valid_tickers_df = ticker_metadata.select("ticker")
     valid_ticker_list = valid_tickers_df["ticker"].to_list()
 
-    logger.info(
-        f"🎯 Processing {len(valid_ticker_list):,} tradeable securities "
-        f"(from {len(tickers_df):,} total tickers)"
-    )
+    logger.info(f"🎯 Processing {len(valid_ticker_list):,} tradeable tickers in {(len(valid_ticker_list) + batch_size - 1) // batch_size:,} batches")
 
     # Read splits (small dataset, fits in memory easily)
     splits_df = read_splits()
 
     # Filter splits to only tradeable securities
-    original_splits_count = len(splits_df)
     splits_df = splits_df.join(valid_tickers_df, on="ticker", how="semi")
-    logger.info(
-        f"✂️  Filtered splits to {len(splits_df):,} splits for tradeable securities "
-        f"(from {original_splits_count:,} total splits)"
-    )
 
     # Process stocks in batches to avoid loading millions of rows into RAM 🧠
     total_batches = (len(valid_ticker_list) + batch_size - 1) // batch_size
-    logger.info(f"📦 Splitting into {total_batches:,} batches of ~{batch_size:,} tickers each")
 
     # Accumulate aggregates for indicator calculation
     all_daily_dfs = []
@@ -345,12 +302,11 @@ def main(batch_size: int = 250) -> None:  # pragma: no cover
             bulk_load(monthly_aggregates_table, monthly_df)
             all_monthly_dfs.append(monthly_df)
 
-    logger.info("✅ All batches processed! Now calculating technical indicators...")
+    logger.info("📈 Calculating technical indicators...")
 
     # Calculate indicators on concatenated data (still memory-efficient per timeframe)
     # Daily indicators
     if all_daily_dfs:
-        logger.info("📈 Calculating daily technical indicators...")
         daily_combined = pl.concat(all_daily_dfs, how="vertical")
         daily_indicators = calculate_all_indicators(daily_combined)
         daily_indicators = validate_indicators(daily_indicators)
@@ -359,7 +315,6 @@ def main(batch_size: int = 250) -> None:  # pragma: no cover
 
     # Weekly indicators
     if all_weekly_dfs:
-        logger.info("📊 Calculating weekly technical indicators...")
         weekly_combined = pl.concat(all_weekly_dfs, how="vertical")
         weekly_indicators = calculate_all_indicators(weekly_combined)
         weekly_indicators = validate_indicators(weekly_indicators)
@@ -368,14 +323,13 @@ def main(batch_size: int = 250) -> None:  # pragma: no cover
 
     # Monthly indicators
     if all_monthly_dfs:
-        logger.info("📊 Calculating monthly technical indicators...")
         monthly_combined = pl.concat(all_monthly_dfs, how="vertical")
         monthly_indicators = calculate_all_indicators(monthly_combined)
         monthly_indicators = validate_indicators(monthly_indicators)
         bulk_load(monthly_indicators_table, monthly_indicators)
         del monthly_combined, monthly_indicators, all_monthly_dfs  # Free memory 🗑️
 
-    logger.info("✅ Silver layer processing complete! 🎉")
+    logger.info("✅ Silver layer complete! 🎉")
 
 
 if __name__ == "__main__":  # pragma: no cover

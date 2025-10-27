@@ -7,10 +7,8 @@ from sqlalchemy import (
     Date,
     DOUBLE_PRECISION,
     Index,
-    Integer,
     MetaData,
     PrimaryKeyConstraint,
-    SmallInteger,
     String,
     Table,
 )

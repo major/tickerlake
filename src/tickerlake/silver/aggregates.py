@@ -24,8 +24,6 @@ def aggregate_to_weekly(df: pl.DataFrame) -> pl.DataFrame:
     Returns:
         DataFrame with weekly aggregated OHLCV data.
     """
-    logger.info("Aggregating daily data to weekly timeframe...")
-
     # Sort to ensure proper first/last aggregation
     df_sorted = df.sort(["ticker", "date"])
 
@@ -50,7 +48,6 @@ def aggregate_to_weekly(df: pl.DataFrame) -> pl.DataFrame:
         .sort(["ticker", "date"])
     )
 
-    logger.info(f"Created {weekly.height:,} weekly bars from {df.height:,} daily bars")
     return weekly
 
 
@@ -71,8 +68,6 @@ def aggregate_to_monthly(df: pl.DataFrame) -> pl.DataFrame:
     Returns:
         DataFrame with monthly aggregated OHLCV data.
     """
-    logger.info("Aggregating daily data to monthly timeframe...")
-
     # Sort to ensure proper first/last aggregation
     df_sorted = df.sort(["ticker", "date"])
 
@@ -95,5 +90,4 @@ def aggregate_to_monthly(df: pl.DataFrame) -> pl.DataFrame:
         .sort(["ticker", "date"])
     )
 
-    logger.info(f"Created {monthly.height:,} monthly bars from {df.height:,} daily bars")
     return monthly

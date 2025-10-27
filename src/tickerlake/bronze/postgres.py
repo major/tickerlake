@@ -48,8 +48,6 @@ def upsert_tickers(df: pl.DataFrame) -> None:
         logger.warning("⚠️  No ticker data to load")
         return
 
-    logger.info(f"💾 Loading {len(df):,} tickers...")
-
     # Rename 'type' column to 'ticker_type' to match database schema
     df = df.rename({"type": "ticker_type"})
 
@@ -81,8 +79,6 @@ def upsert_splits(df: pl.DataFrame) -> None:
     if len(df) == 0:
         logger.warning("⚠️  No split data to load")
         return
-
-    logger.info(f"💾 Loading {len(df):,} splits...")
 
     # Convert to list of dictionaries for bulk insert
     records = df.to_dicts()
