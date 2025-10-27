@@ -78,6 +78,3 @@ preview = true
 # Ignore dependencies that are used indirectly or in parts of the code not scanned
 extend_exclude = ["tests", "examples", ".venv"]
 pep621_dev_dependency_groups = ["dev"]
-# Ignore specific dependencies: pyarrow/fsspec are used by polars/deltalake
-# datasette/fastexcel/sqlalchemy are used in gold layer or other unscanned code
-ignore = ["DEP002"]
