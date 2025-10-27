@@ -1,5 +1,7 @@
 """Silver layer processing to adjust historical stock data for splits. 🥈"""
 
+import argparse
+
 import polars as pl
 from sqlalchemy import select
 
@@ -20,7 +22,7 @@ from tickerlake.silver.models import (
     weekly_aggregates as weekly_aggregates_table,
     weekly_indicators as weekly_indicators_table,
 )
-from tickerlake.silver.postgres import clear_all_tables, init_silver_schema
+from tickerlake.silver.postgres import clear_all_tables, init_silver_schema, reset_schema
 
 setup_logging()
 logger = get_logger(__name__)
@@ -238,20 +240,26 @@ def process_ticker_batch(
     return daily_df, weekly_df, monthly_df
 
 
-def main(batch_size: int = 250) -> None:  # pragma: no cover
+def main(batch_size: int = 250, reset_schema_flag: bool = False) -> None:  # pragma: no cover
     """Main function to adjust historical stock data for splits using batch processing.
 
     Args:
         batch_size: Number of tickers to process in each batch (default: 250).
                    Lower values use less RAM but take slightly longer.
+        reset_schema_flag: If True, drop and recreate all tables before processing.
+                          Use when schema changes require table structure updates.
     """
     logger.info("🚀 Starting silver layer processing...")
 
-    # Initialize silver schema
-    init_silver_schema()
+    # Reset schema if requested (drops and recreates tables)
+    if reset_schema_flag:
+        reset_schema()
+    else:
+        # Initialize silver schema (idempotent - only creates missing tables)
+        init_silver_schema()
 
-    # Clear all existing data for full rebuild
-    clear_all_tables()
+        # Clear all existing data for full rebuild
+        clear_all_tables()
 
     # Read tickers and filter to tradeable securities
     tickers_df = read_tickers()
@@ -332,5 +340,26 @@ def main(batch_size: int = 250) -> None:  # pragma: no cover
     logger.info("✅ Silver layer complete! 🎉")
 
 
+def cli() -> None:  # pragma: no cover
+    """CLI entry point with argument parsing. 🖥️"""
+    parser = argparse.ArgumentParser(
+        description="🥈 Silver layer: Process and adjust stock data for splits"
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=250,
+        help="Number of tickers to process per batch (default: 250)",
+    )
+    parser.add_argument(
+        "--reset-schema",
+        action="store_true",
+        help="⚠️  Drop and recreate all tables (use when schema changes)",
+    )
+
+    args = parser.parse_args()
+    main(batch_size=args.batch_size, reset_schema_flag=args.reset_schema)
+
+
 if __name__ == "__main__":  # pragma: no cover
-    main()
+    cli()

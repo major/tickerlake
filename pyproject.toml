@@ -22,7 +22,7 @@ dependencies = [
 
 [project.scripts]
 bronze = "tickerlake.bronze.main:main"
-silver = "tickerlake.silver.main:main"
+silver = "tickerlake.silver.main:cli"
 gold = "tickerlake.gold.main:main"
 validate = "tickerlake.silver.validation:main"
 clean = "tickerlake.bronze.clean:main"

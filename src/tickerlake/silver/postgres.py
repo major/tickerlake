@@ -7,6 +7,7 @@ Silver-specific functions remain here (clear_all_tables, etc.).
 from sqlalchemy import delete
 
 from tickerlake.db import get_engine, init_schema  # noqa: F401
+from tickerlake.db.schema import drop_schema
 from tickerlake.logging_config import get_logger
 from tickerlake.silver.models import (
     daily_aggregates,
@@ -26,6 +27,20 @@ logger = get_logger(__name__)
 def init_silver_schema() -> None:
     """Initialize silver layer database schema (idempotent). ✨"""
     init_schema(metadata, "silver")
+
+
+def reset_schema() -> None:
+    """Drop and recreate all silver layer tables (⚠️ DESTRUCTIVE!). 🔄
+
+    This is useful when the table schema changes and you need to rebuild
+    the database structure from scratch.
+
+    ⚠️  WARNING: This drops all tables and data!
+    """
+    logger.warning("🔄 Resetting silver layer schema...")
+    drop_schema(metadata, "silver")
+    init_silver_schema()
+    logger.info("✅ Silver layer schema reset complete")
 
 
 def clear_all_tables() -> None:

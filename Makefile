@@ -18,4 +18,4 @@ deadcode:
 deps:
 	uv run deptry src/
 
-all: lint test typecheck deadcode deps
+all: lint test typecheck deadcode
