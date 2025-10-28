@@ -58,6 +58,7 @@ daily_indicators = Table(
     Column("volume_ratio", DOUBLE_PRECISION),
     PrimaryKeyConstraint("ticker", "date"),
     Index("idx_silver_daily_ind_date", "date"),
+    Index("idx_silver_daily_ind_volume_ratio", "volume_ratio"),  # For HVC queries
 )
 
 # 📊 Weekly aggregates
@@ -90,6 +91,7 @@ weekly_indicators = Table(
     Column("volume_ratio", DOUBLE_PRECISION),
     PrimaryKeyConstraint("ticker", "date"),
     Index("idx_silver_weekly_ind_date", "date"),
+    Index("idx_silver_weekly_ind_volume_ratio", "volume_ratio"),  # For HVC queries
 )
 
 # 📅 Monthly aggregates

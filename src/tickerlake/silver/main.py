@@ -170,12 +170,11 @@ def create_ticker_metadata(tickers_df: pl.DataFrame) -> pl.DataFrame:
         tickers_df: DataFrame with ticker data from bronze layer.
 
     Returns:
-        DataFrame with ticker metadata for tradeable securities (CS, ETF, PFD, WARRANT, ADRC, ADRP, ETN).
+        DataFrame with ticker metadata for common stocks and ETFs only.
     """
-    # Filter to tradeable securities - cast type to string for reliable filtering
-    # (categorical columns from Postgres might have different encoding)
-    # Include: CS (Common Stock), ETF, PFD (Preferred), WARRANT, ADRC/ADRP (ADRs), ETN
-    allowed_types = ["CS", "ETF", "PFD", "WARRANT", "ADRC", "ADRP", "ETN"]
+    # Filter to only common stocks and ETFs 📈
+    # This excludes preferred shares, warrants, ADRs, ETNs, and other security types
+    allowed_types = ["CS", "ETF"]
     ticker_metadata = (
         tickers_df
         .with_columns(pl.col("type").cast(pl.Utf8))
@@ -206,7 +205,7 @@ def process_ticker_batch(
 
     Args:
         ticker_batch: List of ticker symbols to process in this batch.
-        splits_df: DataFrame with all splits data (filtered to tradeable securities).
+        splits_df: DataFrame with all splits data (filtered to CS + ETF only).
         batch_num: Current batch number (1-indexed for logging).
         total_batches: Total number of batches (for progress logging).
 
@@ -261,21 +260,21 @@ def main(batch_size: int = 250, reset_schema_flag: bool = False) -> None:  # pra
         # Clear all existing data for full rebuild
         clear_all_tables()
 
-    # Read tickers and filter to tradeable securities
+    # Read tickers and filter to CS + ETF only
     tickers_df = read_tickers()
 
-    # Create ticker metadata dimension table
+    # Create ticker metadata dimension table (filters to CS + ETF)
     ticker_metadata = create_ticker_metadata(tickers_df)
 
     valid_tickers_df = ticker_metadata.select("ticker")
     valid_ticker_list = valid_tickers_df["ticker"].to_list()
 
-    logger.info(f"🎯 Processing {len(valid_ticker_list):,} tradeable tickers in {(len(valid_ticker_list) + batch_size - 1) // batch_size:,} batches")
+    logger.info(f"🎯 Processing {len(valid_ticker_list):,} tickers (CS + ETF only) in {(len(valid_ticker_list) + batch_size - 1) // batch_size:,} batches")
 
     # Read splits (small dataset, fits in memory easily)
     splits_df = read_splits()
 
-    # Filter splits to only tradeable securities
+    # Filter splits to only CS + ETF tickers
     splits_df = splits_df.join(valid_tickers_df, on="ticker", how="semi")
 
     # Process stocks in batches to avoid loading millions of rows into RAM 🧠

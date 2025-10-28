@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     qqq_holdings_source: str = "https://www.direxion.com/holdings/QQQE.csv"
     iwm_holdings_source: str = "https://www.ishares.com/us/products/239710/ishares-russell-2000-etf/1467271812596.ajax?fileType=csv&fileName=IWM_holdings&dataType=fund"
 
+    # Gold layer - HVC (High Volume Close) Streaks configuration
+    hvc_volume_threshold: float = 3.0  # Volume must be >= N × volume_ma_20
+    hvc_min_streak_length: int = 2  # Minimum consecutive HVCs to report
+    hvc_timeframes: list[str] = ["daily", "weekly"]  # Timeframes to analyze
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def postgres_url(self) -> str:

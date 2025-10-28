@@ -56,7 +56,7 @@ uv pip list                   # List installed packages
 2. **Silver Layer** (`src/tickerlake/silver/`):
    - Reads bronze data in batches (default: 250 tickers) to manage memory
    - Applies stock split adjustments retroactively to historical prices
-   - Filters to tradeable securities only (CS, ETF, PFD, WARRANT, ADRC, ADRP, ETN)
+   - Filters to common stocks (CS) and ETFs only (excludes preferred shares, warrants, ADRs, ETNs)
    - Generates three timeframes: daily, weekly, monthly aggregates
    - Calculates technical indicators (SMA 20/50/200, ATR 14, volume metrics)
    - Writes split-adjusted data and indicators to separate PostgreSQL tables
