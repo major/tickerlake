@@ -3,6 +3,7 @@
 import argparse
 
 from tickerlake.gold.hvcs import run_hvc_identification
+from tickerlake.gold.hvc_concentration import run_hvc_concentration_analysis
 from tickerlake.gold.hvc_returns import run_hvc_returns_analysis
 from tickerlake.gold.hvc_streak_breakers import run_streak_breaker_analysis
 from tickerlake.gold.hvc_streaks import run_hvc_streaks_analysis
@@ -22,8 +23,9 @@ def main(reset_schema_flag: bool = False) -> None:
     2. HVC Streaks Analysis
     3. HVC Streak Breakers (Momentum Reversals)
     4. HVC Returns (Price revisiting previous HVC zones)
-    5. [Future] Momentum Analysis
-    6. [Future] Volatility Analysis
+    5. HVC Concentration (Market-wide high-volume days/weeks)
+    6. [Future] Momentum Analysis
+    7. [Future] Volatility Analysis
     etc.
 
     Args:
@@ -60,6 +62,11 @@ def main(reset_schema_flag: bool = False) -> None:
     logger.info("🔄 Running HVC Returns Analysis...")
     logger.info("=" * 60)
     run_hvc_returns_analysis()
+
+    logger.info("=" * 60)
+    logger.info("📅 Running HVC Concentration Analysis...")
+    logger.info("=" * 60)
+    run_hvc_concentration_analysis()
 
     # Future reports will be added here:
     # logger.info("=" * 60)

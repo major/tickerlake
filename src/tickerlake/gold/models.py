@@ -154,6 +154,26 @@ hvc_returns_weekly = Table(
     Column("calculated_at", DateTime, nullable=False),
 )
 
+# 📅 HVC Concentration by Date
+# Aggregates count of HVCs per date to identify market-wide high-volume days
+hvc_concentration_daily = Table(
+    "gold_hvc_concentration_daily",
+    metadata,
+    Column("date", Date, primary_key=True),
+    Column("hvc_count", Integer, nullable=False),
+    Column("calculated_at", DateTime, nullable=False),
+)
+
+# 📊 HVC Concentration by Week
+# Aggregates count of HVCs per week to identify market-wide high-volume weeks
+hvc_concentration_weekly = Table(
+    "gold_hvc_concentration_weekly",
+    metadata,
+    Column("date", Date, primary_key=True),  # Week end date
+    Column("hvc_count", Integer, nullable=False),
+    Column("calculated_at", DateTime, nullable=False),
+)
+
 # Future gold layer tables will be added here:
 # - Momentum scores
 # - Volatility analysis
