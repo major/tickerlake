@@ -1,127 +1,99 @@
-"""SQLAlchemy table definitions for silver layer."""
+"""Silver layer schema documentation (Parquet files).
 
-from sqlalchemy import (
-    BigInteger,
-    Boolean,
-    Column,
-    Date,
-    DOUBLE_PRECISION,
-    Index,
-    MetaData,
-    PrimaryKeyConstraint,
-    String,
-    Table,
-)
+The silver layer stores split-adjusted OHLCV data with technical indicators:
+- ticker_metadata: Filtered ticker dimension (CS, ETF only)
+- {daily,weekly,monthly}_aggregates: Split-adjusted OHLCV
+- {daily,weekly,monthly}_indicators: Technical indicators (SMA, ATR, volume metrics)
 
-metadata = MetaData()
+Parquet files are stored locally at:
+- data/silver/ticker_metadata.parquet
+- data/silver/daily_aggregates.parquet
+- data/silver/daily_indicators.parquet
+- data/silver/weekly_aggregates.parquet
+- data/silver/weekly_indicators.parquet
+- data/silver/monthly_aggregates.parquet
+- data/silver/monthly_indicators.parquet
 
-# 📊 Dimension table for ticker metadata
-ticker_metadata = Table(
-    "silver_ticker_metadata",
-    metadata,
-    Column("ticker", String(10), primary_key=True),
-    Column("name", String),
-    Column("ticker_type", String(10)),  # CS, ETF, PFD, WARRANT, ADRC, ADRP, ETN
-    Column("primary_exchange", String(10)),
-    Column("active", Boolean),
-    Column("cik", String(20)),
-    Index("idx_silver_ticker_metadata_type", "ticker_type"),
-)
+Schema validation is handled by Polars schemas in src/tickerlake/schemas.py
+"""
 
-# 📈 Daily aggregates (split-adjusted OHLCV)
-daily_aggregates = Table(
-    "silver_daily_aggregates",
-    metadata,
-    Column("ticker", String(10), nullable=False),
-    Column("date", Date, nullable=False),
-    Column("open", DOUBLE_PRECISION, nullable=False),
-    Column("high", DOUBLE_PRECISION, nullable=False),
-    Column("low", DOUBLE_PRECISION, nullable=False),
-    Column("close", DOUBLE_PRECISION, nullable=False),
-    Column("volume", BigInteger, nullable=False),
-    Column("transactions", BigInteger, nullable=False),
-    PrimaryKeyConstraint("ticker", "date"),
-    Index("idx_silver_daily_aggs_date", "date"),
-)
+# Table schemas for reference (actual schemas in schemas.py)
 
-# 🔍 Daily technical indicators
-daily_indicators = Table(
-    "silver_daily_indicators",
-    metadata,
-    Column("ticker", String(10), nullable=False),
-    Column("date", Date, nullable=False),
-    Column("sma_20", DOUBLE_PRECISION),
-    Column("sma_50", DOUBLE_PRECISION),
-    Column("sma_200", DOUBLE_PRECISION),
-    Column("atr_14", DOUBLE_PRECISION),
-    Column("volume_ma_20", BigInteger),
-    Column("volume_ratio", DOUBLE_PRECISION),
-    PrimaryKeyConstraint("ticker", "date"),
-    Index("idx_silver_daily_ind_date", "date"),
-    Index("idx_silver_daily_ind_volume_ratio", "volume_ratio"),  # For HVC queries
-)
+TICKER_METADATA_SCHEMA_DOC = """
+ticker_metadata table:
+- ticker: String (primary key)
+- name: String
+- type: String (CS or ETF only - filtered)
+- primary_exchange: String
+- active: Boolean
+- cik: String
 
-# 📊 Weekly aggregates
-weekly_aggregates = Table(
-    "silver_weekly_aggregates",
-    metadata,
-    Column("ticker", String(10), nullable=False),
-    Column("date", Date, nullable=False),
-    Column("open", DOUBLE_PRECISION, nullable=False),
-    Column("high", DOUBLE_PRECISION, nullable=False),
-    Column("low", DOUBLE_PRECISION, nullable=False),
-    Column("close", DOUBLE_PRECISION, nullable=False),
-    Column("volume", BigInteger, nullable=False),
-    Column("transactions", BigInteger, nullable=False),
-    PrimaryKeyConstraint("ticker", "date"),
-    Index("idx_silver_weekly_aggs_date", "date"),
-)
+Optimized for:
+- Single Parquet file by: ticker
+- Typical size: 5-10MB (~10k tickers)
+- Single file (small table, full rewrite mode)
+"""
 
-# 🎯 Weekly technical indicators
-weekly_indicators = Table(
-    "silver_weekly_indicators",
-    metadata,
-    Column("ticker", String(10), nullable=False),
-    Column("date", Date, nullable=False),
-    Column("sma_20", DOUBLE_PRECISION),
-    Column("sma_50", DOUBLE_PRECISION),
-    Column("sma_200", DOUBLE_PRECISION),
-    Column("atr_14", DOUBLE_PRECISION),
-    Column("volume_ma_20", BigInteger),
-    Column("volume_ratio", DOUBLE_PRECISION),
-    PrimaryKeyConstraint("ticker", "date"),
-    Index("idx_silver_weekly_ind_date", "date"),
-    Index("idx_silver_weekly_ind_volume_ratio", "volume_ratio"),  # For HVC queries
-)
+AGGREGATES_SCHEMA_DOC = """
+{daily,weekly,monthly}_aggregates tables:
+- ticker: String
+- date: Date
+- open: Float64 (split-adjusted)
+- high: Float64 (split-adjusted)
+- low: Float64 (split-adjusted)
+- close: Float64 (split-adjusted)
+- volume: Int64
+- transactions: Int64
 
-# 📅 Monthly aggregates
-monthly_aggregates = Table(
-    "silver_monthly_aggregates",
-    metadata,
-    Column("ticker", String(10), nullable=False),
-    Column("date", Date, nullable=False),
-    Column("open", DOUBLE_PRECISION, nullable=False),
-    Column("high", DOUBLE_PRECISION, nullable=False),
-    Column("low", DOUBLE_PRECISION, nullable=False),
-    Column("close", DOUBLE_PRECISION, nullable=False),
-    Column("volume", BigInteger, nullable=False),
-    Column("transactions", BigInteger, nullable=False),
-    PrimaryKeyConstraint("ticker", "date"),
-    Index("idx_silver_monthly_aggs_date", "date"),
-)
+Optimized for:
+- Single Parquet file by: ticker, date
+- Typical size: 2-4GB per timeframe
+- Compacted to: ~20 files @ 128MB each
+- Append-only (incremental processing)
+"""
 
-# 📊 Monthly technical indicators
-monthly_indicators = Table(
-    "silver_monthly_indicators",
-    metadata,
-    Column("ticker", String(10), nullable=False),
-    Column("date", Date, nullable=False),
-    Column("sma_20", DOUBLE_PRECISION),
-    Column("sma_50", DOUBLE_PRECISION),
-    Column("sma_200", DOUBLE_PRECISION),
-    Column("atr_14", DOUBLE_PRECISION),
-    Column("volume_ma_20", BigInteger),
-    Column("volume_ratio", DOUBLE_PRECISION),
-    PrimaryKeyConstraint("ticker", "date"),
-    Index("idx_silver_monthly_ind_date", "date"),
-)
+INDICATORS_SCHEMA_DOC = """
+{daily,weekly,monthly}_indicators tables:
+- ticker: String
+- date: Date
+- sma_20: Float64 (20-period simple moving average)
+- sma_50: Float64 (50-period SMA)
+- sma_200: Float64 (200-period SMA)
+- atr_14: Float64 (14-period average true range)
+- volume_ma_20: Int64 (20-period volume moving average)
+- volume_ratio: Float64 (volume / volume_ma_20, for volume surge detection)
+
+Optimized for:
+- Single Parquet file by: ticker, date
+- Typical size: 1-2GB per timeframe
+- Compacted to: ~10 files @ 128MB each
+- Append-only (incremental processing)
+- volume_ratio used for identifying unusual volume activity
+"""
+
+PROCESSING_NOTES = """
+Processing Strategy:
+
+**Smart Incremental Mode** (default):
+- Check for new splits since last run
+- If splits found: Full rewrite (prices need retroactive adjustment)
+- If no splits: Append new data only (fast!)
+
+**Batch Processing** (memory efficiency):
+Phase 1 - Aggregation:
+  - Process 250 tickers at a time (configurable)
+  - Load bronze → apply splits → aggregate to daily/weekly/monthly
+  - Write to Parquet immediately
+  - Free memory before next batch
+
+Phase 2 - Indicator Calculation:
+  - Process 500 tickers at a time (configurable)
+  - Read aggregates back → calculate indicators
+  - Write to Parquet immediately
+  - Free memory before next batch
+
+**Data Quality**:
+- Only common stocks (CS) and ETFs included
+- Preferred shares, warrants, ADRs, ETNs excluded
+- Split adjustments applied retroactively
+"""

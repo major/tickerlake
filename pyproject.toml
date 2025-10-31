@@ -8,15 +8,12 @@ requires-python = ">=3.12"
 dependencies = [
     "pandas-market-calendars>=5.1.1",
     "polars>=1.33.1",
-    "polars-talib>=0.1.5",
     "polygon-api-client>=1.15.3",
-    "psycopg[binary]>=3.2.0",
     "pyarrow>=21.0.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.10.1",
     "pytz>=2024.0",
     "rich>=14.1.0",
-    "sqlalchemy>=2.0.43",
     "tqdm>=4.67.1",
 ]
 
@@ -33,7 +30,6 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "deptry>=0.20.0",
     "fakeredis>=2.30.1",
     "pandas-stubs>=2.3.0.250703",
     "pre-commit>=4.2.0",
@@ -58,10 +54,6 @@ addopts = [
     "--color=yes",
     "--log-disable=all",
 ]
-filterwarnings = [
-    "ignore::DeprecationWarning",
-    "ignore::PendingDeprecationWarning",
-]
 testpaths = ["tests"]
 
 [tool.pyright]
@@ -73,8 +65,3 @@ fix = true
 
 [tool.ruff.format]
 preview = true
-
-[tool.deptry]
-# Ignore dependencies that are used indirectly or in parts of the code not scanned
-extend_exclude = ["tests", "examples", ".venv"]
-pep621_dev_dependency_groups = ["dev"]

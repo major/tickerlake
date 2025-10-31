@@ -1,4 +1,8 @@
-"""Utility functions for trading calendar and market status operations."""
+"""Trading calendar and market status utilities. 📅
+
+This module provides functions for working with NYSE trading days and market hours,
+useful for determining when to fetch data and when data should be available.
+"""
 
 from datetime import datetime, timedelta
 
@@ -7,27 +11,42 @@ import pytz
 
 
 def get_trading_days(start_date, end_date):
-    """Get list of trading days between start and end dates.
+    """Get list of trading days between start and end dates. 📊
+
+    Uses the NYSE calendar to determine valid trading days, excluding
+    weekends and market holidays.
 
     Args:
         start_date: Start date (string or date object).
         end_date: End date (string or date object).
 
     Returns:
-        Trading days in YYYY-MM-DD format.
+        List of trading days in YYYY-MM-DD format.
 
+    Example:
+        >>> days = get_trading_days("2024-01-01", "2024-01-05")
+        >>> print(days)
+        ['2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05']
     """
     calendar = mcal.get_calendar("NYSE")
     trading_days = calendar.valid_days(start_date=start_date, end_date=end_date)
     return [day.strftime("%Y-%m-%d") for day in trading_days]
 
 
-def is_market_open():
-    """Check if the market is currently open.
+def is_market_open() -> bool:
+    """Check if the NYSE market is currently open. 🔔
+
+    Checks the current time against the NYSE schedule to determine if
+    the market is actively trading.
 
     Returns:
         True if market is open, False otherwise.
 
+    Example:
+        >>> if is_market_open():
+        ...     print("Market is trading!")
+        ... else:
+        ...     print("Market is closed")
     """
     nyse = mcal.get_calendar("NYSE")
 
@@ -52,16 +71,25 @@ def is_market_open():
     return market_open <= now_market_time <= market_close
 
 
-def is_data_available_for_today():
-    """Check if today's market data should be available from the API.
+def is_data_available_for_today() -> bool:
+    """Check if today's market data should be available from the API. ⏰
+
+    Data is considered available if:
+    1. Today is a trading day
+    2. The market has closed
+    3. At least 30 minutes have passed since market close (for data processing)
 
     Returns:
         True if today's data should be available, False otherwise.
 
     Note:
-        Data is considered available if the market is closed and at least
-        30 minutes have passed since market close to allow for data processing.
+        This is useful for determining whether to include today's date when
+        fetching data from APIs. Many data providers need time after market
+        close to finalize and publish the day's data.
 
+    Example:
+        >>> if is_data_available_for_today():
+        ...     fetch_data(date.today())
     """
     nyse = mcal.get_calendar("NYSE")
     market_tz = pytz.timezone(str(nyse.tz))

@@ -5,14 +5,11 @@ from datetime import datetime
 import polars as pl
 from rich.console import Console
 from rich.table import Table
-from sqlalchemy import func, select
 
-from tickerlake.bronze.models import splits as bronze_splits
 from tickerlake.clients import setup_polygon_api_client
-from tickerlake.db import get_engine
 from tickerlake.logging_config import get_logger, setup_logging
-from tickerlake.silver.models import daily_aggregates
-from tickerlake.utils import get_trading_days
+from tickerlake.storage import get_table_path, read_table
+from tickerlake.utils.calendar import get_trading_days
 
 setup_logging()
 logger = get_logger(__name__)
@@ -20,18 +17,18 @@ console = Console()
 
 
 def get_last_trading_day() -> str:
-    """Get the most recent trading day from the silver Postgres layer."""
-    engine = get_engine()
+    """Get the most recent trading day from the silver Parquet layer."""
+    daily_agg_path = get_table_path("silver", "daily_aggregates")
+    df = read_table(daily_agg_path)
 
-    with engine.connect() as conn:
-        result = conn.execute(
-            select(func.max(daily_aggregates.c.date))
-        ).scalar()
-
-    if result is None:
+    if df.is_empty():
         raise ValueError("No trading days found in silver layer")
 
-    return result.strftime("%Y-%m-%d")
+    max_date = df.select(pl.col("date").max()).item()
+    if max_date is None:
+        raise ValueError("No trading days found in silver layer")
+
+    return max_date.strftime("%Y-%m-%d")
 
 
 def get_high_volume_tickers(min_volume: int = 250_000, min_price: float = 20.0) -> list[str]:
@@ -47,17 +44,16 @@ def get_high_volume_tickers(min_volume: int = 250_000, min_price: float = 20.0) 
     last_trading_day = get_last_trading_day()
     logger.info(f"📊 Getting high volume tickers from {last_trading_day}...")
 
-    engine = get_engine()
+    daily_agg_path = get_table_path("silver", "daily_aggregates")
+    df = read_table(daily_agg_path)
 
-    with engine.connect() as conn:
-        result = conn.execute(
-            select(daily_aggregates.c.ticker)
-            .where(daily_aggregates.c.date == datetime.strptime(last_trading_day, "%Y-%m-%d").date())
-            .where(daily_aggregates.c.volume >= min_volume)
-            .where(daily_aggregates.c.close >= min_price)
-        )
-        tickers = [row[0] for row in result]
+    result = df.filter(
+        (pl.col("date") == datetime.strptime(last_trading_day, "%Y-%m-%d").date())
+        & (pl.col("volume") >= min_volume)
+        & (pl.col("close") >= min_price)
+    )
 
+    tickers = result["ticker"].to_list()
     logger.info(f"✅ Found {len(tickers)} tickers with volume >= {min_volume:,} and price >= ${min_price:.2f}")
     return tickers
 
@@ -90,11 +86,9 @@ def build_split_list_to_check(num_splits: int = 25) -> pl.DataFrame:
     from datetime import timedelta
 
     # Get the last trading day from silver data
-    engine = get_engine()
-    with engine.connect() as conn:
-        silver_max_date = conn.execute(
-            select(func.max(daily_aggregates.c.date))
-        ).scalar()
+    daily_agg_path = get_table_path("silver", "daily_aggregates")
+    df_temp = read_table(daily_agg_path)
+    silver_max_date = df_temp.select(pl.col("date").max()).item() if not df_temp.is_empty() else None
 
     # Calculate date range: past 2 years, excluding last 5 trading days
     two_years_ago = (datetime.now() - timedelta(days=730)).date()
@@ -128,16 +122,16 @@ def build_split_list_to_check(num_splits: int = 25) -> pl.DataFrame:
         f"(past 2 years, excluding last 5 trading days)..."
     )
 
-    # Then get splits for those tickers within the date range from bronze Postgres
-    engine = get_engine()
-    with engine.connect() as conn:
-        result = conn.execute(
-            select(bronze_splits)
-            .where(bronze_splits.c.ticker.in_(high_volume_tickers))
-            .where(bronze_splits.c.execution_date >= cutoff_date_min)
-            .where(bronze_splits.c.execution_date <= cutoff_date_max)
-        )
-        df = pl.DataFrame(result.fetchall(), schema=["ticker", "execution_date", "split_from", "split_to"])
+    # Then get splits for those tickers within the date range from bronze Parquet
+    splits_path = get_table_path("bronze", "splits")
+    splits_df = read_table(splits_path)
+
+    # Filter using Polars
+    df = splits_df.filter(
+        pl.col("ticker").is_in(high_volume_tickers)
+        & (pl.col("execution_date") >= cutoff_date_min)
+        & (pl.col("execution_date") <= cutoff_date_max)
+    ).select(["ticker", "execution_date", "split_from", "split_to"])
 
     if df.is_empty():
         logger.warning("⚠️  No splits found for high volume tickers in date range!")
@@ -189,6 +183,77 @@ def get_trading_days_around_split(split_date: str) -> dict[str, str | None]:
     }
 
 
+def _get_date_range(trading_dates: dict[str, str | None]) -> tuple[str, str] | None:
+    """Extract date range from trading dates dict. 📅
+
+    Args:
+        trading_dates: Dict with 'before', 'split', 'after' keys.
+
+    Returns:
+        Tuple of (start_date, end_date), or None if no valid dates.
+    """
+    dates_list = [d for d in trading_dates.values() if d is not None]
+    if not dates_list:
+        return None
+    return min(dates_list), max(dates_list)
+
+
+def _fetch_polygon_prices(
+    ticker: str, start_date: str, end_date: str
+) -> list:
+    """Fetch adjusted prices from Polygon API. 📡
+
+    Args:
+        ticker: Stock ticker symbol.
+        start_date: Start date in YYYY-MM-DD format.
+        end_date: End date in YYYY-MM-DD format.
+
+    Returns:
+        List of aggregate price data from Polygon.
+    """
+    polygon_client = setup_polygon_api_client()
+    return list(
+        polygon_client.list_aggs(ticker, 1, "day", start_date, end_date, adjusted=True)
+    )
+
+
+def _build_price_lookup(aggs: list) -> dict[str, float]:
+    """Build date-to-price lookup from Polygon aggregates. 🗂️
+
+    Args:
+        aggs: List of aggregate price data from Polygon.
+
+    Returns:
+        Dictionary mapping dates (YYYY-MM-DD) to closing prices.
+    """
+    from datetime import timezone
+
+    return {
+        datetime.fromtimestamp(x.timestamp / 1000, tz=timezone.utc).strftime(
+            "%Y-%m-%d"
+        ): x.close
+        for x in aggs
+    }
+
+
+def _map_prices_to_periods(
+    price_lookup: dict[str, float], trading_dates: dict[str, str | None]
+) -> dict[str, float | None]:
+    """Map prices to before/split/after periods. 🗺️
+
+    Args:
+        price_lookup: Dict mapping dates to prices.
+        trading_dates: Dict with 'before', 'split', 'after' keys.
+
+    Returns:
+        Dict mapping periods to prices (or None if unavailable).
+    """
+    return {
+        key: price_lookup.get(date) if date else None
+        for key, date in trading_dates.items()
+    }
+
+
 def get_official_stock_prices_around_split(
     ticker: str, split_date: str
 ) -> dict[str, float | None]:
@@ -202,45 +267,28 @@ def get_official_stock_prices_around_split(
         Dictionary mapping date keys ('before', 'split', 'after') to closing prices.
 
     """
-    polygon_client = setup_polygon_api_client()
-
     # Get actual trading days around the split
     trading_dates = get_trading_days_around_split(split_date)
 
     # Get date range for API call
-    dates_list = [d for d in trading_dates.values() if d is not None]
-    if not dates_list:
+    date_range = _get_date_range(trading_dates)
+    if date_range is None:
         return {}
 
-    start_date = min(dates_list)
-    end_date = max(dates_list)
+    start_date, end_date = date_range
 
     # Fetch adjusted prices from Polygon
-    aggs = []
-    for a in polygon_client.list_aggs(
-        ticker, 1, "day", start_date, end_date, adjusted=True
-    ):
-        aggs.append(a)
+    aggs = _fetch_polygon_prices(ticker, start_date, end_date)
 
-    # Build price lookup (use UTC since Polygon timestamps are in UTC)
-    from datetime import timezone
-
-    price_lookup = {
-        datetime.fromtimestamp(x.timestamp / 1000, tz=timezone.utc).strftime("%Y-%m-%d"): x.close
-        for x in aggs
-    }
-
-    # Map to before/split/after structure
-    return {
-        key: price_lookup.get(date) if date else None
-        for key, date in trading_dates.items()
-    }
+    # Build price lookup and map to periods
+    price_lookup = _build_price_lookup(aggs)
+    return _map_prices_to_periods(price_lookup, trading_dates)
 
 
 def get_silver_stock_prices_around_split(
     ticker: str, split_date: str
 ) -> dict[str, float | None]:
-    """Retrieve silver stock prices around split date from Postgres.
+    """Retrieve silver stock prices around split date from Parquet.
 
     Args:
         ticker: Stock ticker symbol.
@@ -257,23 +305,22 @@ def get_silver_stock_prices_around_split(
     if not dates_list:
         return {}
 
-    start_date = datetime.strptime(min(dates_list), "%Y-%m-%d").date()
-    end_date = datetime.strptime(max(dates_list), "%Y-%m-%d").date()
+    start_date_parsed = datetime.strptime(min(dates_list), "%Y-%m-%d").date()
+    end_date_parsed = datetime.strptime(max(dates_list), "%Y-%m-%d").date()
 
-    engine = get_engine()
-    with engine.connect() as conn:
-        result = conn.execute(
-            select(daily_aggregates.c.date, daily_aggregates.c.close)
-            .where(daily_aggregates.c.ticker == ticker)
-            .where(daily_aggregates.c.date >= start_date)
-            .where(daily_aggregates.c.date <= end_date)
-        )
-        rows = result.fetchall()
+    daily_agg_path = get_table_path("silver", "daily_aggregates")
+    df = read_table(daily_agg_path)
+
+    result = df.filter(
+        (pl.col("ticker") == ticker)
+        & (pl.col("date") >= start_date_parsed)
+        & (pl.col("date") <= end_date_parsed)
+    ).select(["date", "close"])
 
     # Build price lookup
     price_lookup = {
-        row[0].strftime("%Y-%m-%d"): float(row[1])
-        for row in rows
+        row["date"].strftime("%Y-%m-%d"): float(row["close"])
+        for row in result.iter_rows(named=True)
     }
 
     # Map to before/split/after structure

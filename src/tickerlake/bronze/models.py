@@ -1,64 +1,74 @@
-"""SQLAlchemy table definitions for bronze layer."""
+"""Bronze layer schema documentation (Parquet files).
 
-from sqlalchemy import (
-    BigInteger,
-    Boolean,
-    Column,
-    Date,
-    Index,
-    Integer,
-    MetaData,
-    PrimaryKeyConstraint,
-    REAL,
-    String,
-    Table,
-    TIMESTAMP,
-)
+The bronze layer stores raw data from Polygon.io API:
+- stocks: Raw OHLCV data (primary key: ticker, date) - DATE PARTITIONED 📁
+- tickers: Ticker metadata (primary key: ticker)
+- splits: Stock split events (primary key: ticker, execution_date)
 
-metadata = MetaData()
+Parquet files are stored locally at:
+- data/bronze/stocks/ (Hive-partitioned directory with date=YYYY-MM-DD/ subdirs)
+- data/bronze/tickers.parquet
+- data/bronze/splits.parquet
 
-stocks = Table(
-    "stocks",
-    metadata,
-    Column("ticker", String(10), nullable=False),
-    Column("date", Date, nullable=False),
-    Column("open", REAL, nullable=False),
-    Column("high", REAL, nullable=False),
-    Column("low", REAL, nullable=False),
-    Column("close", REAL, nullable=False),
-    Column("volume", BigInteger, nullable=False),
-    Column("transactions", Integer, nullable=False),
-    PrimaryKeyConstraint("ticker", "date"),
-    Index("idx_stocks_date", "date"),
-)
+Schema validation is handled by Polars schemas in src/tickerlake/schemas.py
+"""
 
-tickers = Table(
-    "tickers",
-    metadata,
-    Column("ticker", String(10), primary_key=True),
-    Column("name", String),
-    Column("ticker_type", String(10)),
-    Column("active", Boolean),
-    Column("locale", String(5)),
-    Column("market", String(20)),
-    Column("primary_exchange", String(10)),
-    Column("currency_name", String(10)),
-    Column("currency_symbol", String(5)),
-    Column("cik", String(20)),
-    Column("composite_figi", String(20)),
-    Column("share_class_figi", String(20)),
-    Column("base_currency_name", String(10)),
-    Column("base_currency_symbol", String(5)),
-    Column("delisted_utc", TIMESTAMP),
-    Column("last_updated_utc", TIMESTAMP),
-)
+# Table schemas for reference (actual schemas in schemas.py)
 
-splits = Table(
-    "splits",
-    metadata,
-    Column("ticker", String(10), nullable=False),
-    Column("execution_date", Date, nullable=False),
-    Column("split_from", REAL, nullable=False),
-    Column("split_to", REAL, nullable=False),
-    PrimaryKeyConstraint("ticker", "execution_date"),
-)
+STOCKS_SCHEMA_DOC = """
+stocks table (Partitioned Parquet Dataset):
+- ticker: String (max 10 chars)
+- date: Date
+- open: Float32
+- high: Float32
+- low: Float32
+- close: Float32
+- volume: Int64
+- transactions: Int32
+
+Storage:
+- Hive-style partitioned dataset with zstd compression
+- Partitioned by date column (creates date=YYYY-MM-DD/ subdirectories)
+- Each partition contains one day's worth of data across all tickers
+- Benefits: Efficient date-range queries, parallel processing, easy backfills
+- Typical size: 2-4GB compressed (5 years of data)
+- Fast queries via Polars lazy API
+"""
+
+TICKERS_SCHEMA_DOC = """
+tickers table (Parquet):
+- ticker: String (max 10 chars, primary key)
+- name: String
+- type: String (CS, ETF, PFD, WARRANT, etc.)
+- active: Boolean
+- locale: String
+- market: String
+- primary_exchange: String
+- currency_name: String
+- currency_symbol: String
+- cik: String
+- composite_figi: String
+- share_class_figi: String
+- base_currency_name: String
+- base_currency_symbol: String
+- delisted_utc: Datetime
+- last_updated_utc: Datetime
+
+Storage:
+- Single Parquet file with zstd compression
+- Typical size: 5-10MB (~10k tickers)
+- Full refresh on each run
+"""
+
+SPLITS_SCHEMA_DOC = """
+splits table (Parquet):
+- ticker: String (max 10 chars)
+- execution_date: Date
+- split_from: Float32
+- split_to: Float32
+
+Storage:
+- Single Parquet file with zstd compression
+- Typical size: 1-2MB (~500 splits)
+- Full refresh on each run
+"""

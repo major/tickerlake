@@ -85,7 +85,26 @@ INDICATORS_SCHEMA: dict[str, Any] = {
 }
 
 
-# Validation functions
+# =============================================================================
+# Gold Layer Schemas (VWAP Analytics)
+# =============================================================================
+
+VWAP_SIGNALS_SCHEMA: dict[str, Any] = {
+    "ticker": pl.String,
+    "date": pl.Date,
+    "close": pl.Float64,
+    "ytd_vwap": pl.Float64,
+    "qtd_vwap": pl.Float64,
+    "above_ytd_vwap": pl.Boolean,
+    "above_qtd_vwap": pl.Boolean,
+    "above_both": pl.Boolean,
+    "calculated_at": pl.Datetime,
+}
+
+
+# =============================================================================
+# Validation Functions
+# =============================================================================
 def validate_daily_aggregates(df: pl.DataFrame) -> pl.DataFrame:
     """Validate and cast daily aggregates to expected schema.
 
