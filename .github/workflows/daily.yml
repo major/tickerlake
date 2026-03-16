@@ -9,6 +9,9 @@ concurrency:
   group: tickerlake-pipeline
   cancel-in-progress: false
 
+permissions:
+  contents: write
+
 jobs:
   update:
     runs-on: ubuntu-latest
