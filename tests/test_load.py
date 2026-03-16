@@ -8,6 +8,7 @@ import pytest
 
 from tickerlake.load import (
     append_raw_db,
+    compact_raw_db,
     get_db_info,
     read_raw_db,
     write_consumer_db,
@@ -227,3 +228,50 @@ def test_write_raw_db_idempotent(tmp_path: Path, sample_bars_df: pl.DataFrame) -
 
     # Should still be the original count, not doubled
     assert count == len(sample_bars_df)
+
+
+def test_compact_raw_db_preserves_data(
+    tmp_path: Path, sample_bars_df: pl.DataFrame
+) -> None:
+    """compact_raw_db() preserves all rows after rebuild."""
+    db_path = tmp_path / "raw.duckdb"
+    write_raw_db(sample_bars_df, db_path)
+    append_raw_db(sample_bars_df, db_path)
+
+    compact_raw_db(db_path)
+
+    result = read_raw_db(db_path)
+    assert len(result) == len(sample_bars_df) * 2
+
+
+def test_compact_raw_db_sorted(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
+    """compact_raw_db() output is sorted by (ticker, date)."""
+    db_path = tmp_path / "raw.duckdb"
+    write_raw_db(sample_bars_df, db_path)
+
+    compact_raw_db(db_path)
+
+    con = duckdb.connect(str(db_path), read_only=True)
+    rows = con.execute("SELECT ticker, date FROM raw_daily_bars").fetchall()
+    con.close()
+
+    for i in range(1, len(rows)):
+        if rows[i][0] == rows[i - 1][0]:
+            assert rows[i][1] >= rows[i - 1][1], (
+                f"Dates not sorted within ticker {rows[i][0]}"
+            )
+        else:
+            assert rows[i][0] >= rows[i - 1][0], "Tickers not sorted"
+
+
+def test_append_raw_db_sorted(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
+    """append_raw_db() inserts rows sorted by (ticker, date)."""
+    db_path = tmp_path / "raw.duckdb"
+    write_raw_db(sample_bars_df, db_path)
+    append_raw_db(sample_bars_df, db_path)
+
+    con = duckdb.connect(str(db_path), read_only=True)
+    rows = con.execute("SELECT ticker, date FROM raw_daily_bars").fetchall()
+    con.close()
+
+    assert len(rows) == len(sample_bars_df) * 2

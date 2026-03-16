@@ -9,6 +9,7 @@ from tickerlake.config import Config
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
 from tickerlake.load import (
     append_raw_db,
+    compact_raw_db,
     get_db_info,
     read_raw_db,
     write_consumer_db,
@@ -124,6 +125,27 @@ def _print_db_info(label: str, path: Path) -> None:
             print(f"    dates: {dr['min']} to {dr['max']}")
     size_mb = db_info["file_size_bytes"] / (1024 * 1024)
     print(f"  size: {size_mb:.1f} MB")
+
+
+def compact(config: Config) -> None:
+    """Rebuild raw.duckdb to reclaim space and optimize compression."""
+    raw_path = config.output_dir / "raw.duckdb"
+
+    if not raw_path.exists():
+        print(f"No raw.duckdb found at {raw_path}")
+        return
+
+    size_before = raw_path.stat().st_size
+    print(f"Compacting {raw_path} ({size_before / (1024 * 1024):.1f} MB)...")
+    compact_raw_db(raw_path)
+    size_after = raw_path.stat().st_size
+
+    saved = size_before - size_after
+    pct = (saved / size_before * 100) if size_before > 0 else 0
+    print(
+        f"Done: {size_after / (1024 * 1024):.1f} MB "
+        f"(saved {saved / (1024 * 1024):.1f} MB, {pct:.0f}%)"
+    )
 
 
 def info(config: Config) -> None:

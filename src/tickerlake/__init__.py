@@ -36,6 +36,11 @@ def _build_parser() -> argparse.ArgumentParser:
     info_parser = subparsers.add_parser("info", help="Show database info")
     info_parser.add_argument("--output-dir", type=Path, metavar="DIR")
 
+    compact_parser = subparsers.add_parser(
+        "compact", help="Rebuild raw.duckdb to reclaim space"
+    )
+    compact_parser.add_argument("--output-dir", type=Path, metavar="DIR")
+
     return parser
 
 
@@ -63,3 +68,5 @@ def main() -> None:
         pipeline.update(config)
     elif args.command == "info":
         pipeline.info(config)
+    elif args.command == "compact":
+        pipeline.compact(config)

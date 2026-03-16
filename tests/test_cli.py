@@ -176,6 +176,35 @@ class TestInfoSubcommand:
             assert config.output_dir == tmp_path
 
 
+class TestCompactSubcommand:
+    """Test compact subcommand and its options."""
+
+    def test_compact_subcommand_calls_pipeline(self, monkeypatch, tmp_path):
+        """Verify compact subcommand invokes pipeline.compact."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.compact") as mock_compact:
+            monkeypatch.setattr(
+                "sys.argv", ["tickerlake", "compact", "--output-dir", str(tmp_path)]
+            )
+            main()
+            mock_compact.assert_called_once()
+            config = mock_compact.call_args[0][0]
+            assert isinstance(config, Config)
+            assert config.output_dir == tmp_path
+
+    def test_compact_custom_output_dir(self, monkeypatch, tmp_path):
+        """Verify --output-dir option sets config.output_dir for compact."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.compact") as mock_compact:
+            monkeypatch.setattr(
+                "sys.argv",
+                ["tickerlake", "compact", "--output-dir", str(tmp_path)],
+            )
+            main()
+            config = mock_compact.call_args[0][0]
+            assert config.output_dir == tmp_path
+
+
 class TestConfigDefaults:
     """Test that Config defaults are applied when CLI options are omitted."""
 

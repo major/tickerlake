@@ -35,6 +35,7 @@ def write_raw_db(bars: pl.DataFrame, path: Path) -> None:
         con.execute(
             f"CREATE OR REPLACE TABLE raw_daily_bars AS {_read_parquet_sql(tmp, 'ticker, date')}"
         )
+        con.execute("CHECKPOINT")
         con.close()
 
 
@@ -42,7 +43,10 @@ def append_raw_db(new_bars: pl.DataFrame, path: Path) -> None:
     """Append new_bars rows to existing raw_daily_bars table."""
     with _tmp_parquet(new_bars) as tmp:
         con = duckdb.connect(str(path))
-        con.execute(f"INSERT INTO raw_daily_bars {_read_parquet_sql(tmp)}")
+        con.execute(
+            f"INSERT INTO raw_daily_bars {_read_parquet_sql(tmp, 'ticker, date')}"
+        )
+        con.execute("CHECKPOINT")
         con.close()
 
 
@@ -83,7 +87,14 @@ def write_consumer_db(
         con.execute(
             f"CREATE OR REPLACE TABLE tickers AS {_read_parquet_sql(tickers_tmp, 'ticker')}"
         )
+        con.execute("CHECKPOINT")
         con.close()
+
+
+def compact_raw_db(path: Path) -> None:
+    """Rebuild raw.duckdb by exporting and reimporting to reclaim fragmented space."""
+    bars = read_raw_db(path)
+    write_raw_db(bars, path)
 
 
 def _table_date_range(con: duckdb.DuckDBPyConnection, table: str) -> dict | None:
