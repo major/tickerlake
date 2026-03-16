@@ -1,0 +1,50 @@
+name: Backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Start date (YYYY-MM-DD). Defaults to 5 years ago."
+        required: false
+        default: ""
+
+concurrency:
+  group: tickerlake-pipeline
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run backfill
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: |
+          if [ -n "${{ inputs.start_date }}" ]; then
+            uv run tickerlake backfill --start-date "${{ inputs.start_date }}"
+          else
+            uv run tickerlake backfill
+          fi
+
+      - name: Create release if not exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view latest 2>/dev/null || \
+            gh release create latest --title "Latest Data" --notes "Auto-updated by tickerlake pipeline"
+
+      - name: Upload DuckDB files to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload latest raw.duckdb tickerlake.duckdb --clobber
