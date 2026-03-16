@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       start_date:
-        description: "Start date (YYYY-MM-DD). Defaults to 5 years ago."
+        description: "Start date (YYYY-MM-DD). Defaults to 1 year ago."
         required: false
         default: ""
 

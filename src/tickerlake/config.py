@@ -13,7 +13,7 @@ class Config:
     Attributes:
         api_key: MASSIVE API key (required, from MASSIVE_API_KEY env var)
         output_dir: Directory for output files (defaults to current working directory)
-        start_date: Start date for data collection (defaults to 5 years ago)
+        start_date: Start date for data collection (defaults to 1 year ago)
         end_date: End date for data collection (defaults to today)
         ticker_types: List of ticker types to process (defaults to ["CS", "ETF"])
     """
@@ -22,7 +22,7 @@ class Config:
     output_dir: Path = field(default_factory=Path.cwd)
     start_date: datetime.date = field(
         default_factory=lambda: datetime.date.today().replace(
-            year=datetime.date.today().year - 5
+            year=datetime.date.today().year - 1
         )
     )
     end_date: datetime.date = field(default_factory=datetime.date.today)

@@ -189,7 +189,7 @@ class TestConfigDefaults:
             )
             main()
             config = mock_backfill.call_args[0][0]
-            # Config defaults: start_date is 5 years ago, end_date is today
+            # Config defaults: start_date is 1 year ago, end_date is today
             assert config.start_date is not None
             assert config.end_date is not None
             assert config.start_date < config.end_date
