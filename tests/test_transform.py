@@ -551,3 +551,129 @@ def test_compute_atr_flat_price():
     # After warmup, every ATR value should be 0.0
     non_null = result.filter(pl.col("atr_14").is_not_null())
     assert non_null["atr_14"].to_list() == pytest.approx([0.0] * 7, abs=1e-6)
+
+
+def _make_compounding_ohlc(
+    start_price: float, daily_pct: float, n_days: int
+) -> list[tuple[float, float, float, float]]:
+    """Build flat-candle OHLC tuples with compounding daily returns.
+
+    Each day's close = prev_close * (1 + daily_pct). open=high=low=close.
+    """
+    closes = [start_price]
+    for _ in range(n_days - 1):
+        closes.append(closes[-1] * (1 + daily_pct))
+    return [(c, c, c, c) for c in closes]
+
+
+def test_compute_metrics_rs_correct():
+    """RS for AAPL vs SPY = rolling_sum(50) of daily diff ≈ 0.25 after warmup.
+
+    AAPL gains exactly 1%/day, SPY gains exactly 0.5%/day.
+    Daily diff = 0.01 - 0.005 = 0.005. rolling_sum(50) = 0.005 * 50 = 0.25.
+    """
+    n = 60
+    aapl_ohlc = _make_compounding_ohlc(100.0, 0.01, n)
+    spy_ohlc = _make_compounding_ohlc(400.0, 0.005, n)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc, "SPY": spy_ohlc})
+
+    result = compute_metrics(bars)
+
+    # Row 50 (0-indexed) = 51st bar = date 2024-01-01 + 50 days = 2024-02-20
+    target_date = datetime.date(2024, 1, 1) + datetime.timedelta(days=50)
+    row = result.filter(
+        (pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)
+    ).row(0, named=True)
+
+    assert row["rs"] == pytest.approx(0.25, abs=1e-4)
+
+
+def test_compute_metrics_rs_negative():
+    """RS is negative when stock underperforms SPY.
+
+    AAPL gains 0.5%/day, SPY gains 1%/day → daily diff = -0.005.
+    After 50 non-null days, RS = -0.25.
+    """
+    n = 60
+    aapl_ohlc = _make_compounding_ohlc(100.0, 0.005, n)
+    spy_ohlc = _make_compounding_ohlc(400.0, 0.01, n)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc, "SPY": spy_ohlc})
+
+    result = compute_metrics(bars)
+
+    target_date = datetime.date(2024, 1, 1) + datetime.timedelta(days=50)
+    row = result.filter(
+        (pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)
+    ).row(0, named=True)
+
+    assert row["rs"] < 0
+
+
+def test_compute_metrics_rs_sma20_correct():
+    """RS_SMA_20 = rolling_mean(RS, 20). When RS is constant, SMA equals RS.
+
+    AAPL +1%/day, SPY +0.5%/day over 80 days. RS stabilizes at 0.25 from
+    row 50 onward. SMA(20) of a constant 0.25 = 0.25.
+    """
+    n = 80
+    aapl_ohlc = _make_compounding_ohlc(100.0, 0.01, n)
+    spy_ohlc = _make_compounding_ohlc(400.0, 0.005, n)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc, "SPY": spy_ohlc})
+
+    result = compute_metrics(bars)
+
+    # Row 69 (0-indexed) = 70th bar — RS has been stable for 20 rows, SMA is settled
+    target_date = datetime.date(2024, 1, 1) + datetime.timedelta(days=69)
+    row = result.filter(
+        (pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)
+    ).row(0, named=True)
+
+    assert row["rs_sma_20"] == pytest.approx(0.25, abs=1e-4)
+
+
+def test_compute_metrics_rs_null_count():
+    """RS has 50 leading nulls per ticker; RS_SMA_20 has 69 leading nulls.
+
+    pct_change shift(1) → first row null → rolling_sum(50) needs 50 values
+    → 50 leading nulls. rolling_mean(20) on top adds 19 more → 69 total.
+    """
+    n = 250
+    aapl_ohlc = _make_compounding_ohlc(100.0, 0.01, n)
+    msft_ohlc = _make_compounding_ohlc(200.0, 0.008, n)
+    spy_ohlc = _make_compounding_ohlc(400.0, 0.005, n)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc, "MSFT": msft_ohlc, "SPY": spy_ohlc})
+
+    result = compute_metrics(bars)
+
+    rs_nulls = (
+        result.filter(pl.col("ticker").is_in(["AAPL", "MSFT"]))
+        .group_by("ticker")
+        .agg(pl.col("rs").null_count().alias("rs_nulls"))
+        .sort("ticker")
+    )
+    rs_sma_nulls = (
+        result.filter(pl.col("ticker").is_in(["AAPL", "MSFT"]))
+        .group_by("ticker")
+        .agg(pl.col("rs_sma_20").null_count().alias("sma_nulls"))
+        .sort("ticker")
+    )
+
+    assert rs_nulls["rs_nulls"].to_list() == [50, 50]
+    assert rs_sma_nulls["sma_nulls"].to_list() == [69, 69]
+
+
+def test_compute_metrics_rs_spy_is_zero():
+    """SPY's RS vs itself is 0 at every non-null row (comparing to itself)."""
+    n = 60
+    aapl_ohlc = _make_compounding_ohlc(100.0, 0.01, n)
+    spy_ohlc = _make_compounding_ohlc(400.0, 0.005, n)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc, "SPY": spy_ohlc})
+
+    result = compute_metrics(bars)
+
+    spy_rs = result.filter((pl.col("ticker") == "SPY") & pl.col("rs").is_not_null())[
+        "rs"
+    ].to_list()
+
+    assert len(spy_rs) > 0
+    assert spy_rs == pytest.approx([0.0] * len(spy_rs), abs=1e-5)

@@ -71,8 +71,51 @@ def _compute_atr(bars: pl.DataFrame, period: int = 14) -> pl.DataFrame:
 
 
 def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
+    """Compute per-ticker technical metrics: SMA-50, SMA-200, RS, RS_SMA_20.
+
+    RS (Relative Strength) measures cumulative return outperformance vs SPY
+    over a 50-day rolling window: rolling_sum(stock_pct - spy_pct, 50).
+    RS_SMA_20 is the 20-day rolling mean of RS, used as a signal line.
+    When SPY is absent from bars, rs and rs_sma_20 are null for all tickers.
+    """
     sorted_bars = bars.sort(["ticker", "date"])
-    return sorted_bars.select(
+    spy_present = "SPY" in sorted_bars["ticker"]
+
+    pct_change = (pl.col("close") - pl.col("close").shift(1).over("ticker")) / pl.col(
+        "close"
+    ).shift(1).over("ticker")
+
+    if spy_present:
+        spy_pct = sorted_bars.filter(pl.col("ticker") == "SPY").select(
+            [pl.col("date"), pct_change.alias("_spy_pct")]
+        )
+        df = sorted_bars.with_columns(pct_change.alias("_pct")).join(
+            spy_pct, on="date", how="left"
+        )
+        rs_daily = pl.col("_pct") - pl.col("_spy_pct")
+        df = df.with_columns(
+            rs_daily.cast(pl.Float64)
+            .rolling_sum(50)
+            .over("ticker")
+            .cast(pl.Float32)
+            .alias("rs")
+        ).with_columns(
+            pl.col("rs")
+            .cast(pl.Float64)
+            .rolling_mean(20)
+            .over("ticker")
+            .cast(pl.Float32)
+            .alias("rs_sma_20")
+        )
+    else:
+        df = sorted_bars.with_columns(
+            [
+                pl.lit(None).cast(pl.Float32).alias("rs"),
+                pl.lit(None).cast(pl.Float32).alias("rs_sma_20"),
+            ]
+        )
+
+    return df.select(
         [
             pl.col("date"),
             pl.col("ticker"),
@@ -88,5 +131,7 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
             .over("ticker")
             .cast(pl.Float32)
             .alias("sma_200"),
+            pl.col("rs"),
+            pl.col("rs_sma_20"),
         ]
     )
