@@ -24,24 +24,35 @@ def _run_backfill(config: Config) -> None:
         print("No trading days in the requested date range.")
         return
 
+    print(
+        f"Backfill: {config.start_date} to {config.end_date} ({len(dates)} trading days)"
+    )
     client = MassiveClient(config)
 
+    print("Extracting daily bars...")
     bars = extract_daily_aggs(client, dates)
+    print(f"Extracting splits ({config.start_date} to {config.end_date})...")
     splits = extract_splits(client, config.start_date, config.end_date)
+    print(f"Extracting tickers (types: {', '.join(config.ticker_types)})...")
     tickers = extract_tickers(client, config.ticker_types)
 
+    print(f"Adjusting for {len(splits)} splits...")
     bars = adjust_splits(bars, splits)
+    print("Filtering to known tickers...")
     bars = filter_tickers(bars, tickers)
+    print("Computing metrics (SMA-50, SMA-200)...")
     metrics = compute_metrics(bars)
 
     raw_path = config.output_dir / "raw.duckdb"
     consumer_path = config.output_dir / "tickerlake.duckdb"
 
+    print(f"Writing raw DB to {raw_path}...")
     write_raw_db(bars, raw_path)
+    print(f"Writing consumer DB to {consumer_path}...")
     write_consumer_db(bars, metrics, tickers, consumer_path)
 
     n_tickers = bars["ticker"].n_unique()
-    print(f"Backfill complete: {len(bars)} bars, {n_tickers} tickers")
+    print(f"Backfill complete: {len(bars):,} bars, {n_tickers:,} tickers")
 
 
 def backfill(config: Config) -> None:
@@ -67,23 +78,34 @@ def update(config: Config) -> None:
         print("Already up to date.")
         return
 
+    print(f"Update: {next_day} to {config.end_date} ({len(dates)} new trading days)")
     client = MassiveClient(config)
+
+    print("Extracting new daily bars...")
     new_bars = extract_daily_aggs(client, dates)
+    print("Appending to raw DB...")
     append_raw_db(new_bars, raw_path)
 
+    print("Rebuilding consumer DB from full raw dataset...")
     all_bars = read_raw_db(raw_path)
+    print(f"Extracting splits ({config.start_date} to {config.end_date})...")
     splits = extract_splits(client, config.start_date, config.end_date)
+    print(f"Extracting tickers (types: {', '.join(config.ticker_types)})...")
     tickers = extract_tickers(client, config.ticker_types)
 
+    print(f"Adjusting for {len(splits)} splits...")
     all_bars = adjust_splits(all_bars, splits)
+    print("Filtering to known tickers...")
     all_bars = filter_tickers(all_bars, tickers)
+    print("Computing metrics (SMA-50, SMA-200)...")
     metrics = compute_metrics(all_bars)
 
     consumer_path = config.output_dir / "tickerlake.duckdb"
+    print(f"Writing consumer DB to {consumer_path}...")
     write_consumer_db(all_bars, metrics, tickers, consumer_path)
 
     n_tickers = all_bars["ticker"].n_unique()
-    print(f"Update complete: {len(all_bars)} bars, {n_tickers} tickers")
+    print(f"Update complete: {len(all_bars):,} bars, {n_tickers:,} tickers")
 
 
 def _print_db_info(label: str, path: Path) -> None:
