@@ -39,15 +39,12 @@ jobs:
             uv run tickerlake backfill
           fi
 
-      - name: Create release if not exists
+      - name: Create release with DuckDB files
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view latest 2>/dev/null || \
-            gh release create latest --title "Latest Data" --notes "Auto-updated by tickerlake pipeline"
-
-      - name: Upload DuckDB files to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload latest raw.duckdb tickerlake.duckdb --clobber
+          TAG="v$(date -u +%Y.%m.%d-%H%M)"
+          gh release create "$TAG" \
+            --title "Backfill $TAG" \
+            --notes "Backfill run at $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            raw.duckdb tickerlake.duckdb

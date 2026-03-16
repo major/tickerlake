@@ -30,25 +30,25 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download latest --pattern "raw.duckdb" || true
+          LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty')
+          if [ -n "$LATEST_TAG" ]; then
+            gh release download "$LATEST_TAG" --pattern "raw.duckdb" || true
+          fi
 
       - name: Run update
         env:
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
         run: uv run tickerlake update
 
-      - name: Create release if not exists
+      - name: Create release with DuckDB files
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view latest 2>/dev/null || \
-            gh release create latest --title "Latest Data" --notes "Auto-updated by tickerlake pipeline"
-
-      - name: Upload DuckDB files to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload latest raw.duckdb tickerlake.duckdb --clobber
+          TAG="v$(date -u +%Y.%m.%d-%H%M)"
+          gh release create "$TAG" \
+            --title "Update $TAG" \
+            --notes "Daily update at $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            raw.duckdb tickerlake.duckdb
 
       - name: Notify downstream repository
         if: ${{ secrets.DOWNSTREAM_PAT != '' }}
