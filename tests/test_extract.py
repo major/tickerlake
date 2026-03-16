@@ -4,7 +4,6 @@ import datetime
 from unittest.mock import MagicMock
 
 import polars as pl
-import pytest
 
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
 
@@ -12,14 +11,14 @@ from tickerlake.extract import extract_daily_aggs, extract_splits, extract_ticke
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def make_mock_agg(ticker, ts_ms, o, h, l, c, vol, vwap, txns):
+def make_mock_agg(ticker, ts_ms, o, h, low, c, vol, vwap, txns):
     """Build a mock GroupedDailyAgg object."""
     agg = MagicMock()
     agg.ticker = ticker
     agg.timestamp = ts_ms
     agg.open = o
     agg.high = h
-    agg.low = l
+    agg.low = low
     agg.close = c
     agg.volume = vol
     agg.vwap = vwap

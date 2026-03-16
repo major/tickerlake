@@ -2,7 +2,6 @@
 
 import datetime
 
-import pytest
 
 from tickerlake.calendar import get_trading_days
 
