@@ -9,6 +9,7 @@ transform = importlib.import_module("tickerlake.transform")
 adjust_splits = transform.adjust_splits
 compute_metrics = transform.compute_metrics
 filter_tickers = transform.filter_tickers
+_compute_atr = transform._compute_atr
 
 
 BARS_SCHEMA = {
@@ -458,3 +459,95 @@ def test_compute_metrics_output_columns():
     result = compute_metrics(bars)
 
     assert result.columns == ["date", "ticker", "sma_50", "sma_200"]
+
+
+def make_ohlc_bars(
+    ticker_to_ohlc: dict[str, list[tuple[float, float, float, float]]],
+    start_date: datetime.date = datetime.date(2024, 1, 1),
+) -> pl.DataFrame:
+    """Build a bars DataFrame from per-ticker (open, high, low, close) tuples.
+
+    Each tuple maps to one trading day. Volume is fixed at 1000.0, vwap equals
+    close, and transactions is fixed at 100.
+    """
+    rows = []
+    for ticker, ohlc_list in ticker_to_ohlc.items():
+        for index, (open_, high, low, close) in enumerate(ohlc_list):
+            rows.append(
+                {
+                    "date": start_date + datetime.timedelta(days=index),
+                    "ticker": ticker,
+                    "open": float(open_),
+                    "high": float(high),
+                    "low": float(low),
+                    "close": float(close),
+                    "volume": 1000.0,
+                    "vwap": float(close),
+                    "transactions": 100,
+                }
+            )
+    return make_bars(rows)
+
+
+def test_compute_atr_basic():
+    """ATR(14) equals the simple mean of True Range over 14 bars.
+
+    With constant high=102, low=98, close=100 (and first bar close=100 too),
+    TR is always 4.0. After 14 bars the rolling mean is 4.0.
+    """
+    # 20 bars: first bar sets prev_close baseline, rest have TR=4 always
+    ohlc = [(100.0, 102.0, 98.0, 100.0)] * 20
+    bars = make_ohlc_bars({"AAPL": ohlc})
+
+    result = _compute_atr(bars)
+
+    # Row 13 (0-indexed) is the 14th bar — first non-null ATR
+    # date = 2024-01-01 + 13 days = 2024-01-14
+    row = result.filter(pl.col("date") == datetime.date(2024, 1, 14)).row(0, named=True)
+    assert row["atr_14"] == pytest.approx(4.0, abs=1e-4)
+
+
+def test_compute_atr_null_count():
+    """ATR(14) produces exactly 13 nulls per ticker (rolling_mean needs 14 values)."""
+    ohlc = [(100.0, 102.0, 98.0, 100.0)] * 30
+    bars = make_ohlc_bars({"AAPL": ohlc, "MSFT": ohlc})
+
+    result = _compute_atr(bars)
+    null_counts = result.group_by("ticker").agg(
+        pl.col("atr_14").null_count().alias("nulls")
+    )
+
+    assert null_counts.sort("ticker")["nulls"].to_list() == [13, 13]
+
+
+def test_compute_atr_per_ticker_isolation():
+    """ATR values for different tickers must not bleed into each other."""
+    # AAPL: high-low range = 4, MSFT: high-low range = 2
+    # Constant close so prev_close legs are zero — TR = high - low
+    aapl_ohlc = [(100.0, 102.0, 98.0, 100.0)] * 20
+    msft_ohlc = [(100.0, 101.0, 99.0, 100.0)] * 20
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc, "MSFT": msft_ohlc})
+
+    result = _compute_atr(bars)
+
+    aapl_row = result.filter(
+        (pl.col("ticker") == "AAPL") & (pl.col("date") == datetime.date(2024, 1, 14))
+    ).row(0, named=True)
+    msft_row = result.filter(
+        (pl.col("ticker") == "MSFT") & (pl.col("date") == datetime.date(2024, 1, 14))
+    ).row(0, named=True)
+
+    assert aapl_row["atr_14"] == pytest.approx(4.0, abs=1e-4)
+    assert msft_row["atr_14"] == pytest.approx(2.0, abs=1e-4)
+
+
+def test_compute_atr_flat_price():
+    """ATR is 0.0 (not null) after warmup when all OHLC values are identical."""
+    ohlc = [(100.0, 100.0, 100.0, 100.0)] * 20
+    bars = make_ohlc_bars({"AAPL": ohlc})
+
+    result = _compute_atr(bars)
+
+    # After warmup, every ATR value should be 0.0
+    non_null = result.filter(pl.col("atr_14").is_not_null())
+    assert non_null["atr_14"].to_list() == pytest.approx([0.0] * 7, abs=1e-6)
