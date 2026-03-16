@@ -2,7 +2,6 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:best-practices",
-    "schedule:weekly",
     "helpers:pinGitHubActionDigests"
   ],
   "dependencyDashboard": true,
@@ -11,7 +10,6 @@
   "osvVulnerabilityAlerts": true,
   "lockFileMaintenance": {
     "enabled": true,
-    "schedule": ["before 3am on Monday"],
     "automerge": true
   },
   "packageRules": [
