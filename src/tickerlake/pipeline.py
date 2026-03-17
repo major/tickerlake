@@ -11,6 +11,7 @@ from tickerlake.load import (
     append_raw_db,
     compact_raw_db,
     get_db_info,
+    get_existing_dates,
     read_raw_db,
     write_consumer_db,
     write_raw_db,
