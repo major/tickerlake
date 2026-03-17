@@ -458,7 +458,17 @@ def test_compute_metrics_output_columns():
 
     result = compute_metrics(bars)
 
-    assert result.columns == ["date", "ticker", "sma_50", "sma_200"]
+    assert result.columns == [
+        "date",
+        "ticker",
+        "sma_50",
+        "sma_200",
+        "atr_14",
+        "rs",
+        "rs_sma_20",
+        "vars",
+        "vars_sma_20",
+    ]
 
 
 def make_ohlc_bars(

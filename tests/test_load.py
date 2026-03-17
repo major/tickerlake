@@ -19,18 +19,29 @@ from tickerlake.load import (
 @pytest.fixture
 def sample_metrics_df(sample_bars_df: pl.DataFrame) -> pl.DataFrame:
     """Create a sample stock metrics DataFrame aligned with sample_bars_df."""
+    n = len(sample_bars_df)
     return pl.DataFrame(
         {
             "date": sample_bars_df["date"],
             "ticker": sample_bars_df["ticker"],
-            "sma_50": [None] * len(sample_bars_df),
-            "sma_200": [None] * len(sample_bars_df),
+            "sma_50": [None] * n,
+            "sma_200": [None] * n,
+            "atr_14": [None] * n,
+            "rs": [None] * n,
+            "rs_sma_20": [None] * n,
+            "vars": [None] * n,
+            "vars_sma_20": [None] * n,
         },
         schema={
             "date": pl.Date,
             "ticker": pl.Utf8,
             "sma_50": pl.Float32,
             "sma_200": pl.Float32,
+            "atr_14": pl.Float32,
+            "rs": pl.Float32,
+            "rs_sma_20": pl.Float32,
+            "vars": pl.Float32,
+            "vars_sma_20": pl.Float32,
         },
     )
 
@@ -169,6 +180,11 @@ def test_write_consumer_db_schema(
     assert metrics_schema["date"] == "DATE"
     assert metrics_schema["sma_50"] == "FLOAT"
     assert metrics_schema["sma_200"] == "FLOAT"
+    assert metrics_schema["atr_14"] == "FLOAT"
+    assert metrics_schema["rs"] == "FLOAT"
+    assert metrics_schema["rs_sma_20"] == "FLOAT"
+    assert metrics_schema["vars"] == "FLOAT"
+    assert metrics_schema["vars_sma_20"] == "FLOAT"
 
     # tickers schema
     assert tickers_schema["ticker"] == "VARCHAR"

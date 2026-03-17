@@ -98,8 +98,24 @@ def sample_metrics():
             "ticker": ["AAPL", "MSFT"],
             "sma_50": [None, None],
             "sma_200": [None, None],
+            "atr_14": [None, None],
+            "rs": [None, None],
+            "rs_sma_20": [None, None],
+            "vars": [None, None],
+            "vars_sma_20": [None, None],
         }
-    ).cast({"date": pl.Date, "sma_50": pl.Float32, "sma_200": pl.Float32})
+    ).cast(
+        {
+            "date": pl.Date,
+            "sma_50": pl.Float32,
+            "sma_200": pl.Float32,
+            "atr_14": pl.Float32,
+            "rs": pl.Float32,
+            "rs_sma_20": pl.Float32,
+            "vars": pl.Float32,
+            "vars_sma_20": pl.Float32,
+        }
+    )
 
 
 @pytest.fixture
