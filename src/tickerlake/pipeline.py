@@ -12,6 +12,7 @@ from tickerlake.load import (
     append_raw_db,
     compact_raw_db,
     get_db_info,
+    get_existing_dates,
     read_raw_db,
     write_consumer_db,
     write_raw_db,
@@ -28,33 +29,50 @@ def _run_backfill(config: Config) -> None:
         logger.warning("No trading days in the requested date range.")
         return
 
+    raw_path = config.output_dir / "raw.duckdb"
+    consumer_path = config.output_dir / "tickerlake.duckdb"
+
+    existing_dates = get_existing_dates(raw_path)
+    missing_dates = [d for d in dates if d not in existing_dates]
+
     logger.info(
-        "Backfill: %s to %s (%d trading days)",
+        "Backfill: %s to %s (%d trading days, %d cached, %d to fetch)",
         config.start_date,
         config.end_date,
         len(dates),
+        len(existing_dates),
+        len(missing_dates),
     )
     client = MassiveClient(config)
 
-    logger.info("Extracting daily bars...")
-    bars = extract_daily_aggs(client, dates)
+    if missing_dates and not existing_dates:
+        logger.info("Extracting daily bars...")
+        raw_bars = extract_daily_aggs(client, missing_dates)
+        logger.info("Writing raw DB to %s...", raw_path)
+        write_raw_db(raw_bars, raw_path)
+    elif missing_dates:
+        logger.info("Extracting %d missing dates...", len(missing_dates))
+        new_raw_bars = extract_daily_aggs(client, missing_dates)
+        logger.info("Appending to raw DB at %s...", raw_path)
+        append_raw_db(new_raw_bars, raw_path)
+    else:
+        logger.info("All dates cached, skipping extraction.")
+
+    logger.info("Loading raw bars for transform...")
+    all_bars = read_raw_db(raw_path)
+
     logger.info("Extracting splits (%s to %s)...", config.start_date, config.end_date)
     splits = extract_splits(client, config.start_date, config.end_date)
     logger.info("Extracting tickers (types: %s)...", ", ".join(config.ticker_types))
     tickers = extract_tickers(client, config.ticker_types)
 
     logger.info("Adjusting for %d splits...", len(splits))
-    bars = adjust_splits(bars, splits)
+    bars = adjust_splits(all_bars, splits)
     logger.info("Filtering to known tickers...")
     bars = filter_tickers(bars, tickers)
     logger.info("Computing metrics (SMA-50, SMA-200, ATR-14, ATR%%, RS, VARS)...")
     metrics = compute_metrics(bars)
 
-    raw_path = config.output_dir / "raw.duckdb"
-    consumer_path = config.output_dir / "tickerlake.duckdb"
-
-    logger.info("Writing raw DB to %s...", raw_path)
-    write_raw_db(bars, raw_path)
     logger.info("Writing consumer DB to %s...", consumer_path)
     write_consumer_db(bars, metrics, tickers, consumer_path)
 

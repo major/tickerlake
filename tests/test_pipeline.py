@@ -136,6 +136,7 @@ def pipeline_mocks():
         read_raw_db=DEFAULT,
         write_consumer_db=DEFAULT,
         get_db_info=DEFAULT,
+        get_existing_dates=DEFAULT,
     ) as mocks:
         yield mocks
 
@@ -149,6 +150,8 @@ def _wire_defaults(mocks, sample_bars, sample_splits, sample_tickers, sample_met
     mocks["adjust_splits"].return_value = sample_bars
     mocks["filter_tickers"].return_value = sample_bars
     mocks["compute_metrics"].return_value = sample_metrics
+    mocks["get_existing_dates"].return_value = set()
+    mocks["read_raw_db"].return_value = sample_bars
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -241,6 +244,67 @@ def test_backfill_no_trading_days(pipeline_mocks, tmp_path):
     pipeline_mocks["extract_daily_aggs"].assert_not_called()
     pipeline_mocks["extract_splits"].assert_not_called()
     pipeline_mocks["extract_tickers"].assert_not_called()
+
+
+def test_backfill_skips_cached_dates(
+    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
+):
+    """Backfill only fetches dates not already in raw.duckdb."""
+    from tickerlake.pipeline import backfill
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    pipeline_mocks["get_trading_days"].return_value = [
+        datetime.date(2024, 1, 2),
+        datetime.date(2024, 1, 3),
+    ]
+    pipeline_mocks["get_existing_dates"].return_value = {datetime.date(2024, 1, 2)}
+
+    backfill(_make_config(tmp_path))
+
+    call_args = pipeline_mocks["extract_daily_aggs"].call_args
+    assert call_args[0][1] == [datetime.date(2024, 1, 3)]
+    pipeline_mocks["append_raw_db"].assert_called_once()
+    pipeline_mocks["write_raw_db"].assert_not_called()
+
+
+def test_backfill_all_cached(
+    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
+):
+    """Backfill skips extraction entirely when all dates are cached."""
+    from tickerlake.pipeline import backfill
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    pipeline_mocks["get_trading_days"].return_value = [datetime.date(2024, 1, 2)]
+    pipeline_mocks["get_existing_dates"].return_value = {datetime.date(2024, 1, 2)}
+
+    backfill(_make_config(tmp_path))
+
+    pipeline_mocks["extract_daily_aggs"].assert_not_called()
+    pipeline_mocks["write_raw_db"].assert_not_called()
+    pipeline_mocks["append_raw_db"].assert_not_called()
+    pipeline_mocks["read_raw_db"].assert_called_once()
+    pipeline_mocks["write_consumer_db"].assert_called_once()
+
+
+def test_backfill_no_cache(
+    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
+):
+    """Backfill fetches all dates and calls write_raw_db when no cache exists."""
+    from tickerlake.pipeline import backfill
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+
+    backfill(_make_config(tmp_path))
+
+    pipeline_mocks["extract_daily_aggs"].assert_called_once()
+    pipeline_mocks["write_raw_db"].assert_called_once()
+    pipeline_mocks["append_raw_db"].assert_not_called()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
