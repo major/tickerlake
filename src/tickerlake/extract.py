@@ -4,7 +4,15 @@ import datetime
 import logging
 
 import polars as pl
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
+from tickerlake import console
 from tickerlake.client import MassiveClient
 
 logger = logging.getLogger(__name__)
@@ -87,16 +95,28 @@ def _rows_to_df(rows: list[dict], schema: dict) -> pl.DataFrame:
 def extract_daily_aggs(
     client: MassiveClient, dates: list[datetime.date]
 ) -> pl.DataFrame:
-    frames = []
-    for i, date in enumerate(dates):
-        aggs = client.fetch_daily_aggs(date)
-        logger.debug(
-            "Fetching %s (%d/%d)... %d tickers", date, i + 1, len(dates), len(aggs)
-        )
-        if aggs:
-            frames.append(
-                _rows_to_df([_agg_to_row(a) for a in aggs], DAILY_AGGS_SCHEMA)
-            )
+    """Extract daily aggregate bars for each date into a single DataFrame."""
+    frames: list[pl.DataFrame] = []
+    if not dates:
+        return pl.DataFrame(schema=DAILY_AGGS_SCHEMA)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Fetching bars...", total=len(dates))
+        for date in dates:
+            aggs = client.fetch_daily_aggs(date)
+            logger.debug("Fetching %s... %d tickers", date, len(aggs))
+            if aggs:
+                frames.append(
+                    _rows_to_df([_agg_to_row(a) for a in aggs], DAILY_AGGS_SCHEMA)
+                )
+            progress.update(task, description=f"Fetching {date}...", advance=1)
     if not frames:
         return pl.DataFrame(schema=DAILY_AGGS_SCHEMA)
     return pl.concat(frames)
