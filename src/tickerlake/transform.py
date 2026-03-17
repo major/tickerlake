@@ -71,7 +71,7 @@ def _compute_atr(bars: pl.DataFrame, period: int = 14) -> pl.DataFrame:
 
 
 def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
-    """Compute per-ticker technical metrics: SMA-50, SMA-200, ATR-14, ATR%, SMA50_ATR_Distance, RS, RS_SMA_20, VARS, VARS_SMA_20.
+    """Compute per-ticker technical metrics: SMA-50, SMA-200, ATR-14, ATR%, SMA50_ATR_Distance, RS, RS_SMA_20, VARS, VARS_SMA_20, volume_sma_20.
 
     RS measures cumulative return outperformance vs SPY over a 50-day rolling window:
     rolling_sum(stock_pct - spy_pct, 50). RS_SMA_20 is the 20-day rolling mean of RS.
@@ -221,5 +221,11 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
             pl.col("rs_sma_20"),
             pl.col("vars"),
             pl.col("vars_sma_20"),
+            pl.col("volume")
+            .cast(pl.Float64)
+            .rolling_mean(window_size=20)
+            .over("ticker")
+            .cast(pl.Float32)
+            .alias("volume_sma_20"),
         ]
     )
