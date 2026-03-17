@@ -464,6 +464,8 @@ def test_compute_metrics_output_columns():
         "sma_50",
         "sma_200",
         "atr_14",
+        "atr_pct",
+        "sma50_atr_distance",
         "rs",
         "rs_sma_20",
         "vars",
@@ -882,3 +884,177 @@ def test_compute_metrics_no_spy():
         & (pl.col("date") == datetime.date(2024, 1, 1) + datetime.timedelta(days=99))
     ).row(0, named=True)
     assert aapl_late["sma_50"] is not None
+
+
+def test_compute_metrics_atr_pct_correct():
+    """atr_pct = atr_14 / close. With constant OHLC (100, 102, 98, 100), TR=4.0 always.
+
+    After 14-bar ATR warmup: atr_14=4.0, close=100 → atr_pct = 4.0/100.0 = 0.04.
+    """
+    ohlc = [(100.0, 102.0, 98.0, 100.0)] * 20
+    bars = make_ohlc_bars({"AAPL": ohlc})
+
+    result = compute_metrics(bars)
+
+    # Row 13 (0-indexed) = 14th bar = first non-null ATR = date 2024-01-14
+    row = result.filter(pl.col("date") == datetime.date(2024, 1, 14)).row(0, named=True)
+    assert row["atr_pct"] == pytest.approx(0.04, abs=1e-4)
+
+
+def test_compute_metrics_atr_pct_null_count():
+    """atr_pct inherits ATR(14)'s 13-row warmup — exactly 13 leading nulls per ticker."""
+    ohlc = [(100.0, 102.0, 98.0, 100.0)] * 30
+    bars = make_ohlc_bars({"AAPL": ohlc, "MSFT": ohlc})
+
+    result = compute_metrics(bars)
+    null_counts = result.group_by("ticker").agg(
+        pl.col("atr_pct").null_count().alias("nulls")
+    )
+
+    assert null_counts.sort("ticker")["nulls"].to_list() == [13, 13]
+
+
+def test_compute_metrics_sma50_atr_distance_correct():
+    """sma50_atr_distance = ((close - sma_50) / sma_50) / (atr_14 / close).
+
+    With _make_constant_ohlc(100.0, 1.0, 1.0, 80):
+    - At row 49: close=149, sma_50=mean(100..149)=124.5, atr_14=2.0
+    - atr_pct = 2.0 / 149.0 ≈ 0.01342
+    - pct_from_50ma = (149 - 124.5) / 124.5 ≈ 0.1968
+    - sma50_atr_distance = 0.1968 / 0.01342 ≈ 14.66
+    """
+    aapl_ohlc = _make_constant_ohlc(100.0, 1.0, 1.0, 80)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc})
+
+    result = compute_metrics(bars)
+
+    # Row 49 = date 2024-01-01 + 49 days
+    target_date = datetime.date(2024, 1, 1) + datetime.timedelta(days=49)
+    row = result.filter(pl.col("date") == target_date).row(0, named=True)
+
+    close = 100.0 + 49 * 1.0  # = 149.0
+    sma_50 = sum(100.0 + i for i in range(50)) / 50  # = 124.5
+    atr_14 = 2.0  # TR = max(2*spread, ...) = 2.0
+    expected = ((close - sma_50) / sma_50) / (atr_14 / close)
+    assert row["sma50_atr_distance"] == pytest.approx(expected, abs=0.5)
+
+
+def test_compute_metrics_sma50_atr_distance_positive():
+    """sma50_atr_distance > 0 when price is above SMA-50 (uptrend)."""
+    aapl_ohlc = _make_constant_ohlc(100.0, 1.0, 1.0, 60)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc})
+
+    result = compute_metrics(bars)
+
+    # Last row: price has been rising, so close > sma_50 → distance > 0
+    last_row = result.filter(pl.col("ticker") == "AAPL").row(-1, named=True)
+    assert last_row["sma50_atr_distance"] is not None
+    assert last_row["sma50_atr_distance"] > 0
+
+
+def test_compute_metrics_sma50_atr_distance_negative():
+    """sma50_atr_distance < 0 when price is below SMA-50 (downtrend)."""
+    # Price falls daily: close < sma_50 after warmup
+    aapl_ohlc = _make_constant_ohlc(200.0, -1.0, 1.0, 60)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc})
+
+    result = compute_metrics(bars)
+
+    last_non_null = (
+        result.filter(pl.col("ticker") == "AAPL")
+        .filter(pl.col("sma50_atr_distance").is_not_null())
+        .row(-1, named=True)
+    )
+    assert last_non_null["sma50_atr_distance"] < 0
+
+
+def test_compute_metrics_sma50_atr_distance_atr_zero():
+    """When ATR=0 (flat price), sma50_atr_distance must be null (not inf/NaN).
+
+    Flat OHLC (100, 100, 100, 100) → ATR=0 after warmup → division by zero
+    → fill_nan(None) → null for all rows.
+    """
+    aapl_ohlc = [(100.0, 100.0, 100.0, 100.0)] * 60
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc})
+
+    result = compute_metrics(bars)
+
+    # All sma50_atr_distance values must be null (ATR=0 → denominator=0 → null)
+    assert result["sma50_atr_distance"].null_count() == len(result)
+
+
+def test_compute_metrics_sma50_atr_distance_null_count():
+    """sma50_atr_distance has exactly 49 leading nulls per ticker (SMA-50 is binding).
+
+    ATR warmup = 13 rows, SMA-50 warmup = 49 rows. SMA-50 is the binding constraint.
+    """
+    aapl_ohlc = _make_constant_ohlc(100.0, 1.0, 1.0, 250)
+    msft_ohlc = _make_constant_ohlc(200.0, 1.0, 1.0, 250)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc, "MSFT": msft_ohlc})
+
+    result = compute_metrics(bars)
+    null_counts = (
+        result.group_by("ticker")
+        .agg(pl.col("sma50_atr_distance").null_count().alias("nulls"))
+        .sort("ticker")
+    )
+
+    assert null_counts["nulls"].to_list() == [49, 49]
+
+
+def test_compute_metrics_atr_pct_no_spy():
+    """atr_pct is computed even when SPY is absent (independent of SPY)."""
+    n = 30
+    aapl_ohlc = _make_constant_ohlc(100.0, 1.0, 1.0, n)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc})
+
+    result = compute_metrics(bars)
+
+    # After ATR warmup (row 13+), atr_pct must be non-null
+    after_warmup = result.filter(
+        (pl.col("ticker") == "AAPL") & pl.col("atr_14").is_not_null()
+    )
+    assert len(after_warmup) > 0
+    assert after_warmup["atr_pct"].null_count() == 0
+
+
+def test_compute_metrics_sma50_atr_distance_no_spy():
+    """sma50_atr_distance is computed even when SPY is absent."""
+    n = 60
+    aapl_ohlc = _make_constant_ohlc(100.0, 1.0, 1.0, n)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc})
+
+    result = compute_metrics(bars)
+
+    # After SMA-50 warmup (row 49+), sma50_atr_distance must be non-null
+    non_null_rows = result.filter(
+        (pl.col("ticker") == "AAPL") & pl.col("sma50_atr_distance").is_not_null()
+    )
+    assert len(non_null_rows) > 0
+
+
+def test_compute_metrics_atr_pct_per_ticker():
+    """atr_pct is computed independently per ticker — different spreads yield different values.
+
+    AAPL: spread=2, close=100 → TR=4 → atr_14=4 → atr_pct=4/100=0.04.
+    MSFT: spread=1, close=100 → TR=2 → atr_14=2 → atr_pct=2/100=0.02.
+    AAPL's atr_pct should be approximately 2× MSFT's.
+    """
+    aapl_ohlc = [(100.0, 102.0, 98.0, 100.0)] * 20
+    msft_ohlc = [(100.0, 101.0, 99.0, 100.0)] * 20
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc, "MSFT": msft_ohlc})
+
+    result = compute_metrics(bars)
+
+    # Row 13 = first non-null ATR = date 2024-01-14
+    target_date = datetime.date(2024, 1, 14)
+    aapl_row = result.filter(
+        (pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)
+    ).row(0, named=True)
+    msft_row = result.filter(
+        (pl.col("ticker") == "MSFT") & (pl.col("date") == target_date)
+    ).row(0, named=True)
+
+    assert aapl_row["atr_pct"] == pytest.approx(0.04, abs=1e-4)
+    assert msft_row["atr_pct"] == pytest.approx(0.02, abs=1e-4)
+    assert aapl_row["atr_pct"] == pytest.approx(2 * msft_row["atr_pct"], abs=1e-4)
