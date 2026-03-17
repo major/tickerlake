@@ -41,7 +41,7 @@ def _run_backfill(config: Config) -> None:
     bars = adjust_splits(bars, splits)
     print("Filtering to known tickers...")
     bars = filter_tickers(bars, tickers)
-    print("Computing metrics (SMA-50, SMA-200, ATR-14, RS, VARS)...")
+    print("Computing metrics (SMA-50, SMA-200, ATR-14, ATR%, RS, VARS)...")
     metrics = compute_metrics(bars)
 
     raw_path = config.output_dir / "raw.duckdb"
@@ -98,7 +98,7 @@ def update(config: Config) -> None:
     all_bars = adjust_splits(all_bars, splits)
     print("Filtering to known tickers...")
     all_bars = filter_tickers(all_bars, tickers)
-    print("Computing metrics (SMA-50, SMA-200, ATR-14, RS, VARS)...")
+    print("Computing metrics (SMA-50, SMA-200, ATR-14, ATR%, RS, VARS)...")
     metrics = compute_metrics(all_bars)
 
     consumer_path = config.output_dir / "tickerlake.duckdb"

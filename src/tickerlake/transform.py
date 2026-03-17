@@ -71,7 +71,7 @@ def _compute_atr(bars: pl.DataFrame, period: int = 14) -> pl.DataFrame:
 
 
 def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
-    """Compute per-ticker technical metrics: SMA-50, SMA-200, ATR-14, RS, RS_SMA_20, VARS, VARS_SMA_20.
+    """Compute per-ticker technical metrics: SMA-50, SMA-200, ATR-14, ATR%, SMA50_ATR_Distance, RS, RS_SMA_20, VARS, VARS_SMA_20.
 
     RS measures cumulative return outperformance vs SPY over a 50-day rolling window:
     rolling_sum(stock_pct - spy_pct, 50). RS_SMA_20 is the 20-day rolling mean of RS.
@@ -79,6 +79,9 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
     VARS (Volatility Adjusted Relative Strength) normalizes daily price changes by each
     ticker's ATR(14) before comparing to SPY: rolling_sum(stock_norm - spy_norm, 50)
     where norm = daily_change / ATR14. VARS_SMA_20 is the 20-day rolling mean of VARS.
+
+    ATR% (atr_pct) = ATR-14 / close price (ATR as fraction of closing price).
+    SMA50_ATR_Distance (sma50_atr_distance) = ((close - SMA-50) / SMA-50) / ATR% (ATR% multiple from 50-MA).
 
     When SPY is absent, rs, rs_sma_20, vars, and vars_sma_20 are null for all tickers.
     ATR-14 is always computed regardless of SPY presence.
@@ -177,16 +180,34 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
             ]
         )
 
-    return df.select(
+    # Compute derived metrics: sma_50, atr_pct, sma50_atr_distance
+    df = df.with_columns(
         [
-            pl.col("date"),
-            pl.col("ticker"),
             pl.col("close")
             .cast(pl.Float64)
             .rolling_mean(window_size=50)
             .over("ticker")
             .cast(pl.Float32)
             .alias("sma_50"),
+            (pl.col("atr_14") / pl.col("close")).cast(pl.Float32).alias("atr_pct"),
+        ]
+    ).with_columns(
+        [
+            (
+                ((pl.col("close") - pl.col("sma_50")) / pl.col("sma_50"))
+                / (pl.col("atr_14") / pl.col("close"))
+            )
+            .fill_nan(None)
+            .cast(pl.Float32)
+            .alias("sma50_atr_distance"),
+        ]
+    )
+
+    return df.select(
+        [
+            pl.col("date"),
+            pl.col("ticker"),
+            pl.col("sma_50"),
             pl.col("close")
             .cast(pl.Float64)
             .rolling_mean(window_size=200)
@@ -194,6 +215,8 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
             .cast(pl.Float32)
             .alias("sma_200"),
             pl.col("atr_14"),
+            pl.col("atr_pct"),
+            pl.col("sma50_atr_distance"),
             pl.col("rs"),
             pl.col("rs_sma_20"),
             pl.col("vars"),
