@@ -71,12 +71,18 @@ def _compute_atr(bars: pl.DataFrame, period: int = 14) -> pl.DataFrame:
 
 
 def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
-    """Compute per-ticker technical metrics: SMA-50, SMA-200, RS, RS_SMA_20.
+    """Compute per-ticker technical metrics: SMA-50, SMA-200, ATR-14, RS, RS_SMA_20, VARS, VARS_SMA_20.
 
-    RS (Relative Strength) measures cumulative return outperformance vs SPY
-    over a 50-day rolling window: rolling_sum(stock_pct - spy_pct, 50).
-    RS_SMA_20 is the 20-day rolling mean of RS, used as a signal line.
-    When SPY is absent from bars, rs and rs_sma_20 are null for all tickers.
+    RS measures cumulative return outperformance vs SPY over a 50-day rolling window:
+    rolling_sum(stock_pct - spy_pct, 50). RS_SMA_20 is the 20-day rolling mean of RS.
+
+    VARS (Volatility Adjusted Relative Strength) normalizes daily price changes by each
+    ticker's ATR(14) before comparing to SPY: rolling_sum(stock_norm - spy_norm, 50)
+    where norm = daily_change / ATR14. VARS_SMA_20 is the 20-day rolling mean of VARS.
+
+    When SPY is absent, rs, rs_sma_20, vars, and vars_sma_20 are null for all tickers.
+    ATR-14 is always computed regardless of SPY presence.
+    When ATR=0, the normalized change is null (not inf/NaN) via fill_nan(None).
     """
     sorted_bars = bars.sort(["ticker", "date"])
     spy_present = "SPY" in sorted_bars["ticker"]
@@ -84,6 +90,8 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
     pct_change = (pl.col("close") - pl.col("close").shift(1).over("ticker")) / pl.col(
         "close"
     ).shift(1).over("ticker")
+
+    atr_df = _compute_atr(sorted_bars)
 
     if spy_present:
         spy_pct = sorted_bars.filter(pl.col("ticker") == "SPY").select(
@@ -107,11 +115,65 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
             .cast(pl.Float32)
             .alias("rs_sma_20")
         )
+
+        df = df.join(
+            atr_df.select(["date", "ticker", "atr_14"]),
+            on=["date", "ticker"],
+            how="left",
+        )
+
+        spy_norm_df = (
+            sorted_bars.filter(pl.col("ticker") == "SPY")
+            .join(
+                atr_df.filter(pl.col("ticker") == "SPY").select(["date", "atr_14"]),
+                on="date",
+                how="left",
+            )
+            .with_columns(
+                (pl.col("close") - pl.col("close").shift(1)).alias("_spy_daily_change")
+            )
+            .select(
+                [
+                    pl.col("date"),
+                    (pl.col("_spy_daily_change") / pl.col("atr_14"))
+                    .fill_nan(None)
+                    .alias("_spy_norm"),
+                ]
+            )
+        )
+        df = df.join(spy_norm_df, on="date", how="left")
+
+        daily_change = pl.col("close") - pl.col("close").shift(1).over("ticker")
+        df = df.with_columns(
+            (daily_change / pl.col("atr_14")).fill_nan(None).alias("_stock_norm")
+        )
+
+        vars_daily = pl.col("_stock_norm") - pl.col("_spy_norm")
+        df = df.with_columns(
+            vars_daily.cast(pl.Float64)
+            .rolling_sum(50)
+            .over("ticker")
+            .cast(pl.Float32)
+            .alias("vars")
+        ).with_columns(
+            pl.col("vars")
+            .cast(pl.Float64)
+            .rolling_mean(20)
+            .over("ticker")
+            .cast(pl.Float32)
+            .alias("vars_sma_20")
+        )
     else:
-        df = sorted_bars.with_columns(
+        df = sorted_bars.join(
+            atr_df.select(["date", "ticker", "atr_14"]),
+            on=["date", "ticker"],
+            how="left",
+        ).with_columns(
             [
                 pl.lit(None).cast(pl.Float32).alias("rs"),
                 pl.lit(None).cast(pl.Float32).alias("rs_sma_20"),
+                pl.lit(None).cast(pl.Float32).alias("vars"),
+                pl.lit(None).cast(pl.Float32).alias("vars_sma_20"),
             ]
         )
 
@@ -131,7 +193,10 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
             .over("ticker")
             .cast(pl.Float32)
             .alias("sma_200"),
+            pl.col("atr_14"),
             pl.col("rs"),
             pl.col("rs_sma_20"),
+            pl.col("vars"),
+            pl.col("vars_sma_20"),
         ]
     )

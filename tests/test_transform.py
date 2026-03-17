@@ -677,3 +677,198 @@ def test_compute_metrics_rs_spy_is_zero():
 
     assert len(spy_rs) > 0
     assert spy_rs == pytest.approx([0.0] * len(spy_rs), abs=1e-5)
+
+
+def _make_constant_ohlc(
+    start_price: float, daily_change: float, spread: float, n_days: int
+) -> list[tuple[float, float, float, float]]:
+    """Build OHLC tuples with constant spread and linear daily price change.
+
+    Each day: close = prev_close + daily_change, high = close + spread,
+    low = close - spread. This gives a constant True Range of 2 * spread,
+    so ATR(14) stabilizes at 2 * spread after warmup.
+    """
+    closes = [start_price]
+    for _ in range(n_days - 1):
+        closes.append(closes[-1] + daily_change)
+    return [(c, c + spread, c - spread, c) for c in closes]
+
+
+def test_compute_metrics_vars_correct():
+    """VARS = rolling_sum(stock_norm - spy_norm, 50) where norm = daily_change / ATR14.
+
+    AAPL: daily_change=+2.0, spread=1.0. TR = max(2.0, |close+1-(close-2)|, ...) = 3.0.
+    ATR = 3.0. stock_norm = 2.0 / 3.0 = 0.6667.
+    SPY: daily_change=+0.5, spread=0.5. TR = max(1.0, |close+0.5-(close-0.5)|, ...) = 1.0.
+    ATR = 1.0. spy_norm = 0.5 / 1.0 = 0.5.
+    vars_daily = 0.6667 - 0.5 = 0.1667. VARS = 0.1667 * 50 = 8.333.
+    """
+    n = 80
+    aapl_ohlc = _make_constant_ohlc(100.0, 2.0, 1.0, n)
+    spy_ohlc = _make_constant_ohlc(400.0, 0.5, 0.5, n)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc, "SPY": spy_ohlc})
+
+    result = compute_metrics(bars)
+
+    # ATR warmup: 13 nulls. rolling_sum(50) needs 50 non-null stock_norm values.
+    # stock_norm first non-null at row 13 (ATR binding). VARS first non-null at row 13+49=62.
+    target_date = datetime.date(2024, 1, 1) + datetime.timedelta(days=62)
+    row = result.filter(
+        (pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)
+    ).row(0, named=True)
+
+    # vars_daily = 2/3 - 0.5 = 1/6, rolling_sum(50) = 50/6 ≈ 8.333
+    assert row["vars"] == pytest.approx(50 / 6, abs=0.1)
+
+
+def test_compute_metrics_vars_vs_rs_divergence():
+    """VARS and RS can disagree: high-ATR stock outperforms in % but underperforms in ATR units.
+
+    AAPL: close=100, spread=10 → ATR≈20, daily_change=+2 → stock_norm=2/20=0.1
+    SPY:  close=400, spread=2  → ATR≈4,  daily_change=+2 → spy_norm=2/4=0.5
+
+    RS daily = stock_pct - spy_pct = (2/100) - (2/400) = 0.02 - 0.005 = +0.015 → RS > 0
+    vars_daily = 0.1 - 0.5 = -0.4 → VARS < 0
+
+    Jeff Sun's insight: a 2% move in a 20% ATR name is weak vs SPY moving 0.5% on 1% ATR.
+    """
+    n = 80
+    # AAPL: spread=10 → ATR≈20, daily_change=+2
+    aapl_ohlc = _make_constant_ohlc(100.0, 2.0, 10.0, n)
+    # SPY: spread=2 → ATR≈4, daily_change=+2
+    spy_ohlc = _make_constant_ohlc(400.0, 2.0, 2.0, n)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc, "SPY": spy_ohlc})
+
+    result = compute_metrics(bars)
+
+    # Check at a date after both RS and VARS have warmed up (row 62+)
+    target_date = datetime.date(2024, 1, 1) + datetime.timedelta(days=62)
+    row = result.filter(
+        (pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)
+    ).row(0, named=True)
+
+    # RS > 0: stock gained more % than SPY
+    assert row["rs"] is not None
+    assert row["rs"] > 0
+    # VARS < 0: stock moved less than SPY in ATR-normalized terms
+    assert row["vars"] is not None
+    assert row["vars"] < 0
+
+
+def test_compute_metrics_vars_sma20_correct():
+    """VARS_SMA_20 = rolling_mean(VARS, 20). When VARS is constant, SMA equals VARS.
+
+    Using same setup as test_vars_correct: VARS stabilizes at 25.0 from row 62 onward.
+    SMA(20) of a constant 25.0 = 25.0 after 19 more rows (row 81).
+    """
+    n = 100
+    aapl_ohlc = _make_constant_ohlc(100.0, 2.0, 1.0, n)
+    spy_ohlc = _make_constant_ohlc(400.0, 0.5, 0.5, n)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc, "SPY": spy_ohlc})
+
+    result = compute_metrics(bars)
+
+    # VARS stabilizes at row 62, SMA(20) settles at row 62+19=81
+    target_date = datetime.date(2024, 1, 1) + datetime.timedelta(days=81)
+    row = result.filter(
+        (pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)
+    ).row(0, named=True)
+
+    assert row["vars_sma_20"] == pytest.approx(row["vars"], abs=0.5)
+
+
+def test_compute_metrics_vars_null_count():
+    """VARS has ~62 leading nulls per ticker; VARS_SMA_20 has ~81 leading nulls.
+
+    ATR(14): 13 nulls. daily_change shift(1): 1 null (binding at row 0 only).
+    stock_norm first non-null at row 13 (ATR is binding constraint).
+    rolling_sum(50) needs 50 non-null values → 13 + 49 = 62 leading nulls.
+    VARS_SMA_20 adds 19 more → 81 total.
+    """
+    n = 250
+    aapl_ohlc = _make_constant_ohlc(100.0, 1.0, 1.0, n)
+    msft_ohlc = _make_constant_ohlc(200.0, 1.0, 1.0, n)
+    spy_ohlc = _make_constant_ohlc(400.0, 0.5, 0.5, n)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc, "MSFT": msft_ohlc, "SPY": spy_ohlc})
+
+    result = compute_metrics(bars)
+
+    vars_nulls = (
+        result.filter(pl.col("ticker").is_in(["AAPL", "MSFT"]))
+        .group_by("ticker")
+        .agg(pl.col("vars").null_count().alias("vars_nulls"))
+        .sort("ticker")
+    )
+    vars_sma_nulls = (
+        result.filter(pl.col("ticker").is_in(["AAPL", "MSFT"]))
+        .group_by("ticker")
+        .agg(pl.col("vars_sma_20").null_count().alias("sma_nulls"))
+        .sort("ticker")
+    )
+
+    # Expected: 62 nulls for VARS, 81 for VARS_SMA_20 — verify empirically
+    actual_vars_nulls = vars_nulls["vars_nulls"].to_list()
+    actual_sma_nulls = vars_sma_nulls["sma_nulls"].to_list()
+
+    # Both tickers should have the same null count
+    assert actual_vars_nulls[0] == actual_vars_nulls[1]
+    assert actual_sma_nulls[0] == actual_sma_nulls[1]
+    # VARS nulls should be in the expected range (ATR warmup + rolling_sum warmup)
+    assert 50 < actual_vars_nulls[0] < 90
+    # VARS_SMA_20 should have ~19 more nulls than VARS
+    assert actual_sma_nulls[0] == actual_vars_nulls[0] + 19
+
+
+def test_compute_metrics_vars_atr_zero():
+    """When ATR=0 (flat price), stock_norm = daily_change / 0 → null (not inf).
+
+    AAPL: open=high=low=close=100.0 for all bars → ATR=0 after warmup.
+    After ATR warmup, stock_norm = 0 / 0 = NaN → fill_nan(None) → null.
+    VARS should be null for all rows where ATR=0.
+    """
+    n = 50
+    # Flat AAPL: ATR=0 after warmup
+    aapl_ohlc = [(100.0, 100.0, 100.0, 100.0)] * n
+    # Normal SPY for reference
+    spy_ohlc = _make_constant_ohlc(400.0, 0.5, 0.5, n)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc, "SPY": spy_ohlc})
+
+    result = compute_metrics(bars)
+
+    # After ATR warmup (row 13+), AAPL ATR=0 → stock_norm=null → VARS=null
+    aapl_after_warmup = result.filter(
+        (pl.col("ticker") == "AAPL") & pl.col("atr_14").is_not_null()
+    )
+    assert len(aapl_after_warmup) > 0
+    # All VARS values after ATR warmup should be null (ATR=0 → norm=null → rolling_sum=null)
+    assert aapl_after_warmup["vars"].null_count() == len(aapl_after_warmup)
+
+
+def test_compute_metrics_no_spy():
+    """When SPY is absent, rs/rs_sma_20/vars/vars_sma_20 are null; atr_14 is computed.
+
+    atr_14 must still be non-null after warmup — it doesn't depend on SPY.
+    sma_50 and sma_200 are also unaffected.
+    """
+    n = 100
+    aapl_ohlc = _make_constant_ohlc(100.0, 1.0, 1.0, n)
+    msft_ohlc = _make_constant_ohlc(200.0, 1.0, 1.0, n)
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc, "MSFT": msft_ohlc})
+
+    result = compute_metrics(bars)
+
+    # SPY-dependent columns must be all-null
+    assert result["rs"].null_count() == len(result)
+    assert result["rs_sma_20"].null_count() == len(result)
+    assert result["vars"].null_count() == len(result)
+    assert result["vars_sma_20"].null_count() == len(result)
+
+    # ATR must be computed (not all-null) — independent of SPY
+    assert result["atr_14"].null_count() < len(result)
+
+    # SMA columns still work
+    aapl_late = result.filter(
+        (pl.col("ticker") == "AAPL")
+        & (pl.col("date") == datetime.date(2024, 1, 1) + datetime.timedelta(days=99))
+    ).row(0, named=True)
+    assert aapl_late["sma_50"] is not None
