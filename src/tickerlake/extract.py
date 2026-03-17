@@ -1,10 +1,13 @@
 """Convert raw Massive API objects into polars DataFrames with correct dtypes."""
 
 import datetime
+import logging
 
 import polars as pl
 
 from tickerlake.client import MassiveClient
+
+logger = logging.getLogger(__name__)
 
 DAILY_AGGS_SCHEMA = {
     "date": pl.Date,
@@ -87,7 +90,9 @@ def extract_daily_aggs(
     frames = []
     for i, date in enumerate(dates):
         aggs = client.fetch_daily_aggs(date)
-        print(f"Fetching {date} ({i + 1}/{len(dates)})... {len(aggs)} tickers")
+        logger.debug(
+            "Fetching %s (%d/%d)... %d tickers", date, i + 1, len(dates), len(aggs)
+        )
         if aggs:
             frames.append(
                 _rows_to_df([_agg_to_row(a) for a in aggs], DAILY_AGGS_SCHEMA)
