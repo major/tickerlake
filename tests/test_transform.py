@@ -470,6 +470,7 @@ def test_compute_metrics_output_columns():
         "rs_sma_20",
         "vars",
         "vars_sma_20",
+        "volume_sma_20",
     ]
 
 
@@ -878,6 +879,9 @@ def test_compute_metrics_no_spy():
     # ATR must be computed (not all-null) — independent of SPY
     assert result["atr_14"].null_count() < len(result)
 
+    # volume_sma_20 must be computed (not all-null) — independent of SPY
+    assert result["volume_sma_20"].null_count() < len(result)
+
     # SMA columns still work
     aapl_late = result.filter(
         (pl.col("ticker") == "AAPL")
@@ -1058,3 +1062,71 @@ def test_compute_metrics_atr_pct_per_ticker():
     assert aapl_row["atr_pct"] == pytest.approx(0.04, abs=1e-4)
     assert msft_row["atr_pct"] == pytest.approx(0.02, abs=1e-4)
     assert aapl_row["atr_pct"] == pytest.approx(2 * msft_row["atr_pct"], abs=1e-4)
+
+
+def test_compute_metrics_volume_sma20_correct():
+    """volume_sma_20 = rolling_mean(volume, 20). With increasing volumes, SMA is correct.
+
+    Volumes: 1.0, 2.0, ..., 30.0. At row 19 (20th bar), SMA(20) = mean(1..20) = 10.5.
+    """
+    bars = make_metric_bars({"AAPL": [float(i) for i in range(1, 31)]})
+    bars = bars.with_columns(
+        pl.Series("volume", [float(i) for i in range(1, 31)]).cast(pl.Float32)
+    )
+
+    result = compute_metrics(bars)
+
+    target_date = datetime.date(2024, 1, 1) + datetime.timedelta(days=19)
+    row = result.filter(pl.col("date") == target_date).row(0, named=True)
+
+    assert row["volume_sma_20"] == pytest.approx(10.5)
+
+
+def test_compute_metrics_volume_sma20_null_count():
+    """volume_sma_20 has exactly 19 leading nulls per ticker (rolling_mean(20) warmup)."""
+    bars = make_metric_bars(
+        {
+            "AAPL": [100.0] * 250,
+            "MSFT": [200.0] * 250,
+        }
+    )
+
+    result = compute_metrics(bars)
+    null_counts = result.group_by("ticker").agg(
+        pl.col("volume_sma_20").null_count().alias("nulls")
+    )
+
+    assert null_counts.sort("ticker")["nulls"].to_list() == [19, 19]
+
+
+def test_compute_metrics_volume_sma20_per_ticker():
+    """volume_sma_20 is computed independently per ticker — different volumes yield different values.
+
+    AAPL: volume=1000.0 (default) → volume_sma_20=1000.0.
+    MSFT: volume=2000.0 (overridden) → volume_sma_20=2000.0.
+    """
+    bars = make_metric_bars(
+        {
+            "AAPL": [10.0] * 60,
+            "MSFT": [20.0] * 60,
+        }
+    )
+    bars = bars.with_columns(
+        pl.when(pl.col("ticker") == "MSFT")
+        .then(pl.lit(2000.0).cast(pl.Float32))
+        .otherwise(pl.col("volume"))
+        .alias("volume")
+    )
+
+    result = compute_metrics(bars)
+
+    target_date = datetime.date(2024, 1, 1) + datetime.timedelta(days=59)
+    aapl_row = result.filter(
+        (pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)
+    ).row(0, named=True)
+    msft_row = result.filter(
+        (pl.col("ticker") == "MSFT") & (pl.col("date") == target_date)
+    ).row(0, named=True)
+
+    assert aapl_row["volume_sma_20"] == pytest.approx(1000.0)
+    assert msft_row["volume_sma_20"] == pytest.approx(2000.0)
