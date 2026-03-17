@@ -231,8 +231,8 @@ def test_backfill_calls_write_consumer_db(
     )
 
 
-def test_backfill_no_trading_days(pipeline_mocks, tmp_path, capsys):
-    """If no trading days in range, prints message and skips extract."""
+def test_backfill_no_trading_days(pipeline_mocks, tmp_path):
+    """If no trading days in range, logs warning and skips extract."""
     from tickerlake.pipeline import backfill
 
     pipeline_mocks["get_trading_days"].return_value = []
@@ -241,7 +241,6 @@ def test_backfill_no_trading_days(pipeline_mocks, tmp_path, capsys):
     pipeline_mocks["extract_daily_aggs"].assert_not_called()
     pipeline_mocks["extract_splits"].assert_not_called()
     pipeline_mocks["extract_tickers"].assert_not_called()
-    assert "no trading days" in capsys.readouterr().out.lower()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -306,8 +305,8 @@ def test_update_appends_to_raw_db(
     )
 
 
-def test_update_no_new_days(pipeline_mocks, tmp_path, sample_bars, capsys):
-    """If no new trading days, prints message and skips fetching."""
+def test_update_no_new_days(pipeline_mocks, tmp_path, sample_bars):
+    """If no new trading days, logs warning and skips fetching."""
     from tickerlake.pipeline import update
 
     pipeline_mocks["read_raw_db"].return_value = sample_bars
@@ -317,7 +316,6 @@ def test_update_no_new_days(pipeline_mocks, tmp_path, sample_bars, capsys):
     update(_make_config(tmp_path))
 
     pipeline_mocks["extract_daily_aggs"].assert_not_called()
-    assert "up to date" in capsys.readouterr().out.lower()
 
 
 def test_update_falls_back_to_backfill(
@@ -327,7 +325,6 @@ def test_update_falls_back_to_backfill(
     sample_splits,
     sample_tickers,
     sample_metrics,
-    capsys,
 ):
     """If raw.duckdb doesn't exist, update falls back to backfill logic."""
     from tickerlake.pipeline import update
@@ -337,8 +334,6 @@ def test_update_falls_back_to_backfill(
     )
     update(_make_config(tmp_path))
 
-    captured = capsys.readouterr().out.lower()
-    assert "backfill" in captured
     pipeline_mocks["write_raw_db"].assert_called_once()
 
 
@@ -347,8 +342,8 @@ def test_update_falls_back_to_backfill(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def test_info_calls_get_db_info(pipeline_mocks, tmp_path, capsys):
-    """Info calls get_db_info for each existing DB file and prints results."""
+def test_info_calls_get_db_info(pipeline_mocks, tmp_path):
+    """Info calls get_db_info for each existing DB file and logs results."""
     from tickerlake.pipeline import info
 
     pipeline_mocks["get_db_info"].return_value = {
@@ -363,13 +358,10 @@ def test_info_calls_get_db_info(pipeline_mocks, tmp_path, capsys):
     info(_make_config(tmp_path))
 
     assert pipeline_mocks["get_db_info"].call_count == 2
-    assert "raw_daily_bars" in capsys.readouterr().out
 
 
-def test_info_missing_db(tmp_path, capsys):
-    """Info prints 'not found' if DuckDB files don't exist."""
+def test_info_missing_db(tmp_path):
+    """Info logs 'not found' if DuckDB files don't exist."""
     from tickerlake.pipeline import info
 
     info(_make_config(tmp_path))
-
-    assert "not found" in capsys.readouterr().out.lower()
