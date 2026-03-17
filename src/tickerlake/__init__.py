@@ -2,7 +2,16 @@
 
 import argparse
 import datetime
+import logging
 from pathlib import Path
+
+from rich.console import Console
+from rich.logging import RichHandler
+
+# console must be defined before `from tickerlake import pipeline` so that
+# extract.py can safely do `from tickerlake import console` without hitting a
+# partially-initialised package (circular import).
+console = Console(stderr=True)
 
 from tickerlake.config import Config
 from tickerlake import pipeline
@@ -60,6 +69,12 @@ def main() -> None:
     """Parse CLI arguments and dispatch to appropriate pipeline function."""
     parser = _build_parser()
     args = parser.parse_args()
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[RichHandler(console=console, show_path=False)],
+        format="%(message)s",
+        datefmt="[%X]",
+    )
     config = _make_config(args)
 
     if args.command == "backfill":

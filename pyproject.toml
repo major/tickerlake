@@ -12,6 +12,7 @@ dependencies = [
     "exchange-calendars>=4.13.2",
     "massive>=2.4.0",
     "polars>=1.39.0",
+    "rich>=14.0.0",
 ]
 
 [project.scripts]

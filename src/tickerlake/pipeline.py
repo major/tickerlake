@@ -1,6 +1,7 @@
 """ETL pipeline orchestration: backfill, update, and info commands."""
 
 import datetime
+import logging
 from pathlib import Path
 
 from tickerlake.calendar import get_trading_days
@@ -11,49 +12,76 @@ from tickerlake.load import (
     append_raw_db,
     compact_raw_db,
     get_db_info,
+    get_existing_dates,
     read_raw_db,
     write_consumer_db,
     write_raw_db,
 )
 from tickerlake.transform import adjust_splits, compute_metrics, filter_tickers
 
+logger = logging.getLogger(__name__)
+
 
 def _run_backfill(config: Config) -> None:
     """Execute the full extract-transform-load backfill sequence."""
     dates = get_trading_days(config.start_date, config.end_date)
     if not dates:
-        print("No trading days in the requested date range.")
+        logger.warning("No trading days in the requested date range.")
         return
-
-    print(
-        f"Backfill: {config.start_date} to {config.end_date} ({len(dates)} trading days)"
-    )
-    client = MassiveClient(config)
-
-    print("Extracting daily bars...")
-    bars = extract_daily_aggs(client, dates)
-    print(f"Extracting splits ({config.start_date} to {config.end_date})...")
-    splits = extract_splits(client, config.start_date, config.end_date)
-    print(f"Extracting tickers (types: {', '.join(config.ticker_types)})...")
-    tickers = extract_tickers(client, config.ticker_types)
-
-    print(f"Adjusting for {len(splits)} splits...")
-    bars = adjust_splits(bars, splits)
-    print("Filtering to known tickers...")
-    bars = filter_tickers(bars, tickers)
-    print("Computing metrics (SMA-50, SMA-200, ATR-14, ATR%, RS, VARS)...")
-    metrics = compute_metrics(bars)
 
     raw_path = config.output_dir / "raw.duckdb"
     consumer_path = config.output_dir / "tickerlake.duckdb"
 
-    print(f"Writing raw DB to {raw_path}...")
-    write_raw_db(bars, raw_path)
-    print(f"Writing consumer DB to {consumer_path}...")
+    existing_dates = get_existing_dates(raw_path)
+    missing_dates = [d for d in dates if d not in existing_dates]
+
+    logger.info(
+        "Backfill: %s to %s (%d trading days, %d cached, %d to fetch)",
+        config.start_date,
+        config.end_date,
+        len(dates),
+        len(existing_dates),
+        len(missing_dates),
+    )
+    client = MassiveClient(config)
+
+    if missing_dates and not existing_dates:
+        logger.info("Extracting daily bars...")
+        raw_bars = extract_daily_aggs(client, missing_dates)
+        logger.info("Writing raw DB to %s...", raw_path)
+        write_raw_db(raw_bars, raw_path)
+    elif missing_dates:
+        logger.info("Extracting %d missing dates...", len(missing_dates))
+        new_raw_bars = extract_daily_aggs(client, missing_dates)
+        logger.info("Appending to raw DB at %s...", raw_path)
+        append_raw_db(new_raw_bars, raw_path)
+    else:
+        logger.info("All dates cached, skipping extraction.")
+
+    logger.info("Loading raw bars for transform...")
+    all_bars = read_raw_db(raw_path)
+
+    logger.info("Extracting splits (%s to %s)...", config.start_date, config.end_date)
+    splits = extract_splits(client, config.start_date, config.end_date)
+    logger.info("Extracting tickers (types: %s)...", ", ".join(config.ticker_types))
+    tickers = extract_tickers(client, config.ticker_types)
+
+    logger.info("Adjusting for %d splits...", len(splits))
+    bars = adjust_splits(all_bars, splits)
+    logger.info("Filtering to known tickers...")
+    bars = filter_tickers(bars, tickers)
+    logger.info("Computing metrics (SMA-50, SMA-200, ATR-14, ATR%%, RS, VARS)...")
+    metrics = compute_metrics(bars)
+
+    logger.info("Writing consumer DB to %s...", consumer_path)
     write_consumer_db(bars, metrics, tickers, consumer_path)
 
     n_tickers = bars["ticker"].n_unique()
-    print(f"Backfill complete: {len(bars):,} bars, {n_tickers:,} tickers")
+    logger.info(
+        "Backfill complete: %s bars, %s tickers",
+        f"{len(bars):,}",
+        f"{n_tickers:,}",
+    )
 
 
 def backfill(config: Config) -> None:
@@ -66,7 +94,7 @@ def update(config: Config) -> None:
     raw_path = config.output_dir / "raw.duckdb"
 
     if not raw_path.exists():
-        print("No raw.duckdb found, running backfill...")
+        logger.warning("No raw.duckdb found, running backfill...")
         _run_backfill(config)
         return
 
@@ -76,55 +104,64 @@ def update(config: Config) -> None:
 
     dates = get_trading_days(next_day, config.end_date)
     if not dates:
-        print("Already up to date.")
+        logger.warning("Already up to date.")
         return
 
-    print(f"Update: {next_day} to {config.end_date} ({len(dates)} new trading days)")
+    logger.info(
+        "Update: %s to %s (%d new trading days)",
+        next_day,
+        config.end_date,
+        len(dates),
+    )
     client = MassiveClient(config)
 
-    print("Extracting new daily bars...")
+    logger.info("Extracting new daily bars...")
     new_bars = extract_daily_aggs(client, dates)
-    print("Appending to raw DB...")
+    logger.info("Appending to raw DB...")
     append_raw_db(new_bars, raw_path)
 
-    print("Rebuilding consumer DB from full raw dataset...")
+    logger.info("Rebuilding consumer DB from full raw dataset...")
     all_bars = read_raw_db(raw_path)
-    print(f"Extracting splits ({config.start_date} to {config.end_date})...")
+    logger.info("Extracting splits (%s to %s)...", config.start_date, config.end_date)
     splits = extract_splits(client, config.start_date, config.end_date)
-    print(f"Extracting tickers (types: {', '.join(config.ticker_types)})...")
+    logger.info("Extracting tickers (types: %s)...", ", ".join(config.ticker_types))
     tickers = extract_tickers(client, config.ticker_types)
 
-    print(f"Adjusting for {len(splits)} splits...")
+    logger.info("Adjusting for %d splits...", len(splits))
     all_bars = adjust_splits(all_bars, splits)
-    print("Filtering to known tickers...")
+    logger.info("Filtering to known tickers...")
     all_bars = filter_tickers(all_bars, tickers)
-    print("Computing metrics (SMA-50, SMA-200, ATR-14, ATR%, RS, VARS)...")
+    logger.info("Computing metrics (SMA-50, SMA-200, ATR-14, ATR%%, RS, VARS)...")
     metrics = compute_metrics(all_bars)
 
     consumer_path = config.output_dir / "tickerlake.duckdb"
-    print(f"Writing consumer DB to {consumer_path}...")
+    logger.info("Writing consumer DB to %s...", consumer_path)
     write_consumer_db(all_bars, metrics, tickers, consumer_path)
 
     n_tickers = all_bars["ticker"].n_unique()
-    print(f"Update complete: {len(all_bars):,} bars, {n_tickers:,} tickers")
+    logger.info(
+        "Update complete: %s bars, %s tickers",
+        f"{len(all_bars):,}",
+        f"{n_tickers:,}",
+    )
 
 
-def _print_db_info(label: str, path: Path) -> None:
-    """Print database info for a single DuckDB file."""
+def _log_db_info(label: str, path: Path) -> None:
+    """Log database info for a single DuckDB file."""
     if not path.exists():
-        print(f"{label}: not found ({path})")
+        logger.info("%s: not found (%s)", label, path)
         return
 
     db_info = get_db_info(path)
-    print(f"{label}: {path}")
+    logger.info("%s: %s", label, path)
     for table in db_info["tables"]:
         row_count = db_info["row_counts"].get(table, 0)
-        print(f"  {table}: {row_count:,} rows")
+        logger.info("  %s: %s rows", table, f"{row_count:,}")
         if table in db_info.get("date_range", {}):
             dr = db_info["date_range"][table]
-            print(f"    dates: {dr['min']} to {dr['max']}")
+            logger.info("    dates: %s to %s", dr["min"], dr["max"])
     size_mb = db_info["file_size_bytes"] / (1024 * 1024)
-    print(f"  size: {size_mb:.1f} MB")
+    logger.info("  size: %.1f MB", size_mb)
 
 
 def compact(config: Config) -> None:
@@ -132,23 +169,25 @@ def compact(config: Config) -> None:
     raw_path = config.output_dir / "raw.duckdb"
 
     if not raw_path.exists():
-        print(f"No raw.duckdb found at {raw_path}")
+        logger.warning("No raw.duckdb found at %s", raw_path)
         return
 
     size_before = raw_path.stat().st_size
-    print(f"Compacting {raw_path} ({size_before / (1024 * 1024):.1f} MB)...")
+    logger.info("Compacting %s (%.1f MB)...", raw_path, size_before / (1024 * 1024))
     compact_raw_db(raw_path)
     size_after = raw_path.stat().st_size
 
     saved = size_before - size_after
     pct = (saved / size_before * 100) if size_before > 0 else 0
-    print(
-        f"Done: {size_after / (1024 * 1024):.1f} MB "
-        f"(saved {saved / (1024 * 1024):.1f} MB, {pct:.0f}%)"
+    logger.info(
+        "Done: %.1f MB (saved %.1f MB, %.0f%%)",
+        size_after / (1024 * 1024),
+        saved / (1024 * 1024),
+        pct,
     )
 
 
 def info(config: Config) -> None:
     """Print metadata about existing DuckDB files."""
-    _print_db_info("raw.duckdb", config.output_dir / "raw.duckdb")
-    _print_db_info("tickerlake.duckdb", config.output_dir / "tickerlake.duckdb")
+    _log_db_info("raw.duckdb", config.output_dir / "raw.duckdb")
+    _log_db_info("tickerlake.duckdb", config.output_dir / "tickerlake.duckdb")

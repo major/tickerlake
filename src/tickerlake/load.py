@@ -1,5 +1,6 @@
 """Write polars DataFrames to DuckDB files with correct schema types."""
 
+import datetime
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -63,6 +64,25 @@ def read_raw_db(path: Path) -> pl.DataFrame:
         return pl.read_parquet(tmp)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def get_existing_dates(path: Path) -> set[datetime.date]:
+    """Return the set of dates already stored in raw_daily_bars without loading all rows."""
+    if not path.exists():
+        return set()
+    con = None
+    try:
+        con = duckdb.connect(str(path), read_only=True)
+        rows = con.execute("SELECT DISTINCT date FROM raw_daily_bars").fetchall()
+        con.close()
+        return {row[0] for row in rows}
+    except duckdb.CatalogException:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+        return set()
 
 
 def write_consumer_db(

@@ -1,5 +1,6 @@
 """Tests for tickerlake.load — DuckDB writer with schema validation."""
 
+import datetime
 from pathlib import Path
 
 import duckdb
@@ -10,6 +11,7 @@ from tickerlake.load import (
     append_raw_db,
     compact_raw_db,
     get_db_info,
+    get_existing_dates,
     read_raw_db,
     write_consumer_db,
     write_raw_db,
@@ -132,6 +134,41 @@ def test_read_raw_db(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
     assert isinstance(result, pl.DataFrame)
     assert len(result) == len(sample_bars_df)
     assert set(result.columns) == set(sample_bars_df.columns)
+
+
+def test_get_existing_dates_returns_correct_dates(
+    tmp_path: Path, sample_bars_df: pl.DataFrame
+) -> None:
+    """get_existing_dates() returns set of dates from raw_daily_bars."""
+    db_path = tmp_path / "raw.duckdb"
+    write_raw_db(sample_bars_df, db_path)
+
+    result = get_existing_dates(db_path)
+
+    assert isinstance(result, set)
+    expected_dates = set(sample_bars_df["date"].to_list())
+    assert result == expected_dates
+
+
+def test_get_existing_dates_missing_file(tmp_path: Path) -> None:
+    """get_existing_dates() returns empty set for non-existent file."""
+    db_path = tmp_path / "nonexistent.duckdb"
+
+    result = get_existing_dates(db_path)
+
+    assert result == set()
+
+
+def test_get_existing_dates_missing_table(tmp_path: Path) -> None:
+    """get_existing_dates() returns empty set when raw_daily_bars table doesn't exist."""
+    db_path = tmp_path / "empty.duckdb"
+    # Create an empty DuckDB file with no tables
+    con = duckdb.connect(str(db_path))
+    con.close()
+
+    result = get_existing_dates(db_path)
+
+    assert result == set()
 
 
 def test_write_consumer_db_creates_tables(
