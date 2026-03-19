@@ -90,8 +90,10 @@ def write_consumer_db(
     metrics: pl.DataFrame,
     tickers: pl.DataFrame,
     path: Path,
+    *,
+    hvcs: pl.DataFrame | None = None,
 ) -> None:
-    """Write bars, metrics, and tickers DataFrames to consumer DuckDB file."""
+    """Write bars, metrics, tickers, and optionally HVC DataFrames to consumer DuckDB file."""
     with (
         _tmp_parquet(bars) as bars_tmp,
         _tmp_parquet(metrics) as metrics_tmp,
@@ -107,6 +109,11 @@ def write_consumer_db(
         con.execute(
             f"CREATE OR REPLACE TABLE tickers AS {_read_parquet_sql(tickers_tmp, 'ticker')}"
         )
+        if hvcs is not None:
+            with _tmp_parquet(hvcs) as hvcs_tmp:
+                con.execute(
+                    f"CREATE OR REPLACE TABLE high_volume_catalysts AS {_read_parquet_sql(hvcs_tmp, 'ticker, date')}"
+                )
         con.execute("CHECKPOINT")
         con.close()
 
