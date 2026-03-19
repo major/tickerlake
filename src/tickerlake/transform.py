@@ -271,3 +271,164 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
             .alias("volume_sma_20"),
         ]
     )
+
+
+HVC_SCHEMA = {
+    "ticker": pl.Utf8,
+    "date": pl.Date,
+    "open": pl.Float32,
+    "high": pl.Float32,
+    "low": pl.Float32,
+    "close": pl.Float32,
+    "prev_close": pl.Float32,
+    "volume": pl.Float32,
+    "volume_sma_20": pl.Float32,
+    "volume_multiplier": pl.Float32,
+    "total_move_pct": pl.Float32,
+    "gap_pct": pl.Float32,
+    "intraday_move_pct": pl.Float32,
+    "bar_range_pct": pl.Float32,
+    "adr_pct": pl.Float32,
+    "atr_pct": pl.Float32,
+    "close_position_in_range": pl.Float32,
+    "is_up_day": pl.Boolean,
+    "price_vs_sma50_pct": pl.Float32,
+    "price_vs_sma200_pct": pl.Float32,
+    "rs": pl.Float32,
+}
+
+
+def detect_hvcs(bars: pl.DataFrame, metrics: pl.DataFrame) -> pl.DataFrame:
+    """Detect High Volume Catalyst days and compute pre-calculated derived fields.
+
+    An HVC occurs when volume >= 3x the 20-day average volume (volume_sma_20 from
+    metrics), close >= $5.00, volume_sma_20 is non-null (past warmup period), and
+    prev_close is non-null (not the first bar per ticker).
+
+    Derived fields are computed on the FULL joined dataset before filtering to
+    ensure shift(1).over("ticker") produces correct prev_close values. Filtering
+    after computation avoids incorrect shift windows on sparse HVC-only data.
+
+    Float64 intermediate computation with Float32 storage for all numeric fields.
+    Division-by-zero safety: fill_nan(None) on close_position_in_range (doji candles
+    where high==low) and volume_multiplier (zero volume_sma_20 edge case).
+
+    is_up_day uses close-to-close comparison: close > prev_close.
+
+    Returns a DataFrame with exactly 21 columns per HVC_SCHEMA. Returns an empty
+    DataFrame with correct schema when bars is empty.
+    """
+    if bars.is_empty():
+        return pl.DataFrame(schema=HVC_SCHEMA)
+
+    joined = bars.join(metrics, on=["ticker", "date"], how="inner").sort(
+        [
+            "ticker",
+            "date",
+        ]
+    )
+
+    joined = joined.with_columns(
+        pl.col("close").shift(1).over("ticker").cast(pl.Float32).alias("prev_close")
+    )
+
+    joined = joined.with_columns(
+        [
+            (
+                pl.col("volume").cast(pl.Float64)
+                / pl.col("volume_sma_20").cast(pl.Float64)
+            )
+            .fill_nan(None)
+            .cast(pl.Float32)
+            .alias("volume_multiplier"),
+            (
+                (
+                    pl.col("close").cast(pl.Float64)
+                    - pl.col("prev_close").cast(pl.Float64)
+                )
+                / pl.col("prev_close").cast(pl.Float64)
+                * 100
+            )
+            .cast(pl.Float32)
+            .alias("total_move_pct"),
+            (
+                (
+                    pl.col("open").cast(pl.Float64)
+                    - pl.col("prev_close").cast(pl.Float64)
+                )
+                / pl.col("prev_close").cast(pl.Float64)
+                * 100
+            )
+            .cast(pl.Float32)
+            .alias("gap_pct"),
+            (
+                (pl.col("close").cast(pl.Float64) - pl.col("open").cast(pl.Float64))
+                / pl.col("open").cast(pl.Float64)
+                * 100
+            )
+            .cast(pl.Float32)
+            .alias("intraday_move_pct"),
+            (
+                (pl.col("high").cast(pl.Float64) - pl.col("low").cast(pl.Float64))
+                / pl.col("prev_close").cast(pl.Float64)
+                * 100
+            )
+            .cast(pl.Float32)
+            .alias("bar_range_pct"),
+            (
+                (pl.col("close").cast(pl.Float64) - pl.col("low").cast(pl.Float64))
+                / (pl.col("high").cast(pl.Float64) - pl.col("low").cast(pl.Float64))
+            )
+            .fill_nan(None)
+            .cast(pl.Float32)
+            .alias("close_position_in_range"),
+            (pl.col("close") > pl.col("prev_close")).alias("is_up_day"),
+            (
+                (pl.col("close").cast(pl.Float64) - pl.col("sma_50").cast(pl.Float64))
+                / pl.col("sma_50").cast(pl.Float64)
+                * 100
+            )
+            .cast(pl.Float32)
+            .alias("price_vs_sma50_pct"),
+            (
+                (pl.col("close").cast(pl.Float64) - pl.col("sma_200").cast(pl.Float64))
+                / pl.col("sma_200").cast(pl.Float64)
+                * 100
+            )
+            .cast(pl.Float32)
+            .alias("price_vs_sma200_pct"),
+        ]
+    )
+
+    filtered = joined.filter(
+        (pl.col("volume") >= 3.0 * pl.col("volume_sma_20"))
+        & (pl.col("close") >= 5.0)
+        & pl.col("volume_sma_20").is_not_null()
+        & pl.col("prev_close").is_not_null()
+    )
+
+    return filtered.select(
+        [
+            "ticker",
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "prev_close",
+            "volume",
+            "volume_sma_20",
+            "volume_multiplier",
+            "total_move_pct",
+            "gap_pct",
+            "intraday_move_pct",
+            "bar_range_pct",
+            "adr_pct",
+            "atr_pct",
+            "close_position_in_range",
+            "is_up_day",
+            "price_vs_sma50_pct",
+            "price_vs_sma200_pct",
+            "rs",
+        ]
+    )

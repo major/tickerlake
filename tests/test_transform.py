@@ -8,6 +8,7 @@ from polars.testing import assert_frame_equal
 transform = importlib.import_module("tickerlake.transform")
 adjust_splits = transform.adjust_splits
 compute_metrics = transform.compute_metrics
+detect_hvcs = transform.detect_hvcs
 filter_tickers = transform.filter_tickers
 _compute_atr = transform._compute_atr
 _compute_adr_pct = transform._compute_adr_pct
@@ -502,6 +503,16 @@ def make_ohlc_bars(
                 }
             )
     return make_bars(rows)
+
+
+def make_hvcs_input(
+    n_bars: int = 25,
+    ticker: str = "AAPL",
+    ohlc_val: tuple[float, float, float, float] = (100.0, 102.0, 98.0, 100.0),
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    bars = make_ohlc_bars({ticker: [ohlc_val] * n_bars})
+    metrics = compute_metrics(bars)
+    return bars, metrics
 
 
 def test_compute_atr_basic():
@@ -1227,3 +1238,213 @@ def test_compute_metrics_adr_pct_independent_of_spy():
     )
     assert len(after_warmup) > 0
     assert after_warmup["adr_pct"].null_count() == 0
+
+
+def test_detect_hvcs_basic():
+    bars, metrics = make_hvcs_input(25)
+    last_date = bars["date"].max()
+    bars_5x = bars.with_columns(
+        pl.when(pl.col("date") == last_date)
+        .then(pl.lit(5000.0).cast(pl.Float32))
+        .otherwise(pl.col("volume"))
+        .alias("volume")
+    )
+    result = detect_hvcs(bars_5x, metrics)
+    assert len(result) == 1
+    assert result["ticker"][0] == "AAPL"
+    assert result["date"][0] == last_date
+
+
+def test_detect_hvcs_below_threshold():
+    bars, metrics = make_hvcs_input(25)
+    last_date = bars["date"].max()
+    bars_2x = bars.with_columns(
+        pl.when(pl.col("date") == last_date)
+        .then(pl.lit(2990.0).cast(pl.Float32))
+        .otherwise(pl.col("volume"))
+        .alias("volume")
+    )
+    result = detect_hvcs(bars_2x, metrics)
+    assert len(result) == 0
+
+
+def test_detect_hvcs_boundary_inclusion():
+    bars, metrics = make_hvcs_input(25)
+    last_date = bars["date"].max()
+    bars_3x = bars.with_columns(
+        pl.when(pl.col("date") == last_date)
+        .then(pl.lit(3000.0).cast(pl.Float32))
+        .otherwise(pl.col("volume"))
+        .alias("volume")
+    )
+    result = detect_hvcs(bars_3x, metrics)
+    assert len(result) == 1
+
+
+def test_detect_hvcs_price_filter_exclusion():
+    bars, metrics = make_hvcs_input(25, ohlc_val=(4.99, 5.01, 4.97, 4.99))
+    last_date = bars["date"].max()
+    bars_5x = bars.with_columns(
+        pl.when(pl.col("date") == last_date)
+        .then(pl.lit(5000.0).cast(pl.Float32))
+        .otherwise(pl.col("volume"))
+        .alias("volume")
+    )
+    result = detect_hvcs(bars_5x, metrics)
+    assert len(result) == 0
+
+
+def test_detect_hvcs_price_filter_inclusion():
+    bars, metrics = make_hvcs_input(25, ohlc_val=(5.00, 5.02, 4.98, 5.00))
+    last_date = bars["date"].max()
+    bars_5x = bars.with_columns(
+        pl.when(pl.col("date") == last_date)
+        .then(pl.lit(5000.0).cast(pl.Float32))
+        .otherwise(pl.col("volume"))
+        .alias("volume")
+    )
+    result = detect_hvcs(bars_5x, metrics)
+    assert len(result) == 1
+
+
+def test_detect_hvcs_empty_input():
+    empty_bars = pl.DataFrame(
+        schema={
+            "date": pl.Date,
+            "ticker": pl.Utf8,
+            "open": pl.Float32,
+            "high": pl.Float32,
+            "low": pl.Float32,
+            "close": pl.Float32,
+            "volume": pl.Float32,
+            "vwap": pl.Float32,
+            "transactions": pl.UInt32,
+        }
+    )
+    empty_metrics = pl.DataFrame(
+        schema={
+            "date": pl.Date,
+            "ticker": pl.Utf8,
+            "sma_50": pl.Float32,
+            "sma_200": pl.Float32,
+            "atr_14": pl.Float32,
+            "atr_pct": pl.Float32,
+            "adr_pct": pl.Float32,
+            "sma50_atr_distance": pl.Float32,
+            "rs": pl.Float32,
+            "rs_sma_20": pl.Float32,
+            "vars": pl.Float32,
+            "vars_sma_20": pl.Float32,
+            "volume_sma_20": pl.Float32,
+        }
+    )
+    result = detect_hvcs(empty_bars, empty_metrics)
+    assert len(result) == 0
+    assert result.columns == [
+        "ticker",
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "prev_close",
+        "volume",
+        "volume_sma_20",
+        "volume_multiplier",
+        "total_move_pct",
+        "gap_pct",
+        "intraday_move_pct",
+        "bar_range_pct",
+        "adr_pct",
+        "atr_pct",
+        "close_position_in_range",
+        "is_up_day",
+        "price_vs_sma50_pct",
+        "price_vs_sma200_pct",
+        "rs",
+    ]
+
+
+def test_detect_hvcs_doji_candle():
+    normal_bars, _ = make_hvcs_input(24)
+    doji_bar = make_ohlc_bars(
+        {"AAPL": [(100.0, 100.0, 100.0, 100.0)]},
+        start_date=datetime.date(2024, 1, 25),
+    )
+    all_bars = pl.concat([normal_bars, doji_bar])
+    metrics = compute_metrics(all_bars)
+    last_date = all_bars["date"].max()
+    bars_5x = all_bars.with_columns(
+        pl.when(pl.col("date") == last_date)
+        .then(pl.lit(5000.0).cast(pl.Float32))
+        .otherwise(pl.col("volume"))
+        .alias("volume")
+    )
+    result = detect_hvcs(bars_5x, metrics)
+    assert len(result) == 1
+    row = result.row(0, named=True)
+    assert row["close_position_in_range"] is None
+
+
+def test_detect_hvcs_schema_types():
+    bars, metrics = make_hvcs_input(25)
+    last_date = bars["date"].max()
+    bars_5x = bars.with_columns(
+        pl.when(pl.col("date") == last_date)
+        .then(pl.lit(5000.0).cast(pl.Float32))
+        .otherwise(pl.col("volume"))
+        .alias("volume")
+    )
+    result = detect_hvcs(bars_5x, metrics)
+    assert len(result) == 1
+    schema = dict(zip(result.columns, result.dtypes, strict=False))
+    assert schema["ticker"] == pl.Utf8
+    assert schema["date"] == pl.Date
+    assert schema["open"] == pl.Float32
+    assert schema["high"] == pl.Float32
+    assert schema["low"] == pl.Float32
+    assert schema["close"] == pl.Float32
+    assert schema["prev_close"] == pl.Float32
+    assert schema["volume"] == pl.Float32
+    assert schema["volume_sma_20"] == pl.Float32
+    assert schema["volume_multiplier"] == pl.Float32
+    assert schema["is_up_day"] == pl.Boolean
+    assert schema["rs"] == pl.Float32
+
+
+def test_detect_hvcs_derived_fields():
+    bars, metrics = make_hvcs_input(25)
+    last_date = bars["date"].max()
+    bars_5x = bars.with_columns(
+        pl.when(pl.col("date") == last_date)
+        .then(pl.lit(5000.0).cast(pl.Float32))
+        .otherwise(pl.col("volume"))
+        .alias("volume")
+    )
+    result = detect_hvcs(bars_5x, metrics)
+    assert len(result) == 1
+    row = result.row(0, named=True)
+
+    assert row["prev_close"] == pytest.approx(100.0, abs=1e-4)
+    assert row["volume_multiplier"] == pytest.approx(5.0, abs=1e-4)
+    assert row["total_move_pct"] == pytest.approx(0.0, abs=1e-4)
+    assert row["gap_pct"] == pytest.approx(0.0, abs=1e-4)
+    assert row["intraday_move_pct"] == pytest.approx(0.0, abs=1e-4)
+    assert row["bar_range_pct"] == pytest.approx(4.0, abs=1e-4)
+    assert row["close_position_in_range"] == pytest.approx(0.5, abs=1e-4)
+    assert row["is_up_day"] is False
+    assert row["volume_sma_20"] == pytest.approx(1000.0, abs=1.0)
+
+
+def test_detect_hvcs_first_row_excluded():
+    bars, metrics = make_hvcs_input(25)
+    first_date = bars["date"].min()
+    bars_first_5x = bars.with_columns(
+        pl.when(pl.col("date") == first_date)
+        .then(pl.lit(5000.0).cast(pl.Float32))
+        .otherwise(pl.col("volume"))
+        .alias("volume")
+    )
+    result = detect_hvcs(bars_first_5x, metrics)
+    first_row_in_result = result.filter(pl.col("date") == first_date)
+    assert len(first_row_in_result) == 0
