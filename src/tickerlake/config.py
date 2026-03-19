@@ -15,7 +15,7 @@ class Config:
         output_dir: Directory for output files (defaults to current working directory)
         start_date: Start date for data collection (defaults to 1 year ago)
         end_date: End date for data collection (defaults to today)
-        ticker_types: List of ticker types to process (defaults to ["CS", "ETF"])
+        ticker_types: List of ticker types to process (defaults to ["CS", "ETF", "ETV"])
     """
 
     api_key: str = field(default="")
@@ -26,7 +26,7 @@ class Config:
         )
     )
     end_date: datetime.date = field(default_factory=datetime.date.today)
-    ticker_types: list[str] = field(default_factory=lambda: ["CS", "ETF"])
+    ticker_types: list[str] = field(default_factory=lambda: ["CS", "ETF", "ETV"])
 
     def __post_init__(self) -> None:
         """Validate and normalize configuration after initialization."""
