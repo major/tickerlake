@@ -466,6 +466,7 @@ def test_compute_metrics_output_columns():
         "sma_200",
         "atr_14",
         "atr_pct",
+        "adr_pct",
         "sma50_atr_distance",
         "rs",
         "rs_sma_20",
@@ -1189,3 +1190,40 @@ def test_compute_adr_pct_output_columns():
     bars = make_ohlc_bars({"AAPL": ohlc})
     result = _compute_adr_pct(bars)
     assert result.columns == ["date", "ticker", "adr_pct"]
+
+
+def test_compute_metrics_adr_pct_value():
+    """adr_pct in compute_metrics output equals SMA20((high-low)/close).
+
+    With constant spread (high=102, low=98, close=100): daily range = 4/100 = 0.04.
+    After 20-bar warmup, adr_pct should equal 0.04.
+    """
+    ohlc = [(100.0, 102.0, 98.0, 100.0)] * 25
+    bars = make_ohlc_bars({"AAPL": ohlc})
+    result = compute_metrics(bars)
+    # Row 19 (0-indexed) = 20th bar = first non-null ADR%
+    row = result.filter(pl.col("date") == datetime.date(2024, 1, 20)).row(0, named=True)
+    assert row["adr_pct"] == pytest.approx(0.04, abs=1e-4)
+
+
+def test_compute_metrics_adr_pct_null_count():
+    """adr_pct has exactly 19 leading nulls per ticker (rolling_mean(20) warmup)."""
+    ohlc = [(100.0, 102.0, 98.0, 100.0)] * 30
+    bars = make_ohlc_bars({"AAPL": ohlc, "MSFT": ohlc})
+    result = compute_metrics(bars)
+    null_counts = result.group_by("ticker").agg(
+        pl.col("adr_pct").null_count().alias("nulls")
+    )
+    assert null_counts.sort("ticker")["nulls"].to_list() == [19, 19]
+
+
+def test_compute_metrics_adr_pct_independent_of_spy():
+    """adr_pct is non-null after warmup even when SPY is absent from bars."""
+    ohlc = [(100.0, 102.0, 98.0, 100.0)] * 25
+    bars = make_ohlc_bars({"AAPL": ohlc})  # No SPY
+    result = compute_metrics(bars)
+    after_warmup = result.filter(
+        (pl.col("ticker") == "AAPL") & pl.col("adr_pct").is_not_null()
+    )
+    assert len(after_warmup) > 0
+    assert after_warmup["adr_pct"].null_count() == 0

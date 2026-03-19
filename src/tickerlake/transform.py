@@ -123,6 +123,7 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
     ).shift(1).over("ticker")
 
     atr_df = _compute_atr(sorted_bars)
+    adr_df = _compute_adr_pct(sorted_bars)
 
     if spy_present:
         spy_pct = sorted_bars.filter(pl.col("ticker") == "SPY").select(
@@ -149,6 +150,12 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
 
         df = df.join(
             atr_df.select(["date", "ticker", "atr_14"]),
+            on=["date", "ticker"],
+            how="left",
+        )
+
+        df = df.join(
+            adr_df.select(["date", "ticker", "adr_pct"]),
             on=["date", "ticker"],
             how="left",
         )
@@ -208,6 +215,12 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
             ]
         )
 
+        df = df.join(
+            adr_df.select(["date", "ticker", "adr_pct"]),
+            on=["date", "ticker"],
+            how="left",
+        )
+
     # Compute derived metrics: sma_50, atr_pct, sma50_atr_distance
     df = df.with_columns(
         [
@@ -244,6 +257,7 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
             .alias("sma_200"),
             pl.col("atr_14"),
             pl.col("atr_pct"),
+            pl.col("adr_pct"),
             pl.col("sma50_atr_distance"),
             pl.col("rs"),
             pl.col("rs_sma_20"),
