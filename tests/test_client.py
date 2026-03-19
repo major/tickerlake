@@ -17,7 +17,7 @@ def sample_config() -> Config:
         output_dir="/tmp",
         start_date=datetime.date(2024, 1, 1),
         end_date=datetime.date(2024, 12, 31),
-        ticker_types=["CS", "ETF", "ETV"],
+        ticker_types=["CS", "ETF", "ETV", "ETN", "ADRC"],
     )
 
 

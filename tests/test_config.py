@@ -80,10 +80,10 @@ class TestTickerTypes:
     """Test ticker types configuration."""
 
     def test_ticker_types_default(self) -> None:
-        """ticker_types defaults to ["CS", "ETF", "ETV"]."""
+        """ticker_types defaults to ["CS", "ETF", "ETV", "ETN", "ADRC"]."""
         with patch.dict(os.environ, {"MASSIVE_API_KEY": "test"}):
             config = Config()
-            assert config.ticker_types == ["CS", "ETF", "ETV"]
+            assert config.ticker_types == ["CS", "ETF", "ETV", "ETN", "ADRC"]
 
     def test_ticker_types_custom(self) -> None:
         """ticker_types can be overridden."""
