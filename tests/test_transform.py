@@ -10,6 +10,7 @@ adjust_splits = transform.adjust_splits
 compute_metrics = transform.compute_metrics
 filter_tickers = transform.filter_tickers
 _compute_atr = transform._compute_atr
+_compute_adr_pct = transform._compute_adr_pct
 
 
 BARS_SCHEMA = {
@@ -1130,3 +1131,61 @@ def test_compute_metrics_volume_sma20_per_ticker():
 
     assert aapl_row["volume_sma_20"] == pytest.approx(1000.0)
     assert msft_row["volume_sma_20"] == pytest.approx(2000.0)
+
+
+def test_compute_adr_pct_basic():
+    """ADR%(20) equals SMA20((high-low)/close). With constant spread=4, close=100: ADR%=0.04."""
+    ohlc = [(100.0, 102.0, 98.0, 100.0)] * 25
+    bars = make_ohlc_bars({"AAPL": ohlc})
+    result = _compute_adr_pct(bars)
+    # Row 19 (0-indexed) = 20th bar = first non-null ADR%
+    row = result.filter(pl.col("date") == datetime.date(2024, 1, 20)).row(0, named=True)
+    assert row["adr_pct"] == pytest.approx(0.04, abs=1e-4)
+
+
+def test_compute_adr_pct_warmup_nulls():
+    """ADR%(20) has exactly 19 leading nulls per ticker (rolling_mean(20) needs 20 values)."""
+    ohlc = [(100.0, 102.0, 98.0, 100.0)] * 30
+    bars = make_ohlc_bars({"AAPL": ohlc, "MSFT": ohlc})
+    result = _compute_adr_pct(bars)
+    null_counts = result.group_by("ticker").agg(
+        pl.col("adr_pct").null_count().alias("nulls")
+    )
+    assert null_counts.sort("ticker")["nulls"].to_list() == [19, 19]
+
+
+def test_compute_adr_pct_per_ticker_isolation():
+    """Different tickers with different spreads produce different ADR% values."""
+    aapl_ohlc = [(100.0, 102.0, 98.0, 100.0)] * 25  # spread=4 → ADR%=0.04
+    msft_ohlc = [(100.0, 105.0, 95.0, 100.0)] * 25  # spread=10 → ADR%=0.10
+    bars = make_ohlc_bars({"AAPL": aapl_ohlc, "MSFT": msft_ohlc})
+    result = _compute_adr_pct(bars)
+    target_date = datetime.date(2024, 1, 20)
+    aapl_row = result.filter(
+        (pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)
+    ).row(0, named=True)
+    msft_row = result.filter(
+        (pl.col("ticker") == "MSFT") & (pl.col("date") == target_date)
+    ).row(0, named=True)
+    assert aapl_row["adr_pct"] == pytest.approx(0.04, abs=1e-4)
+    assert msft_row["adr_pct"] == pytest.approx(0.10, abs=1e-4)
+
+
+def test_compute_adr_pct_flat_price():
+    """When high == low, daily range = 0, so ADR% = 0.0 after warmup (not null)."""
+    ohlc = [(100.0, 100.0, 100.0, 100.0)] * 25
+    bars = make_ohlc_bars({"AAPL": ohlc})
+    result = _compute_adr_pct(bars)
+    non_null = result.filter(pl.col("adr_pct").is_not_null())
+    assert len(non_null) > 0
+    assert non_null["adr_pct"].to_list() == pytest.approx(
+        [0.0] * len(non_null), abs=1e-6
+    )
+
+
+def test_compute_adr_pct_output_columns():
+    """Result has exactly 3 columns: [date, ticker, adr_pct]."""
+    ohlc = [(100.0, 102.0, 98.0, 100.0)] * 25
+    bars = make_ohlc_bars({"AAPL": ohlc})
+    result = _compute_adr_pct(bars)
+    assert result.columns == ["date", "ticker", "adr_pct"]

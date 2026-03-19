@@ -70,6 +70,34 @@ def _compute_atr(bars: pl.DataFrame, period: int = 14) -> pl.DataFrame:
     )
 
 
+def _compute_adr_pct(bars: pl.DataFrame, period: int = 20) -> pl.DataFrame:
+    """Compute Average Daily Range percent per ticker using simple rolling mean.
+
+    ADR% = SMA(period) of ((high - low) / close). Measures the average daily
+    price range as a fraction of closing price (e.g., 0.04 means 4% average
+    daily range). Note: NOT expressed as a true percentage — 0.04 represents 4%.
+
+    Warmup: the first (period - 1) rows per ticker are null (rolling_mean needs
+    period values to compute the first non-null result).
+
+    ADR% is NOT the same as ATR% — ADR% ignores gaps, measuring only the
+    intraday high-low range. Use ATR% when you need gap-inclusive volatility.
+    """
+    sorted_bars = bars.sort(["ticker", "date"])
+    daily_range_pct = (pl.col("high") - pl.col("low")) / pl.col("close")
+    return sorted_bars.select(
+        [
+            pl.col("date"),
+            pl.col("ticker"),
+            daily_range_pct.cast(pl.Float64)
+            .rolling_mean(period)
+            .over("ticker")
+            .cast(pl.Float32)
+            .alias("adr_pct"),
+        ]
+    )
+
+
 def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
     """Compute per-ticker technical metrics: SMA-50, SMA-200, ATR-14, ATR%, SMA50_ATR_Distance, RS, RS_SMA_20, VARS, VARS_SMA_20, volume_sma_20.
 
