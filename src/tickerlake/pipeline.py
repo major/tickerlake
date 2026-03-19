@@ -17,7 +17,12 @@ from tickerlake.load import (
     write_consumer_db,
     write_raw_db,
 )
-from tickerlake.transform import adjust_splits, compute_metrics, filter_tickers
+from tickerlake.transform import (
+    adjust_splits,
+    compute_metrics,
+    detect_hvcs,
+    filter_tickers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +77,11 @@ def _run_backfill(config: Config) -> None:
     bars = filter_tickers(bars, tickers)
     logger.info("Computing metrics (SMA-50, SMA-200, ATR-14, ATR%%, RS, VARS)...")
     metrics = compute_metrics(bars)
+    hvcs = detect_hvcs(bars, metrics)
+    logger.info("Detected %d high-volume catalyst events.", len(hvcs))
 
     logger.info("Writing consumer DB to %s...", consumer_path)
-    write_consumer_db(bars, metrics, tickers, consumer_path)
+    write_consumer_db(bars, metrics, tickers, consumer_path, hvcs=hvcs)
 
     n_tickers = bars["ticker"].n_unique()
     logger.info(
@@ -133,10 +140,12 @@ def update(config: Config) -> None:
     all_bars = filter_tickers(all_bars, tickers)
     logger.info("Computing metrics (SMA-50, SMA-200, ATR-14, ATR%%, RS, VARS)...")
     metrics = compute_metrics(all_bars)
+    hvcs = detect_hvcs(all_bars, metrics)
+    logger.info("Detected %d high-volume catalyst events.", len(hvcs))
 
     consumer_path = config.output_dir / "tickerlake.duckdb"
     logger.info("Writing consumer DB to %s...", consumer_path)
-    write_consumer_db(all_bars, metrics, tickers, consumer_path)
+    write_consumer_db(all_bars, metrics, tickers, consumer_path, hvcs=hvcs)
 
     n_tickers = all_bars["ticker"].n_unique()
     logger.info(

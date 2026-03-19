@@ -119,6 +119,59 @@ def sample_metrics():
 
 
 @pytest.fixture
+def sample_hvcs():
+    """Minimal HVC DataFrame for pipeline tests (1 row, 21-column schema)."""
+    return pl.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "date": [datetime.date(2024, 1, 2)],
+            "open": [155.0],
+            "high": [160.0],
+            "low": [154.0],
+            "close": [158.0],
+            "prev_close": [151.5],
+            "volume": [3_100_000.0],
+            "volume_sma_20": [1_000_000.0],
+            "volume_multiplier": [3.1],
+            "total_move_pct": [4.3],
+            "gap_pct": [2.3],
+            "intraday_move_pct": [1.94],
+            "bar_range_pct": [3.97],
+            "adr_pct": [0.04],
+            "atr_pct": [0.03],
+            "close_position_in_range": [0.67],
+            "is_up_day": [True],
+            "price_vs_sma50_pct": [5.2],
+            "price_vs_sma200_pct": [12.5],
+            "rs": [0.15],
+        }
+    ).cast(
+        {
+            "date": pl.Date,
+            "open": pl.Float32,
+            "high": pl.Float32,
+            "low": pl.Float32,
+            "close": pl.Float32,
+            "prev_close": pl.Float32,
+            "volume": pl.Float32,
+            "volume_sma_20": pl.Float32,
+            "volume_multiplier": pl.Float32,
+            "total_move_pct": pl.Float32,
+            "gap_pct": pl.Float32,
+            "intraday_move_pct": pl.Float32,
+            "bar_range_pct": pl.Float32,
+            "adr_pct": pl.Float32,
+            "atr_pct": pl.Float32,
+            "close_position_in_range": pl.Float32,
+            "is_up_day": pl.Boolean,
+            "price_vs_sma50_pct": pl.Float32,
+            "price_vs_sma200_pct": pl.Float32,
+            "rs": pl.Float32,
+        }
+    )
+
+
+@pytest.fixture
 def pipeline_mocks():
     """Patch all pipeline dependencies via patch.multiple, yielding a name-keyed dict."""
     with patch.multiple(
@@ -131,6 +184,7 @@ def pipeline_mocks():
         adjust_splits=DEFAULT,
         filter_tickers=DEFAULT,
         compute_metrics=DEFAULT,
+        detect_hvcs=DEFAULT,
         write_raw_db=DEFAULT,
         append_raw_db=DEFAULT,
         read_raw_db=DEFAULT,
@@ -141,7 +195,9 @@ def pipeline_mocks():
         yield mocks
 
 
-def _wire_defaults(mocks, sample_bars, sample_splits, sample_tickers, sample_metrics):
+def _wire_defaults(
+    mocks, sample_bars, sample_splits, sample_tickers, sample_metrics, sample_hvcs=None
+):
     """Set standard return values on all pipeline mocks."""
     mocks["get_trading_days"].return_value = [datetime.date(2024, 1, 2)]
     mocks["extract_daily_aggs"].return_value = sample_bars
@@ -150,6 +206,8 @@ def _wire_defaults(mocks, sample_bars, sample_splits, sample_tickers, sample_met
     mocks["adjust_splits"].return_value = sample_bars
     mocks["filter_tickers"].return_value = sample_bars
     mocks["compute_metrics"].return_value = sample_metrics
+    if sample_hvcs is not None:
+        mocks["detect_hvcs"].return_value = sample_hvcs
     mocks["get_existing_dates"].return_value = set()
     mocks["read_raw_db"].return_value = sample_bars
 
@@ -429,3 +487,114 @@ def test_info_missing_db(tmp_path):
     from tickerlake.pipeline import info
 
     info(_make_config(tmp_path))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HVC detection wiring
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def test_backfill_calls_detect_hvcs(
+    pipeline_mocks,
+    tmp_path,
+    sample_bars,
+    sample_splits,
+    sample_tickers,
+    sample_metrics,
+    sample_hvcs,
+):
+    """Backfill calls detect_hvcs once after compute_metrics."""
+    from tickerlake.pipeline import backfill
+
+    _wire_defaults(
+        pipeline_mocks,
+        sample_bars,
+        sample_splits,
+        sample_tickers,
+        sample_metrics,
+        sample_hvcs,
+    )
+    backfill(_make_config(tmp_path))
+
+    pipeline_mocks["detect_hvcs"].assert_called_once()
+
+
+def test_backfill_passes_hvcs_to_write_consumer_db(
+    pipeline_mocks,
+    tmp_path,
+    sample_bars,
+    sample_splits,
+    sample_tickers,
+    sample_metrics,
+    sample_hvcs,
+):
+    """Backfill passes detect_hvcs result to write_consumer_db as hvcs keyword arg."""
+    from tickerlake.pipeline import backfill
+
+    _wire_defaults(
+        pipeline_mocks,
+        sample_bars,
+        sample_splits,
+        sample_tickers,
+        sample_metrics,
+        sample_hvcs,
+    )
+    backfill(_make_config(tmp_path))
+
+    call_kwargs = pipeline_mocks["write_consumer_db"].call_args.kwargs
+    assert "hvcs" in call_kwargs
+    assert call_kwargs["hvcs"] is sample_hvcs
+
+
+def test_update_calls_detect_hvcs(
+    pipeline_mocks,
+    tmp_path,
+    sample_bars,
+    sample_splits,
+    sample_tickers,
+    sample_metrics,
+    sample_hvcs,
+):
+    """Update calls detect_hvcs once in the update flow."""
+    from tickerlake.pipeline import update
+
+    _wire_defaults(
+        pipeline_mocks,
+        sample_bars,
+        sample_splits,
+        sample_tickers,
+        sample_metrics,
+        sample_hvcs,
+    )
+    (tmp_path / "raw.duckdb").touch()
+    update(_make_config(tmp_path))
+
+    pipeline_mocks["detect_hvcs"].assert_called_once()
+
+
+def test_update_passes_hvcs_to_write_consumer_db(
+    pipeline_mocks,
+    tmp_path,
+    sample_bars,
+    sample_splits,
+    sample_tickers,
+    sample_metrics,
+    sample_hvcs,
+):
+    """Update passes detect_hvcs result to write_consumer_db as hvcs keyword arg."""
+    from tickerlake.pipeline import update
+
+    _wire_defaults(
+        pipeline_mocks,
+        sample_bars,
+        sample_splits,
+        sample_tickers,
+        sample_metrics,
+        sample_hvcs,
+    )
+    (tmp_path / "raw.duckdb").touch()
+    update(_make_config(tmp_path))
+
+    call_kwargs = pipeline_mocks["write_consumer_db"].call_args.kwargs
+    assert "hvcs" in call_kwargs
+    assert call_kwargs["hvcs"] is sample_hvcs
