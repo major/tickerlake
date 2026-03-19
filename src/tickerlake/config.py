@@ -22,7 +22,7 @@ class Config:
     output_dir: Path = field(default_factory=Path.cwd)
     start_date: datetime.date = field(
         default_factory=lambda: datetime.date.today().replace(
-            year=datetime.date.today().year - 1
+            year=datetime.date.today().year - 5
         )
     )
     end_date: datetime.date = field(default_factory=datetime.date.today)
