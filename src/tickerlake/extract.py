@@ -110,7 +110,12 @@ def extract_daily_aggs(
     ) as progress:
         task = progress.add_task("Fetching bars...", total=len(dates))
         for date in dates:
-            aggs = client.fetch_daily_aggs(date)
+            try:
+                aggs = client.fetch_daily_aggs(date)
+            except Exception:
+                logger.warning("Skipping %s (API error)", date)
+                progress.update(task, description=f"Skipping {date}...", advance=1)
+                continue
             logger.debug("Fetching %s... %d tickers", date, len(aggs))
             if aggs:
                 frames.append(
