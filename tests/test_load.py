@@ -233,7 +233,7 @@ def test_write_consumer_db_creates_tables(
     sample_metrics_df: pl.DataFrame,
     sample_tickers_df: pl.DataFrame,
 ) -> None:
-    """write_consumer_db() creates daily_bars, stock_metrics, tickers tables."""
+    """write_consumer_db() creates daily_bars, daily_metrics, tickers tables."""
     db_path = tmp_path / "tickerlake.duckdb"
     write_consumer_db(sample_bars_df, sample_metrics_df, sample_tickers_df, db_path)
 
@@ -242,7 +242,7 @@ def test_write_consumer_db_creates_tables(
     con.close()
 
     assert "daily_bars" in tables
-    assert "stock_metrics" in tables
+    assert "daily_metrics" in tables
     assert "tickers" in tables
 
 
@@ -261,7 +261,7 @@ def test_write_consumer_db_schema(
         row[0]: row[1] for row in con.execute("DESCRIBE daily_bars").fetchall()
     }
     metrics_schema = {
-        row[0]: row[1] for row in con.execute("DESCRIBE stock_metrics").fetchall()
+        row[0]: row[1] for row in con.execute("DESCRIBE daily_metrics").fetchall()
     }
     tickers_schema = {
         row[0]: row[1] for row in con.execute("DESCRIBE tickers").fetchall()
@@ -273,7 +273,7 @@ def test_write_consumer_db_schema(
     assert bars_schema["open"] == "FLOAT"
     assert bars_schema["transactions"] == "UINTEGER"
 
-    # stock_metrics schema
+    # daily_metrics schema
     assert metrics_schema["date"] == "DATE"
     assert metrics_schema["sma_50"] == "FLOAT"
     assert metrics_schema["sma_200"] == "FLOAT"
@@ -304,7 +304,7 @@ def test_consumer_query_pattern(
     result = con.execute("""
         SELECT d.date, d.ticker, t.name, d.close, m.sma_50
         FROM daily_bars d
-        JOIN stock_metrics m USING (date, ticker)
+        JOIN daily_metrics m USING (date, ticker)
         JOIN tickers t USING (ticker)
     """).fetchall()
     con.close()
@@ -399,7 +399,7 @@ def test_write_consumer_db_hvcs_table_created(
     sample_tickers_df: pl.DataFrame,
     sample_hvcs_df: pl.DataFrame,
 ) -> None:
-    """write_consumer_db() with hvcs kwarg creates 4th high_volume_catalysts table."""
+    """write_consumer_db() with hvcs kwarg creates 4th daily_hvcs table."""
     db_path = tmp_path / "tickerlake.duckdb"
     write_consumer_db(
         sample_bars_df,
@@ -413,7 +413,7 @@ def test_write_consumer_db_hvcs_table_created(
     tables = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
     con.close()
 
-    assert "high_volume_catalysts" in tables
+    assert "daily_hvcs" in tables
     assert len(tables) == 4
 
 
@@ -435,10 +435,7 @@ def test_write_consumer_db_hvcs_schema(
     )
 
     con = duckdb.connect(str(db_path), read_only=True)
-    schema = {
-        row[0]: row[1]
-        for row in con.execute("DESCRIBE high_volume_catalysts").fetchall()
-    }
+    schema = {row[0]: row[1] for row in con.execute("DESCRIBE daily_hvcs").fetchall()}
     con.close()
 
     assert schema["date"] == "DATE"
@@ -468,7 +465,7 @@ def test_write_consumer_db_hvcs_row_count(
     )
 
     con = duckdb.connect(str(db_path), read_only=True)
-    count = con.execute("SELECT COUNT(*) FROM high_volume_catalysts").fetchone()[0]
+    count = con.execute("SELECT COUNT(*) FROM daily_hvcs").fetchone()[0]
     con.close()
 
     assert count == len(sample_hvcs_df)
@@ -480,7 +477,7 @@ def test_write_consumer_db_hvcs_none_no_table(
     sample_metrics_df: pl.DataFrame,
     sample_tickers_df: pl.DataFrame,
 ) -> None:
-    """write_consumer_db() with hvcs=None (default) does not create high_volume_catalysts."""
+    """write_consumer_db() with hvcs=None (default) does not create daily_hvcs."""
     db_path = tmp_path / "tickerlake.duckdb"
     write_consumer_db(sample_bars_df, sample_metrics_df, sample_tickers_df, db_path)
 
@@ -488,7 +485,7 @@ def test_write_consumer_db_hvcs_none_no_table(
     tables = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
     con.close()
 
-    assert "high_volume_catalysts" not in tables
+    assert "daily_hvcs" not in tables
     assert len(tables) == 3
 
 
@@ -507,5 +504,5 @@ def test_write_consumer_db_backward_compat(
     con.close()
 
     assert "daily_bars" in tables
-    assert "stock_metrics" in tables
+    assert "daily_metrics" in tables
     assert "tickers" in tables

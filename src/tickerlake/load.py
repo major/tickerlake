@@ -104,7 +104,7 @@ def write_consumer_db(
             f"CREATE OR REPLACE TABLE daily_bars AS {_read_parquet_sql(bars_tmp, 'ticker, date')}"
         )
         con.execute(
-            f"CREATE OR REPLACE TABLE stock_metrics AS {_read_parquet_sql(metrics_tmp, 'ticker, date')}"
+            f"CREATE OR REPLACE TABLE daily_metrics AS {_read_parquet_sql(metrics_tmp, 'ticker, date')}"
         )
         con.execute(
             f"CREATE OR REPLACE TABLE tickers AS {_read_parquet_sql(tickers_tmp, 'ticker')}"
@@ -112,7 +112,7 @@ def write_consumer_db(
         if hvcs is not None:
             with _tmp_parquet(hvcs) as hvcs_tmp:
                 con.execute(
-                    f"CREATE OR REPLACE TABLE high_volume_catalysts AS {_read_parquet_sql(hvcs_tmp, 'ticker, date')}"
+                    f"CREATE OR REPLACE TABLE daily_hvcs AS {_read_parquet_sql(hvcs_tmp, 'ticker, date')}"
                 )
         con.execute("CHECKPOINT")
         con.close()
