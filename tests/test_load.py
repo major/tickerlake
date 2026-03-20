@@ -506,3 +506,134 @@ def test_write_consumer_db_backward_compat(
     assert "daily_bars" in tables
     assert "daily_metrics" in tables
     assert "tickers" in tables
+
+
+def test_write_consumer_db_weekly_tables_created(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+    sample_hvcs_df: pl.DataFrame,
+) -> None:
+    """Weekly tables exist when weekly params are provided."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    write_consumer_db(
+        sample_bars_df,
+        sample_metrics_df,
+        sample_tickers_df,
+        db_path,
+        hvcs=sample_hvcs_df,
+        weekly_bars=sample_bars_df,
+        weekly_metrics=sample_metrics_df,
+        weekly_hvcs=sample_hvcs_df,
+    )
+    con = duckdb.connect(str(db_path), read_only=True)
+    tables = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
+    con.close()
+    assert "weekly_bars" in tables
+    assert "weekly_metrics" in tables
+    assert "weekly_hvcs" in tables
+
+
+def test_write_consumer_db_weekly_tables_optional(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+) -> None:
+    """No weekly tables when weekly params are omitted."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    write_consumer_db(sample_bars_df, sample_metrics_df, sample_tickers_df, db_path)
+    con = duckdb.connect(str(db_path), read_only=True)
+    tables = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
+    con.close()
+    assert "weekly_bars" not in tables
+    assert "weekly_metrics" not in tables
+    assert "weekly_hvcs" not in tables
+    assert len(tables) == 3  # daily_bars, daily_metrics, tickers
+
+
+def test_write_consumer_db_weekly_bars_schema(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+) -> None:
+    """weekly_bars has same columns as daily_bars."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    write_consumer_db(
+        sample_bars_df,
+        sample_metrics_df,
+        sample_tickers_df,
+        db_path,
+        weekly_bars=sample_bars_df,
+    )
+    con = duckdb.connect(str(db_path), read_only=True)
+    daily_cols = {row[0] for row in con.execute("DESCRIBE daily_bars").fetchall()}
+    weekly_cols = {row[0] for row in con.execute("DESCRIBE weekly_bars").fetchall()}
+    con.close()
+    assert daily_cols == weekly_cols
+
+
+def test_write_consumer_db_weekly_bars_sorted(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+) -> None:
+    """weekly_bars is sorted by (ticker, date)."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    write_consumer_db(
+        sample_bars_df,
+        sample_metrics_df,
+        sample_tickers_df,
+        db_path,
+        weekly_bars=sample_bars_df,
+    )
+    con = duckdb.connect(str(db_path), read_only=True)
+    rows = con.execute("SELECT ticker, date FROM weekly_bars").fetchall()
+    con.close()
+    assert rows == sorted(rows)
+
+
+def test_write_consumer_db_weekly_metrics_sorted(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+) -> None:
+    """weekly_metrics is sorted by (ticker, date)."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    write_consumer_db(
+        sample_bars_df,
+        sample_metrics_df,
+        sample_tickers_df,
+        db_path,
+        weekly_metrics=sample_metrics_df,
+    )
+    con = duckdb.connect(str(db_path), read_only=True)
+    rows = con.execute("SELECT ticker, date FROM weekly_metrics").fetchall()
+    con.close()
+    assert rows == sorted(rows)
+
+
+def test_write_consumer_db_weekly_hvcs_sorted(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+    sample_hvcs_df: pl.DataFrame,
+) -> None:
+    """weekly_hvcs is sorted by (ticker, date)."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    write_consumer_db(
+        sample_bars_df,
+        sample_metrics_df,
+        sample_tickers_df,
+        db_path,
+        weekly_hvcs=sample_hvcs_df,
+    )
+    con = duckdb.connect(str(db_path), read_only=True)
+    rows = con.execute("SELECT ticker, date FROM weekly_hvcs").fetchall()
+    con.close()
+    assert rows == sorted(rows)

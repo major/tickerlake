@@ -92,8 +92,11 @@ def write_consumer_db(
     path: Path,
     *,
     hvcs: pl.DataFrame | None = None,
+    weekly_bars: pl.DataFrame | None = None,
+    weekly_metrics: pl.DataFrame | None = None,
+    weekly_hvcs: pl.DataFrame | None = None,
 ) -> None:
-    """Write bars, metrics, tickers, and optionally HVC DataFrames to consumer DuckDB file."""
+    """Write bars, metrics, tickers, and optionally HVC and weekly DataFrames to consumer DuckDB file."""
     with (
         _tmp_parquet(bars) as bars_tmp,
         _tmp_parquet(metrics) as metrics_tmp,
@@ -113,6 +116,21 @@ def write_consumer_db(
             with _tmp_parquet(hvcs) as hvcs_tmp:
                 con.execute(
                     f"CREATE OR REPLACE TABLE daily_hvcs AS {_read_parquet_sql(hvcs_tmp, 'ticker, date')}"
+                )
+        if weekly_bars is not None:
+            with _tmp_parquet(weekly_bars) as wb_tmp:
+                con.execute(
+                    f"CREATE OR REPLACE TABLE weekly_bars AS {_read_parquet_sql(wb_tmp, 'ticker, date')}"
+                )
+        if weekly_metrics is not None:
+            with _tmp_parquet(weekly_metrics) as wm_tmp:
+                con.execute(
+                    f"CREATE OR REPLACE TABLE weekly_metrics AS {_read_parquet_sql(wm_tmp, 'ticker, date')}"
+                )
+        if weekly_hvcs is not None:
+            with _tmp_parquet(weekly_hvcs) as wh_tmp:
+                con.execute(
+                    f"CREATE OR REPLACE TABLE weekly_hvcs AS {_read_parquet_sql(wh_tmp, 'ticker, date')}"
                 )
         con.execute("CHECKPOINT")
         con.close()
