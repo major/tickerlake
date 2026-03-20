@@ -729,6 +729,30 @@ def test_adjust_splits_multiple_tickers():
             ],
             id="NVDA-4to1-then-10to1",
         ),
+        pytest.param(
+            "NOW",
+            [
+                (datetime.date(2025, 12, 18), 0.2),
+            ],
+            [
+                (datetime.date(2025, 12, 1), 780.0, 1000.0, 156.0, 5000.0),
+                (datetime.date(2026, 1, 10), 155.0, 2000.0, 155.0, 2000.0),
+            ],
+            id="NOW-5to1",
+        ),
+        pytest.param(
+            "TPL",
+            [
+                (datetime.date(2024, 3, 27), 1.0 / 9.0),
+                (datetime.date(2025, 12, 23), 1.0 / 3.0),
+            ],
+            [
+                (datetime.date(2024, 1, 10), 900.0, 1000.0, 100.0, 9000.0),
+                (datetime.date(2025, 6, 10), 450.0, 2000.0, 150.0, 6000.0),
+                (datetime.date(2026, 1, 10), 290.0, 3000.0, 290.0, 3000.0),
+            ],
+            id="TPL-two-3to1",
+        ),
     ],
 )
 def test_adjust_splits_multi_split_spot_check(ticker, splits_data, checks):

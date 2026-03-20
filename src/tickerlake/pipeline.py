@@ -26,7 +26,70 @@ from tickerlake.transform import (
     filter_tickers,
 )
 
+import polars as pl
+
 logger = logging.getLogger(__name__)
+
+_SPOT_CHECK_SAMPLE_SIZE = 5
+_SPOT_CHECK_TOLERANCE = 1e-3
+
+
+def _verify_split_adjustment(
+    raw_bars: pl.DataFrame, adjusted_bars: pl.DataFrame, splits: pl.DataFrame
+) -> None:
+    """Spot-check that split adjustment factors were applied correctly.
+
+    Samples tickers with the most extreme (smallest) cumulative adjustment
+    factors and verifies the adjusted/raw close ratio matches the expected
+    factor within tolerance. Raises ValueError on mismatch.
+    """
+    if splits.is_empty():
+        return
+
+    sample = splits.filter(
+        pl.col("adjustment_factor").is_between(0.02, 0.5, closed="left")
+    ).sort("adjustment_factor")
+    seen: set[str] = set()
+    verified = 0
+
+    for row in sample.iter_rows(named=True):
+        ticker = row["ticker"]
+        if ticker in seen:
+            continue
+        seen.add(ticker)
+
+        pre_split = raw_bars.filter(
+            (pl.col("ticker") == ticker) & (pl.col("date") < row["execution_date"])
+        )
+        if pre_split.is_empty():
+            continue
+
+        check_date = pre_split["date"].max()
+        raw_close = float(pre_split.filter(pl.col("date") == check_date)["close"][0])
+        adj_row = adjusted_bars.filter(
+            (pl.col("ticker") == ticker) & (pl.col("date") == check_date)
+        )
+        if adj_row.is_empty():
+            continue
+
+        adj_close = float(adj_row["close"][0])
+        expected = float(row["adjustment_factor"])
+        actual = adj_close / raw_close
+
+        if abs(actual - expected) / abs(expected) > _SPOT_CHECK_TOLERANCE:
+            raise ValueError(
+                f"Split adjustment spot check failed: {ticker} on {check_date} "
+                f"expected factor {expected:.6f}, got {actual:.6f} "
+                f"(raw={raw_close:.2f}, adjusted={adj_close:.2f})"
+            )
+        verified += 1
+        if verified >= _SPOT_CHECK_SAMPLE_SIZE:
+            break
+
+    if verified > 0:
+        logger.info(
+            "Split adjustment spot check passed (%d tickers verified).", verified
+        )
 
 
 def _run_backfill(config: Config) -> None:
@@ -77,6 +140,7 @@ def _run_backfill(config: Config) -> None:
 
     logger.info("Adjusting for %d splits...", len(splits))
     bars = adjust_splits(all_bars, splits)
+    _verify_split_adjustment(all_bars, bars, splits)
     logger.info("Filtering to known tickers...")
     bars = filter_tickers(bars, tickers)
     logger.info("Computing metrics (SMA-50, SMA-200, ATR-14, ATR%%, RS, VARS)...")
@@ -156,7 +220,10 @@ def update(config: Config) -> None:
     tickers = extract_tickers(client, config.ticker_types)
 
     logger.info("Adjusting for %d splits...", len(splits))
+    raw_bars = all_bars
     all_bars = adjust_splits(all_bars, splits)
+    _verify_split_adjustment(raw_bars, all_bars, splits)
+    del raw_bars
     logger.info("Filtering to known tickers...")
     all_bars = filter_tickers(all_bars, tickers)
     logger.info("Computing metrics (SMA-50, SMA-200, ATR-14, ATR%%, RS, VARS)...")

@@ -549,6 +549,124 @@ def test_backfill_passes_hvcs_to_write_consumer_db(
     assert call_kwargs["hvcs"] is sample_hvcs
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Split adjustment spot check
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def test_verify_split_adjustment_passes():
+    """Spot check passes when adjusted/raw ratio matches split factor."""
+    from tickerlake.pipeline import _verify_split_adjustment
+
+    raw = pl.DataFrame(
+        {
+            "date": [datetime.date(2024, 1, 10)],
+            "ticker": ["AAPL"],
+            "close": [400.0],
+        }
+    ).cast({"date": pl.Date, "close": pl.Float32})
+    adjusted = raw.with_columns(pl.col("close") * 0.25)
+    splits = pl.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "execution_date": [datetime.date(2024, 1, 15)],
+            "adjustment_factor": [0.25],
+        }
+    ).cast({"execution_date": pl.Date, "adjustment_factor": pl.Float64})
+
+    _verify_split_adjustment(raw, adjusted, splits)
+
+
+def test_verify_split_adjustment_fails():
+    """Spot check raises ValueError when adjusted prices don't match factor."""
+    from tickerlake.pipeline import _verify_split_adjustment
+
+    raw = pl.DataFrame(
+        {
+            "date": [datetime.date(2024, 1, 10)],
+            "ticker": ["AAPL"],
+            "close": [400.0],
+        }
+    ).cast({"date": pl.Date, "close": pl.Float32})
+    adjusted = raw.clone()
+    splits = pl.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "execution_date": [datetime.date(2024, 1, 15)],
+            "adjustment_factor": [0.25],
+        }
+    ).cast({"execution_date": pl.Date, "adjustment_factor": pl.Float64})
+
+    with pytest.raises(ValueError, match="spot check failed"):
+        _verify_split_adjustment(raw, adjusted, splits)
+
+
+def test_verify_split_adjustment_empty_splits():
+    """Spot check is a no-op when splits DataFrame is empty."""
+    from tickerlake.pipeline import _verify_split_adjustment
+
+    raw = pl.DataFrame(
+        {
+            "date": [datetime.date(2024, 1, 10)],
+            "ticker": ["AAPL"],
+            "close": [400.0],
+        }
+    ).cast({"date": pl.Date, "close": pl.Float32})
+    empty_splits = pl.DataFrame(
+        schema={
+            "ticker": pl.Utf8,
+            "execution_date": pl.Date,
+            "adjustment_factor": pl.Float64,
+        }
+    )
+
+    _verify_split_adjustment(raw, raw, empty_splits)
+
+
+def test_verify_split_adjustment_skips_small_splits():
+    """Spot check skips splits with factor >= 0.5 (less than 2:1)."""
+    from tickerlake.pipeline import _verify_split_adjustment
+
+    raw = pl.DataFrame(
+        {
+            "date": [datetime.date(2024, 1, 10)],
+            "ticker": ["AAPL"],
+            "close": [400.0],
+        }
+    ).cast({"date": pl.Date, "close": pl.Float32})
+    splits = pl.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "execution_date": [datetime.date(2024, 1, 15)],
+            "adjustment_factor": [0.75],
+        }
+    ).cast({"execution_date": pl.Date, "adjustment_factor": pl.Float64})
+
+    _verify_split_adjustment(raw, raw, splits)
+
+
+def test_verify_split_adjustment_skips_extreme_splits():
+    """Spot check skips splits with factor < 0.02 (OTC noise, same-day offsetting splits)."""
+    from tickerlake.pipeline import _verify_split_adjustment
+
+    raw = pl.DataFrame(
+        {
+            "date": [datetime.date(2024, 1, 10)],
+            "ticker": ["SFE"],
+            "close": [0.73],
+        }
+    ).cast({"date": pl.Date, "close": pl.Float32})
+    splits = pl.DataFrame(
+        {
+            "ticker": ["SFE"],
+            "execution_date": [datetime.date(2024, 1, 16)],
+            "adjustment_factor": [0.01],
+        }
+    ).cast({"execution_date": pl.Date, "adjustment_factor": pl.Float64})
+
+    _verify_split_adjustment(raw, raw, splits)
+
+
 def test_update_calls_detect_hvcs(
     pipeline_mocks,
     tmp_path,
