@@ -18,6 +18,7 @@ from tickerlake.load import (
     write_raw_db,
 )
 from tickerlake.transform import (
+    aggregate_to_weekly,
     adjust_splits,
     compute_metrics,
     detect_hvcs,
@@ -79,9 +80,24 @@ def _run_backfill(config: Config) -> None:
     metrics = compute_metrics(bars)
     hvcs = detect_hvcs(bars, metrics)
     logger.info("Detected %d high-volume catalyst events.", len(hvcs))
+    logger.info("Aggregating weekly bars...")
+    weekly_bars = aggregate_to_weekly(bars)
+    logger.info("Computing weekly metrics...")
+    weekly_metrics = compute_metrics(weekly_bars)
+    logger.info("Detecting weekly HVCs...")
+    weekly_hvcs = detect_hvcs(weekly_bars, weekly_metrics)
 
     logger.info("Writing consumer DB to %s...", consumer_path)
-    write_consumer_db(bars, metrics, tickers, consumer_path, hvcs=hvcs)
+    write_consumer_db(
+        bars,
+        metrics,
+        tickers,
+        consumer_path,
+        hvcs=hvcs,
+        weekly_bars=weekly_bars,
+        weekly_metrics=weekly_metrics,
+        weekly_hvcs=weekly_hvcs,
+    )
 
     n_tickers = bars["ticker"].n_unique()
     logger.info(
@@ -142,10 +158,25 @@ def update(config: Config) -> None:
     metrics = compute_metrics(all_bars)
     hvcs = detect_hvcs(all_bars, metrics)
     logger.info("Detected %d high-volume catalyst events.", len(hvcs))
+    logger.info("Aggregating weekly bars...")
+    weekly_bars = aggregate_to_weekly(all_bars)
+    logger.info("Computing weekly metrics...")
+    weekly_metrics = compute_metrics(weekly_bars)
+    logger.info("Detecting weekly HVCs...")
+    weekly_hvcs = detect_hvcs(weekly_bars, weekly_metrics)
 
     consumer_path = config.output_dir / "tickerlake.duckdb"
     logger.info("Writing consumer DB to %s...", consumer_path)
-    write_consumer_db(all_bars, metrics, tickers, consumer_path, hvcs=hvcs)
+    write_consumer_db(
+        all_bars,
+        metrics,
+        tickers,
+        consumer_path,
+        hvcs=hvcs,
+        weekly_bars=weekly_bars,
+        weekly_metrics=weekly_metrics,
+        weekly_hvcs=weekly_hvcs,
+    )
 
     n_tickers = all_bars["ticker"].n_unique()
     logger.info(

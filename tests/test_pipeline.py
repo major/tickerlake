@@ -183,6 +183,7 @@ def pipeline_mocks():
         extract_tickers=DEFAULT,
         adjust_splits=DEFAULT,
         filter_tickers=DEFAULT,
+        aggregate_to_weekly=DEFAULT,
         compute_metrics=DEFAULT,
         detect_hvcs=DEFAULT,
         write_raw_db=DEFAULT,
@@ -205,6 +206,7 @@ def _wire_defaults(
     mocks["extract_tickers"].return_value = sample_tickers
     mocks["adjust_splits"].return_value = sample_bars
     mocks["filter_tickers"].return_value = sample_bars
+    mocks["aggregate_to_weekly"].return_value = sample_bars
     mocks["compute_metrics"].return_value = sample_metrics
     if sample_hvcs is not None:
         mocks["detect_hvcs"].return_value = sample_hvcs
@@ -251,7 +253,7 @@ def test_backfill_calls_transform_in_order(
     pipeline_mocks["filter_tickers"].assert_called_once()
     assert pipeline_mocks["filter_tickers"].call_args[0][1] is sample_tickers
 
-    pipeline_mocks["compute_metrics"].assert_called_once()
+    assert pipeline_mocks["compute_metrics"].call_count == 2
 
 
 def test_backfill_calls_write_raw_db(
@@ -503,7 +505,7 @@ def test_backfill_calls_detect_hvcs(
     sample_metrics,
     sample_hvcs,
 ):
-    """Backfill calls detect_hvcs once after compute_metrics."""
+    """Backfill calls detect_hvcs for daily and weekly bars."""
     from tickerlake.pipeline import backfill
 
     _wire_defaults(
@@ -516,7 +518,7 @@ def test_backfill_calls_detect_hvcs(
     )
     backfill(_make_config(tmp_path))
 
-    pipeline_mocks["detect_hvcs"].assert_called_once()
+    assert pipeline_mocks["detect_hvcs"].call_count == 2
 
 
 def test_backfill_passes_hvcs_to_write_consumer_db(
@@ -555,7 +557,7 @@ def test_update_calls_detect_hvcs(
     sample_metrics,
     sample_hvcs,
 ):
-    """Update calls detect_hvcs once in the update flow."""
+    """Update calls detect_hvcs for daily and weekly bars."""
     from tickerlake.pipeline import update
 
     _wire_defaults(
@@ -569,7 +571,135 @@ def test_update_calls_detect_hvcs(
     (tmp_path / "raw.duckdb").touch()
     update(_make_config(tmp_path))
 
-    pipeline_mocks["detect_hvcs"].assert_called_once()
+    assert pipeline_mocks["detect_hvcs"].call_count == 2
+
+
+def test_backfill_calls_aggregate_to_weekly(
+    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
+):
+    """Backfill calls aggregate_to_weekly with the filtered bars."""
+    from tickerlake.pipeline import backfill
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    backfill(_make_config(tmp_path))
+
+    pipeline_mocks["aggregate_to_weekly"].assert_called_once()
+    call_args = pipeline_mocks["aggregate_to_weekly"].call_args
+    assert call_args is not None
+    assert call_args[0][0] is sample_bars
+
+
+def test_backfill_computes_weekly_metrics(
+    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
+):
+    """Backfill computes metrics for daily and weekly bars."""
+    from tickerlake.pipeline import backfill
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    backfill(_make_config(tmp_path))
+
+    assert pipeline_mocks["compute_metrics"].call_count == 2
+
+
+def test_backfill_detects_weekly_hvcs(
+    pipeline_mocks,
+    tmp_path,
+    sample_bars,
+    sample_splits,
+    sample_tickers,
+    sample_metrics,
+    sample_hvcs,
+):
+    """Backfill detects HVCs for daily and weekly bars."""
+    from tickerlake.pipeline import backfill
+
+    _wire_defaults(
+        pipeline_mocks,
+        sample_bars,
+        sample_splits,
+        sample_tickers,
+        sample_metrics,
+        sample_hvcs,
+    )
+    backfill(_make_config(tmp_path))
+
+    assert pipeline_mocks["detect_hvcs"].call_count == 2
+
+
+def test_backfill_passes_weekly_to_consumer_db(
+    pipeline_mocks,
+    tmp_path,
+    sample_bars,
+    sample_splits,
+    sample_tickers,
+    sample_metrics,
+    sample_hvcs,
+):
+    """Backfill passes weekly bars, metrics, and HVCs to write_consumer_db."""
+    from tickerlake.pipeline import backfill
+
+    _wire_defaults(
+        pipeline_mocks,
+        sample_bars,
+        sample_splits,
+        sample_tickers,
+        sample_metrics,
+        sample_hvcs,
+    )
+    backfill(_make_config(tmp_path))
+
+    call_kwargs = pipeline_mocks["write_consumer_db"].call_args.kwargs
+    assert "weekly_bars" in call_kwargs
+    assert "weekly_metrics" in call_kwargs
+    assert "weekly_hvcs" in call_kwargs
+
+
+def test_update_calls_aggregate_to_weekly(
+    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
+):
+    """Update calls aggregate_to_weekly with filtered bars."""
+    from tickerlake.pipeline import update
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    (tmp_path / "raw.duckdb").touch()
+    update(_make_config(tmp_path))
+
+    pipeline_mocks["aggregate_to_weekly"].assert_called_once()
+
+
+def test_update_passes_weekly_to_consumer_db(
+    pipeline_mocks,
+    tmp_path,
+    sample_bars,
+    sample_splits,
+    sample_tickers,
+    sample_metrics,
+    sample_hvcs,
+):
+    """Update passes weekly bars, metrics, and HVCs to write_consumer_db."""
+    from tickerlake.pipeline import update
+
+    _wire_defaults(
+        pipeline_mocks,
+        sample_bars,
+        sample_splits,
+        sample_tickers,
+        sample_metrics,
+        sample_hvcs,
+    )
+    (tmp_path / "raw.duckdb").touch()
+    update(_make_config(tmp_path))
+
+    call_kwargs = pipeline_mocks["write_consumer_db"].call_args.kwargs
+    assert "weekly_bars" in call_kwargs
+    assert "weekly_metrics" in call_kwargs
+    assert "weekly_hvcs" in call_kwargs
 
 
 def test_update_passes_hvcs_to_write_consumer_db(
