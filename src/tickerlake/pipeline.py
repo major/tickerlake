@@ -16,6 +16,7 @@ from tickerlake.load import (
     read_raw_db,
     write_consumer_db,
     write_raw_db,
+    write_splits,
 )
 from tickerlake.transform import (
     aggregate_to_weekly,
@@ -69,6 +70,8 @@ def _run_backfill(config: Config) -> None:
 
     logger.info("Extracting splits (%s to %s)...", config.start_date, config.end_date)
     splits = extract_splits(client, config.start_date, config.end_date)
+    logger.info("Persisting %d splits to %s...", len(splits), raw_path)
+    write_splits(splits, raw_path)
     logger.info("Extracting tickers (types: %s)...", ", ".join(config.ticker_types))
     tickers = extract_tickers(client, config.ticker_types)
 
@@ -147,6 +150,8 @@ def update(config: Config) -> None:
     all_bars = read_raw_db(raw_path)
     logger.info("Extracting splits (%s to %s)...", config.start_date, config.end_date)
     splits = extract_splits(client, config.start_date, config.end_date)
+    logger.info("Persisting %d splits to %s...", len(splits), raw_path)
+    write_splits(splits, raw_path)
     logger.info("Extracting tickers (types: %s)...", ", ".join(config.ticker_types))
     tickers = extract_tickers(client, config.ticker_types)
 

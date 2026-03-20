@@ -136,6 +136,32 @@ def write_consumer_db(
         con.close()
 
 
+def write_splits(splits: pl.DataFrame, path: Path) -> None:
+    """Write splits DataFrame to splits table, replacing any existing data."""
+    with _tmp_parquet(splits) as tmp:
+        con = duckdb.connect(str(path))
+        con.execute(
+            f"CREATE OR REPLACE TABLE splits AS {_read_parquet_sql(tmp, 'ticker, execution_date')}"
+        )
+        con.execute("CHECKPOINT")
+        con.close()
+
+
+def read_splits(path: Path) -> pl.DataFrame:
+    """Read splits table from DuckDB file, sorted by (ticker, execution_date)."""
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+        tmp = Path(f.name)
+    try:
+        con = duckdb.connect(str(path), read_only=True)
+        con.execute(
+            f"COPY (SELECT * FROM splits ORDER BY ticker, execution_date) TO '{tmp}' (FORMAT PARQUET)"
+        )
+        con.close()
+        return pl.read_parquet(tmp)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def compact_raw_db(path: Path) -> None:
     """Rebuild raw.duckdb by exporting and reimporting to reclaim fragmented space."""
     bars = read_raw_db(path)

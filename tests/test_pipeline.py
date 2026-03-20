@@ -189,6 +189,7 @@ def pipeline_mocks():
         write_raw_db=DEFAULT,
         append_raw_db=DEFAULT,
         read_raw_db=DEFAULT,
+        write_splits=DEFAULT,
         write_consumer_db=DEFAULT,
         get_db_info=DEFAULT,
         get_existing_dates=DEFAULT,
@@ -700,6 +701,51 @@ def test_update_passes_weekly_to_consumer_db(
     assert "weekly_bars" in call_kwargs
     assert "weekly_metrics" in call_kwargs
     assert "weekly_hvcs" in call_kwargs
+
+
+def test_backfill_persists_splits(
+    pipeline_mocks,
+    tmp_path,
+    sample_bars,
+    sample_splits,
+    sample_tickers,
+    sample_metrics,
+):
+    """Backfill calls write_splits with extracted splits and raw.duckdb path."""
+    from tickerlake.pipeline import backfill
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    config = _make_config(tmp_path)
+    backfill(config)
+
+    pipeline_mocks["write_splits"].assert_called_once_with(
+        sample_splits, config.output_dir / "raw.duckdb"
+    )
+
+
+def test_update_persists_splits(
+    pipeline_mocks,
+    tmp_path,
+    sample_bars,
+    sample_splits,
+    sample_tickers,
+    sample_metrics,
+):
+    """Update calls write_splits with extracted splits and raw.duckdb path."""
+    from tickerlake.pipeline import update
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    (tmp_path / "raw.duckdb").touch()
+    config = _make_config(tmp_path)
+    update(config)
+
+    pipeline_mocks["write_splits"].assert_called_once_with(
+        sample_splits, config.output_dir / "raw.duckdb"
+    )
 
 
 def test_update_passes_hvcs_to_write_consumer_db(

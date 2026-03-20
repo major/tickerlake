@@ -12,8 +12,10 @@ from tickerlake.load import (
     get_db_info,
     get_existing_dates,
     read_raw_db,
+    read_splits,
     write_consumer_db,
     write_raw_db,
+    write_splits,
 )
 
 
@@ -637,3 +639,58 @@ def test_write_consumer_db_weekly_hvcs_sorted(
     rows = con.execute("SELECT ticker, date FROM weekly_hvcs").fetchall()
     con.close()
     assert rows == sorted(rows)
+
+
+def test_write_splits_creates_table(
+    tmp_path: Path, sample_splits_df: pl.DataFrame
+) -> None:
+    """write_splits() creates splits table with correct row count."""
+    db_path = tmp_path / "raw.duckdb"
+    write_splits(sample_splits_df, db_path)
+
+    con = duckdb.connect(str(db_path), read_only=True)
+    count = con.execute("SELECT COUNT(*) FROM splits").fetchone()[0]
+    con.close()
+
+    assert count == len(sample_splits_df)
+
+
+def test_write_splits_schema(tmp_path: Path, sample_splits_df: pl.DataFrame) -> None:
+    """Splits table has correct column types: DATE, VARCHAR, FLOAT, DOUBLE."""
+    db_path = tmp_path / "raw.duckdb"
+    write_splits(sample_splits_df, db_path)
+
+    con = duckdb.connect(str(db_path), read_only=True)
+    schema = {row[0]: row[1] for row in con.execute("DESCRIBE splits").fetchall()}
+    con.close()
+
+    assert schema["ticker"] == "VARCHAR"
+    assert schema["execution_date"] == "DATE"
+    assert schema["split_from"] == "FLOAT"
+    assert schema["split_to"] == "FLOAT"
+    assert schema["adjustment_factor"] == "DOUBLE"
+    assert schema["adjustment_type"] == "VARCHAR"
+
+
+def test_write_splits_sorted(tmp_path: Path, sample_splits_df: pl.DataFrame) -> None:
+    """Splits table is sorted by (ticker, execution_date)."""
+    db_path = tmp_path / "raw.duckdb"
+    write_splits(sample_splits_df, db_path)
+
+    con = duckdb.connect(str(db_path), read_only=True)
+    rows = con.execute("SELECT ticker, execution_date FROM splits").fetchall()
+    con.close()
+
+    assert rows == sorted(rows)
+
+
+def test_read_splits_round_trip(tmp_path: Path, sample_splits_df: pl.DataFrame) -> None:
+    """read_splits() returns the same data that was written by write_splits()."""
+    db_path = tmp_path / "raw.duckdb"
+    write_splits(sample_splits_df, db_path)
+
+    result = read_splits(db_path)
+
+    assert isinstance(result, pl.DataFrame)
+    assert len(result) == len(sample_splits_df)
+    assert set(result.columns) == set(sample_splits_df.columns)
