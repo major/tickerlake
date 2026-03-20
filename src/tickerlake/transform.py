@@ -7,6 +7,13 @@ PRICE_COLUMNS = ("open", "high", "low", "close", "vwap")
 
 
 def adjust_splits(bars: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
+    """Adjust bar prices and volumes for stock splits.
+
+    The Massive API returns cumulative adjustment factors: each split's factor
+    already accounts for all later splits on the same ticker. join_asof(forward)
+    matches each bar to the nearest future split, whose factor is the correct
+    cumulative multiplier for that bar's position in the split timeline.
+    """
     if splits.is_empty():
         return bars
 

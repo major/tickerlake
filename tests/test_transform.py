@@ -687,6 +687,96 @@ def test_adjust_splits_multiple_tickers():
     assert msft_row["volume"] == pytest.approx(1000.0)
 
 
+@pytest.mark.parametrize(
+    "ticker, splits_data, checks",
+    [
+        pytest.param(
+            "ANET",
+            [
+                (datetime.date(2021, 11, 18), 0.0625),
+                (datetime.date(2024, 12, 4), 0.25),
+            ],
+            [
+                (datetime.date(2021, 10, 15), 400.0, 1000.0, 25.0, 16000.0),
+                (datetime.date(2021, 12, 17), 136.0, 2000.0, 34.0, 8000.0),
+                (datetime.date(2025, 1, 10), 102.0, 3000.0, 102.0, 3000.0),
+            ],
+            id="ANET-two-4to1",
+        ),
+        pytest.param(
+            "NFLX",
+            [
+                (datetime.date(2015, 7, 15), 1.0 / 70.0),
+                (datetime.date(2025, 11, 17), 0.1),
+            ],
+            [
+                (datetime.date(2015, 6, 1), 700.0, 7000.0, 10.0, 490000.0),
+                (datetime.date(2020, 1, 10), 350.0, 5000.0, 35.0, 50000.0),
+                (datetime.date(2026, 1, 10), 90.0, 10000.0, 90.0, 10000.0),
+            ],
+            id="NFLX-7to1-then-10to1",
+        ),
+        pytest.param(
+            "NVDA",
+            [
+                (datetime.date(2021, 7, 20), 0.025),
+                (datetime.date(2024, 6, 10), 0.1),
+            ],
+            [
+                (datetime.date(2021, 6, 1), 800.0, 1000.0, 20.0, 40000.0),
+                (datetime.date(2023, 1, 10), 150.0, 2000.0, 15.0, 20000.0),
+                (datetime.date(2025, 1, 10), 140.0, 3000.0, 140.0, 3000.0),
+            ],
+            id="NVDA-4to1-then-10to1",
+        ),
+    ],
+)
+def test_adjust_splits_multi_split_spot_check(ticker, splits_data, checks):
+    """Spot check real tickers with multiple splits using cumulative API factors.
+
+    The Massive API returns cumulative adjustment factors: the earliest split's
+    factor already includes all later splits. Each case has bars before both
+    splits, between splits, and after both splits. checks tuples are
+    (date, raw_close, raw_volume, expected_close, expected_volume).
+    """
+    bars = make_bars(
+        [
+            {
+                "date": date,
+                "ticker": ticker,
+                "open": close,
+                "high": close + 5.0,
+                "low": close - 5.0,
+                "close": close,
+                "volume": volume,
+                "vwap": close,
+                "transactions": 100,
+            }
+            for date, close, volume, _, _ in checks
+        ]
+    )
+    splits = make_splits(
+        [
+            {
+                "ticker": ticker,
+                "execution_date": exec_date,
+                "split_from": 1.0,
+                "split_to": 1.0,
+                "adjustment_factor": factor,
+                "adjustment_type": "split",
+            }
+            for exec_date, factor in splits_data
+        ]
+    )
+
+    result = adjust_splits(bars, splits)
+
+    for date, _, _, expected_close, expected_volume in checks:
+        row = result.filter(pl.col("date") == date).row(0, named=True)
+        assert row["close"] == pytest.approx(expected_close, rel=1e-4)
+        assert row["volume"] == pytest.approx(expected_volume, rel=1e-4)
+
+
 def test_adjust_splits_empty_splits(
     sample_bars_df: pl.DataFrame, sample_splits_df: pl.DataFrame
 ):
