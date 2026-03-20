@@ -1,5 +1,7 @@
 import polars as pl
 
+from tickerlake.extract import DAILY_AGGS_SCHEMA
+
 
 PRICE_COLUMNS = ("open", "high", "low", "close", "vwap")
 
@@ -271,6 +273,44 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
             .alias("volume_sma_20"),
         ]
     )
+
+
+def aggregate_to_weekly(bars: pl.DataFrame) -> pl.DataFrame:
+    """Aggregate daily OHLCV bars into weekly bars per ticker.
+
+    Weekly grouping is based on each row's calendar Friday for the ISO week.
+    The output date is the actual last trading day present in that ticker-week.
+    """
+    if bars.is_empty():
+        return pl.DataFrame(schema=DAILY_AGGS_SCHEMA)
+
+    sorted_bars = bars.sort(["ticker", "date"])
+    bars_with_week_end = sorted_bars.with_columns(
+        (pl.col("date") + pl.duration(days=(4 - pl.col("date").dt.weekday()))).alias(
+            "week_end"
+        )
+    )
+
+    weekly = (
+        bars_with_week_end.group_by(["ticker", "week_end"])
+        .agg(
+            [
+                pl.col("open").sort_by("date").first().cast(pl.Float32).alias("open"),
+                pl.col("high").max().cast(pl.Float32).alias("high"),
+                pl.col("low").min().cast(pl.Float32).alias("low"),
+                pl.col("close").sort_by("date").last().cast(pl.Float32).alias("close"),
+                pl.col("volume").sum().cast(pl.Float32).alias("volume"),
+                pl.col("vwap").sort_by("date").last().cast(pl.Float32).alias("vwap"),
+                pl.col("transactions").sum().cast(pl.UInt32).alias("transactions"),
+                pl.col("date").max().alias("date"),
+            ]
+        )
+        .drop("week_end")
+        .sort(["ticker", "date"])
+        .select(list(DAILY_AGGS_SCHEMA.keys()))
+    )
+
+    return weekly
 
 
 HVC_SCHEMA = {

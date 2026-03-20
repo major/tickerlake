@@ -6,12 +6,15 @@ import pytest
 from polars.testing import assert_frame_equal
 
 transform = importlib.import_module("tickerlake.transform")
+extract = importlib.import_module("tickerlake.extract")
 adjust_splits = transform.adjust_splits
 compute_metrics = transform.compute_metrics
 detect_hvcs = transform.detect_hvcs
 filter_tickers = transform.filter_tickers
 _compute_atr = transform._compute_atr
 _compute_adr_pct = transform._compute_adr_pct
+aggregate_to_weekly = transform.aggregate_to_weekly
+DAILY_AGGS_SCHEMA = extract.DAILY_AGGS_SCHEMA
 
 
 BARS_SCHEMA = {
@@ -65,6 +68,355 @@ def make_metric_bars(
                 }
             )
     return make_bars(rows)
+
+
+class TestAggregateToWeekly:
+    def test_basic_aggregation(self):
+        rows = []
+        for ticker, base in [("AAPL", 100.0), ("MSFT", 200.0)]:
+            week_1_dates = [
+                datetime.date(2024, 1, 8),
+                datetime.date(2024, 1, 9),
+                datetime.date(2024, 1, 10),
+                datetime.date(2024, 1, 11),
+                datetime.date(2024, 1, 12),
+            ]
+            week_2_dates = [
+                datetime.date(2024, 1, 16),
+                datetime.date(2024, 1, 17),
+                datetime.date(2024, 1, 18),
+                datetime.date(2024, 1, 19),
+            ]
+            week_3_dates = [
+                datetime.date(2024, 1, 22),
+                datetime.date(2024, 1, 23),
+                datetime.date(2024, 1, 24),
+                datetime.date(2024, 1, 25),
+                datetime.date(2024, 1, 26),
+            ]
+            all_dates = week_1_dates + week_2_dates + week_3_dates
+            for i, date in enumerate(all_dates):
+                price = base + i
+                rows.append(
+                    {
+                        "date": date,
+                        "ticker": ticker,
+                        "open": price,
+                        "high": price + 1.0,
+                        "low": price - 1.0,
+                        "close": price + 0.5,
+                        "volume": 1000.0 + i,
+                        "vwap": price + 0.25,
+                        "transactions": 100 + i,
+                    }
+                )
+
+        result = aggregate_to_weekly(make_bars(rows))
+
+        assert len(result) == 6
+        per_ticker_counts = result.group_by("ticker").len().sort("ticker")
+        assert per_ticker_counts["len"].to_list() == [3, 3]
+
+    def test_ohlcv_rollup_values(self):
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 8),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 102.0,
+                    "low": 99.0,
+                    "close": 101.0,
+                    "volume": 1000.0,
+                    "vwap": 100.7,
+                    "transactions": 10,
+                },
+                {
+                    "date": datetime.date(2024, 1, 9),
+                    "ticker": "AAPL",
+                    "open": 101.0,
+                    "high": 105.0,
+                    "low": 100.0,
+                    "close": 104.0,
+                    "volume": 1100.0,
+                    "vwap": 103.1,
+                    "transactions": 11,
+                },
+                {
+                    "date": datetime.date(2024, 1, 10),
+                    "ticker": "AAPL",
+                    "open": 104.0,
+                    "high": 106.0,
+                    "low": 98.0,
+                    "close": 99.0,
+                    "volume": 1200.0,
+                    "vwap": 100.2,
+                    "transactions": 12,
+                },
+                {
+                    "date": datetime.date(2024, 1, 11),
+                    "ticker": "AAPL",
+                    "open": 99.0,
+                    "high": 103.0,
+                    "low": 97.0,
+                    "close": 102.0,
+                    "volume": 1300.0,
+                    "vwap": 101.5,
+                    "transactions": 13,
+                },
+                {
+                    "date": datetime.date(2024, 1, 12),
+                    "ticker": "AAPL",
+                    "open": 102.0,
+                    "high": 104.0,
+                    "low": 100.0,
+                    "close": 103.0,
+                    "volume": 1400.0,
+                    "vwap": 102.8,
+                    "transactions": 14,
+                },
+            ]
+        )
+
+        row = aggregate_to_weekly(bars).row(0, named=True)
+
+        assert row["open"] == pytest.approx(100.0)
+        assert row["high"] == pytest.approx(106.0)
+        assert row["low"] == pytest.approx(97.0)
+        assert row["close"] == pytest.approx(103.0)
+        assert row["volume"] == pytest.approx(6000.0)
+        assert row["vwap"] == pytest.approx(102.8)
+        assert row["transactions"] == 60
+        assert row["date"] == datetime.date(2024, 1, 12)
+
+    def test_date_is_last_trading_day(self):
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 8),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.5,
+                    "volume": 1000.0,
+                    "vwap": 100.2,
+                    "transactions": 10,
+                },
+                {
+                    "date": datetime.date(2024, 1, 9),
+                    "ticker": "AAPL",
+                    "open": 101.0,
+                    "high": 102.0,
+                    "low": 100.0,
+                    "close": 101.5,
+                    "volume": 1000.0,
+                    "vwap": 101.2,
+                    "transactions": 10,
+                },
+                {
+                    "date": datetime.date(2024, 1, 10),
+                    "ticker": "AAPL",
+                    "open": 102.0,
+                    "high": 103.0,
+                    "low": 101.0,
+                    "close": 102.5,
+                    "volume": 1000.0,
+                    "vwap": 102.2,
+                    "transactions": 10,
+                },
+                {
+                    "date": datetime.date(2024, 1, 11),
+                    "ticker": "AAPL",
+                    "open": 103.0,
+                    "high": 104.0,
+                    "low": 102.0,
+                    "close": 103.5,
+                    "volume": 1000.0,
+                    "vwap": 103.2,
+                    "transactions": 10,
+                },
+            ]
+        )
+
+        row = aggregate_to_weekly(bars).row(0, named=True)
+
+        assert row["date"] == datetime.date(2024, 1, 11)
+
+    def test_partial_week_included(self):
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 8),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.5,
+                    "volume": 1000.0,
+                    "vwap": 100.2,
+                    "transactions": 10,
+                },
+                {
+                    "date": datetime.date(2024, 1, 9),
+                    "ticker": "AAPL",
+                    "open": 101.0,
+                    "high": 102.0,
+                    "low": 100.0,
+                    "close": 101.5,
+                    "volume": 1100.0,
+                    "vwap": 101.2,
+                    "transactions": 11,
+                },
+                {
+                    "date": datetime.date(2024, 1, 10),
+                    "ticker": "AAPL",
+                    "open": 102.0,
+                    "high": 103.0,
+                    "low": 101.0,
+                    "close": 102.5,
+                    "volume": 1200.0,
+                    "vwap": 102.2,
+                    "transactions": 12,
+                },
+            ]
+        )
+
+        row = aggregate_to_weekly(bars).row(0, named=True)
+
+        assert row["date"] == datetime.date(2024, 1, 10)
+        assert row["volume"] == pytest.approx(3300.0)
+
+    def test_single_day_week(self):
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 8),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 105.0,
+                    "low": 99.0,
+                    "close": 104.0,
+                    "volume": 1000.0,
+                    "vwap": 103.0,
+                    "transactions": 10,
+                }
+            ]
+        )
+
+        row = aggregate_to_weekly(bars).row(0, named=True)
+
+        assert row["open"] == pytest.approx(100.0)
+        assert row["high"] == pytest.approx(105.0)
+        assert row["low"] == pytest.approx(99.0)
+        assert row["close"] == pytest.approx(104.0)
+        assert row["volume"] == pytest.approx(1000.0)
+        assert row["vwap"] == pytest.approx(103.0)
+        assert row["transactions"] == 10
+        assert row["date"] == datetime.date(2024, 1, 8)
+
+    def test_per_ticker_isolation(self):
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 8),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.5,
+                    "volume": 1000.0,
+                    "vwap": 100.2,
+                    "transactions": 10,
+                },
+                {
+                    "date": datetime.date(2024, 1, 9),
+                    "ticker": "AAPL",
+                    "open": 101.0,
+                    "high": 102.0,
+                    "low": 100.0,
+                    "close": 101.5,
+                    "volume": 1100.0,
+                    "vwap": 101.2,
+                    "transactions": 11,
+                },
+                {
+                    "date": datetime.date(2024, 1, 8),
+                    "ticker": "MSFT",
+                    "open": 200.0,
+                    "high": 203.0,
+                    "low": 199.0,
+                    "close": 202.5,
+                    "volume": 2000.0,
+                    "vwap": 201.2,
+                    "transactions": 20,
+                },
+                {
+                    "date": datetime.date(2024, 1, 9),
+                    "ticker": "MSFT",
+                    "open": 202.0,
+                    "high": 204.0,
+                    "low": 201.0,
+                    "close": 203.5,
+                    "volume": 2100.0,
+                    "vwap": 202.2,
+                    "transactions": 21,
+                },
+            ]
+        )
+
+        result = aggregate_to_weekly(bars)
+        aapl_row = result.filter(pl.col("ticker") == "AAPL").row(0, named=True)
+        msft_row = result.filter(pl.col("ticker") == "MSFT").row(0, named=True)
+
+        assert aapl_row["open"] == pytest.approx(100.0)
+        assert aapl_row["close"] == pytest.approx(101.5)
+        assert aapl_row["volume"] == pytest.approx(2100.0)
+        assert msft_row["open"] == pytest.approx(200.0)
+        assert msft_row["close"] == pytest.approx(203.5)
+        assert msft_row["volume"] == pytest.approx(4100.0)
+
+    def test_output_schema_matches_daily(self):
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 8),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.5,
+                    "volume": 1000.0,
+                    "vwap": 100.2,
+                    "transactions": 10,
+                },
+                {
+                    "date": datetime.date(2024, 1, 9),
+                    "ticker": "AAPL",
+                    "open": 101.0,
+                    "high": 102.0,
+                    "low": 100.0,
+                    "close": 101.5,
+                    "volume": 1100.0,
+                    "vwap": 101.2,
+                    "transactions": 11,
+                },
+            ]
+        )
+
+        result = aggregate_to_weekly(bars)
+
+        assert result.columns == list(DAILY_AGGS_SCHEMA.keys())
+        assert result.dtypes == list(DAILY_AGGS_SCHEMA.values())
+
+    def test_empty_input(self):
+        empty_bars = pl.DataFrame(schema=BARS_SCHEMA)
+
+        result = aggregate_to_weekly(empty_bars)
+
+        assert result.is_empty()
+        assert result.columns == list(DAILY_AGGS_SCHEMA.keys())
+        assert result.dtypes == list(DAILY_AGGS_SCHEMA.values())
 
 
 def test_adjust_splits_basic(
