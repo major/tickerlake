@@ -11,6 +11,7 @@ from tickerlake.extract import extract_daily_aggs, extract_splits, extract_ticke
 from tickerlake.load import (
     append_raw_db,
     compact_raw_db,
+    delete_raw_dates,
     get_db_info,
     get_existing_dates,
     read_raw_db,
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 _SPOT_CHECK_SAMPLE_SIZE = 5
 _SPOT_CHECK_TOLERANCE = 1e-3
+_BACKFILL_REFRESH_DAYS = 5
 
 
 def _verify_split_adjustment(
@@ -102,15 +104,29 @@ def _run_backfill(config: Config) -> None:
     raw_path = config.output_dir / "raw.duckdb"
     consumer_path = config.output_dir / "tickerlake.duckdb"
 
+    requested_dates = set(dates)
     existing_dates = get_existing_dates(raw_path)
-    missing_dates = [d for d in dates if d not in existing_dates]
+    cached_dates = existing_dates & requested_dates
+    refresh_dates = set(sorted(cached_dates)[-_BACKFILL_REFRESH_DAYS:])
+
+    if refresh_dates:
+        logger.info(
+            "Dropping %d cached trading days from raw DB for refresh (%s to %s).",
+            len(refresh_dates),
+            min(refresh_dates),
+            max(refresh_dates),
+        )
+        delete_raw_dates(raw_path, refresh_dates)
+        cached_dates -= refresh_dates
+
+    missing_dates = [d for d in dates if d not in cached_dates]
 
     logger.info(
         "Backfill: %s to %s (%d trading days, %d cached, %d to fetch)",
         config.start_date,
         config.end_date,
         len(dates),
-        len(existing_dates),
+        len(cached_dates),
         len(missing_dates),
     )
     client = MassiveClient(config)

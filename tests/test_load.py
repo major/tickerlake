@@ -1,5 +1,6 @@
 """Tests for tickerlake.load — DuckDB writer with schema validation."""
 
+import datetime
 from pathlib import Path
 
 import duckdb
@@ -8,6 +9,7 @@ import pytest
 
 from tickerlake.load import (
     append_raw_db,
+    delete_raw_dates,
     compact_raw_db,
     get_db_info,
     get_existing_dates,
@@ -58,8 +60,6 @@ def sample_metrics_df(sample_bars_df: pl.DataFrame) -> pl.DataFrame:
 @pytest.fixture
 def sample_hvcs_df() -> pl.DataFrame:
     """Create a sample HVC DataFrame with 2 realistic rows matching the 21-column schema."""
-    import datetime
-
     return pl.DataFrame(
         {
             "ticker": ["AAPL", "MSFT"],
@@ -118,9 +118,11 @@ def test_write_raw_db_creates_table(
     write_raw_db(sample_bars_df, db_path)
 
     con = duckdb.connect(str(db_path), read_only=True)
-    count = con.execute("SELECT COUNT(*) FROM raw_daily_bars").fetchone()[0]
+    row = con.execute("SELECT COUNT(*) FROM raw_daily_bars").fetchone()
     con.close()
 
+    assert row is not None
+    count = row[0]
     assert count == len(sample_bars_df)
 
 
@@ -176,9 +178,11 @@ def test_append_raw_db(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
     append_raw_db(sample_bars_df, db_path)
 
     con = duckdb.connect(str(db_path), read_only=True)
-    count = con.execute("SELECT COUNT(*) FROM raw_daily_bars").fetchone()[0]
+    row = con.execute("SELECT COUNT(*) FROM raw_daily_bars").fetchone()
     con.close()
 
+    assert row is not None
+    count = row[0]
     assert count == len(sample_bars_df) * 2
 
 
@@ -227,6 +231,29 @@ def test_get_existing_dates_missing_table(tmp_path: Path) -> None:
     result = get_existing_dates(db_path)
 
     assert result == set()
+
+
+def test_delete_raw_dates_removes_rows_for_matching_days(
+    tmp_path: Path, sample_bars_df: pl.DataFrame
+) -> None:
+    """delete_raw_dates() removes all rows for the requested trading dates."""
+    db_path = tmp_path / "raw.duckdb"
+    write_raw_db(sample_bars_df, db_path)
+    deleted_date = sample_bars_df["date"][0]
+
+    delete_raw_dates(db_path, {deleted_date})
+    result = read_raw_db(db_path)
+
+    assert deleted_date not in set(result["date"].to_list())
+
+
+def test_delete_raw_dates_ignores_missing_db(tmp_path: Path) -> None:
+    """delete_raw_dates() quietly returns when the raw DB file is absent."""
+    db_path = tmp_path / "missing.duckdb"
+
+    delete_raw_dates(db_path, {datetime.date(2024, 1, 2)})
+
+    assert not db_path.exists()
 
 
 def test_write_consumer_db_creates_tables(
@@ -340,9 +367,11 @@ def test_write_raw_db_idempotent(tmp_path: Path, sample_bars_df: pl.DataFrame) -
     write_raw_db(sample_bars_df, db_path)
 
     con = duckdb.connect(str(db_path), read_only=True)
-    count = con.execute("SELECT COUNT(*) FROM raw_daily_bars").fetchone()[0]
+    row = con.execute("SELECT COUNT(*) FROM raw_daily_bars").fetchone()
     con.close()
 
+    assert row is not None
+    count = row[0]
     # Should still be the original count, not doubled
     assert count == len(sample_bars_df)
 
@@ -467,9 +496,11 @@ def test_write_consumer_db_hvcs_row_count(
     )
 
     con = duckdb.connect(str(db_path), read_only=True)
-    count = con.execute("SELECT COUNT(*) FROM daily_hvcs").fetchone()[0]
+    row = con.execute("SELECT COUNT(*) FROM daily_hvcs").fetchone()
     con.close()
 
+    assert row is not None
+    count = row[0]
     assert count == len(sample_hvcs_df)
 
 
@@ -649,9 +680,11 @@ def test_write_splits_creates_table(
     write_splits(sample_splits_df, db_path)
 
     con = duckdb.connect(str(db_path), read_only=True)
-    count = con.execute("SELECT COUNT(*) FROM splits").fetchone()[0]
+    row = con.execute("SELECT COUNT(*) FROM splits").fetchone()
     con.close()
 
+    assert row is not None
+    count = row[0]
     assert count == len(sample_splits_df)
 
 

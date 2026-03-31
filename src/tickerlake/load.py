@@ -51,6 +51,25 @@ def append_raw_db(new_bars: pl.DataFrame, path: Path) -> None:
         con.close()
 
 
+def delete_raw_dates(path: Path, dates: set[datetime.date]) -> None:
+    """Delete raw_daily_bars rows for the provided trading dates."""
+    if not dates or not path.exists():
+        return
+
+    con = None
+    try:
+        con = duckdb.connect(str(path))
+        con.execute("DELETE FROM raw_daily_bars WHERE date IN ?", [sorted(dates)])
+        con.execute("CHECKPOINT")
+        con.close()
+    except duckdb.CatalogException:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+
 def read_raw_db(path: Path) -> pl.DataFrame:
     """Read raw_daily_bars table from DuckDB file, sorted by (ticker, date)."""
     with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:

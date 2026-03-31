@@ -186,6 +186,7 @@ def pipeline_mocks():
         aggregate_to_weekly=DEFAULT,
         compute_metrics=DEFAULT,
         detect_hvcs=DEFAULT,
+        delete_raw_dates=DEFAULT,
         write_raw_db=DEFAULT,
         append_raw_db=DEFAULT,
         read_raw_db=DEFAULT,
@@ -211,6 +212,7 @@ def _wire_defaults(
     mocks["compute_metrics"].return_value = sample_metrics
     if sample_hvcs is not None:
         mocks["detect_hvcs"].return_value = sample_hvcs
+    mocks["delete_raw_dates"].return_value = None
     mocks["get_existing_dates"].return_value = set()
     mocks["read_raw_db"].return_value = sample_bars
 
@@ -310,7 +312,7 @@ def test_backfill_no_trading_days(pipeline_mocks, tmp_path):
 def test_backfill_skips_cached_dates(
     pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
 ):
-    """Backfill only fetches dates not already in raw.duckdb."""
+    """Backfill refetches the latest cached day and any missing dates in range."""
     from tickerlake.pipeline import backfill
 
     _wire_defaults(
@@ -325,30 +327,81 @@ def test_backfill_skips_cached_dates(
     backfill(_make_config(tmp_path))
 
     call_args = pipeline_mocks["extract_daily_aggs"].call_args
-    assert call_args[0][1] == [datetime.date(2024, 1, 3)]
+    assert call_args[0][1] == [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)]
+    pipeline_mocks["delete_raw_dates"].assert_called_once_with(
+        tmp_path / "raw.duckdb", {datetime.date(2024, 1, 2)}
+    )
     pipeline_mocks["append_raw_db"].assert_called_once()
     pipeline_mocks["write_raw_db"].assert_not_called()
 
 
-def test_backfill_all_cached(
+def test_backfill_refetches_latest_five_cached_days(
     pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
 ):
-    """Backfill skips extraction entirely when all dates are cached."""
+    """Backfill drops and refetches the latest five cached trading days."""
     from tickerlake.pipeline import backfill
 
     _wire_defaults(
         pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
     )
-    pipeline_mocks["get_trading_days"].return_value = [datetime.date(2024, 1, 2)]
-    pipeline_mocks["get_existing_dates"].return_value = {datetime.date(2024, 1, 2)}
+    trading_days = [
+        datetime.date(2024, 1, 2),
+        datetime.date(2024, 1, 3),
+        datetime.date(2024, 1, 4),
+        datetime.date(2024, 1, 5),
+        datetime.date(2024, 1, 8),
+        datetime.date(2024, 1, 9),
+    ]
+    pipeline_mocks["get_trading_days"].return_value = trading_days
+    pipeline_mocks["get_existing_dates"].return_value = set(trading_days)
 
     backfill(_make_config(tmp_path))
 
-    pipeline_mocks["extract_daily_aggs"].assert_not_called()
+    pipeline_mocks["delete_raw_dates"].assert_called_once_with(
+        tmp_path / "raw.duckdb", set(trading_days[-5:])
+    )
+    pipeline_mocks["extract_daily_aggs"].assert_called_once()
+    assert pipeline_mocks["extract_daily_aggs"].call_args[0][1] == trading_days[-5:]
     pipeline_mocks["write_raw_db"].assert_not_called()
-    pipeline_mocks["append_raw_db"].assert_not_called()
+    pipeline_mocks["append_raw_db"].assert_called_once()
     pipeline_mocks["read_raw_db"].assert_called_once()
     pipeline_mocks["write_consumer_db"].assert_called_once()
+
+
+def test_backfill_cached_count_only_uses_requested_range(
+    pipeline_mocks,
+    tmp_path,
+    sample_bars,
+    sample_splits,
+    sample_tickers,
+    sample_metrics,
+    caplog,
+):
+    """Backfill logs cached counts using only trading days in the requested range."""
+    from tickerlake.pipeline import backfill
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    trading_days = [
+        datetime.date(2024, 1, 2),
+        datetime.date(2024, 1, 3),
+        datetime.date(2024, 1, 4),
+    ]
+    pipeline_mocks["get_trading_days"].return_value = trading_days
+    pipeline_mocks["get_existing_dates"].return_value = {
+        datetime.date(2023, 12, 29),
+        *trading_days,
+        datetime.date(2024, 2, 1),
+    }
+
+    with caplog.at_level("INFO"):
+        backfill(_make_config(tmp_path))
+
+    assert (
+        "Backfill: 2024-01-01 to 2024-01-31 (3 trading days, 0 cached, 3 to fetch)"
+        in caplog.text
+    )
 
 
 def test_backfill_no_cache(
