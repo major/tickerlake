@@ -22,6 +22,7 @@ from tickerlake.load import (
 from tickerlake.transform import (
     aggregate_to_weekly,
     adjust_splits,
+    compute_hvc_vwap_anchors,
     compute_metrics,
     detect_hvcs,
     filter_tickers,
@@ -163,6 +164,9 @@ def _run_backfill(config: Config) -> None:
     metrics = compute_metrics(bars)
     hvcs = detect_hvcs(bars, metrics)
     logger.info("Detected %d high-volume catalyst events.", len(hvcs))
+    logger.info("Computing HVC-anchored VWAPs...")
+    hvc_vwap_anchors = compute_hvc_vwap_anchors(bars, hvcs)
+    logger.info("Computed %d HVC VWAP anchor rows.", len(hvc_vwap_anchors))
     logger.info("Aggregating weekly bars...")
     weekly_bars = aggregate_to_weekly(bars)
     logger.info("Computing weekly metrics...")
@@ -177,6 +181,7 @@ def _run_backfill(config: Config) -> None:
         tickers,
         consumer_path,
         hvcs=hvcs,
+        hvc_vwap_anchors=hvc_vwap_anchors,
         weekly_bars=weekly_bars,
         weekly_metrics=weekly_metrics,
         weekly_hvcs=weekly_hvcs,
@@ -246,6 +251,9 @@ def update(config: Config) -> None:
     metrics = compute_metrics(all_bars)
     hvcs = detect_hvcs(all_bars, metrics)
     logger.info("Detected %d high-volume catalyst events.", len(hvcs))
+    logger.info("Computing HVC-anchored VWAPs...")
+    hvc_vwap_anchors = compute_hvc_vwap_anchors(all_bars, hvcs)
+    logger.info("Computed %d HVC VWAP anchor rows.", len(hvc_vwap_anchors))
     logger.info("Aggregating weekly bars...")
     weekly_bars = aggregate_to_weekly(all_bars)
     logger.info("Computing weekly metrics...")
@@ -261,6 +269,7 @@ def update(config: Config) -> None:
         tickers,
         consumer_path,
         hvcs=hvcs,
+        hvc_vwap_anchors=hvc_vwap_anchors,
         weekly_bars=weekly_bars,
         weekly_metrics=weekly_metrics,
         weekly_hvcs=weekly_hvcs,

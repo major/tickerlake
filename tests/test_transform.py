@@ -9,12 +9,14 @@ transform = importlib.import_module("tickerlake.transform")
 extract = importlib.import_module("tickerlake.extract")
 adjust_splits = transform.adjust_splits
 compute_metrics = transform.compute_metrics
+compute_hvc_vwap_anchors = transform.compute_hvc_vwap_anchors
 detect_hvcs = transform.detect_hvcs
 filter_tickers = transform.filter_tickers
 _compute_atr = transform._compute_atr
 _compute_adr_pct = transform._compute_adr_pct
 aggregate_to_weekly = transform.aggregate_to_weekly
 DAILY_AGGS_SCHEMA = extract.DAILY_AGGS_SCHEMA
+HVC_VWAP_SCHEMA = transform.HVC_VWAP_SCHEMA
 
 
 BARS_SCHEMA = {
@@ -1914,3 +1916,411 @@ def test_detect_hvcs_first_row_excluded():
     result = detect_hvcs(bars_first_5x, metrics)
     first_row_in_result = result.filter(pl.col("date") == first_date)
     assert len(first_row_in_result) == 0
+
+
+def _make_minimal_hvcs(
+    anchors: list[tuple[str, datetime.date, float]],
+) -> pl.DataFrame:
+    """Build a minimal HVCs DataFrame with only the columns compute_hvc_vwap_anchors needs.
+
+    Each tuple is (ticker, date, volume_sma_20). Other HVC_SCHEMA columns are
+    omitted since compute_hvc_vwap_anchors only reads ticker, date, and
+    volume_sma_20.
+    """
+    return pl.DataFrame(
+        {
+            "ticker": [a[0] for a in anchors],
+            "date": [a[1] for a in anchors],
+            "volume_sma_20": [a[2] for a in anchors],
+        }
+    ).with_columns(
+        pl.col("ticker").cast(pl.Utf8),
+        pl.col("date").cast(pl.Date),
+        pl.col("volume_sma_20").cast(pl.Float32),
+    )
+
+
+class TestComputeHvcVwapAnchors:
+    """Tests for compute_hvc_vwap_anchors: anchored VWAP from HVC events."""
+
+    def test_basic_single_anchor(self):
+        """Single HVC anchor produces VWAP rows from anchor date through end of bars."""
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 1),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 103.0,
+                    "low": 97.0,
+                    "close": 100.0,
+                    "volume": 2_000_000.0,
+                    "vwap": 100.0,
+                    "transactions": 100,
+                },
+                {
+                    "date": datetime.date(2024, 1, 2),
+                    "ticker": "AAPL",
+                    "open": 103.0,
+                    "high": 106.0,
+                    "low": 100.0,
+                    "close": 103.0,
+                    "volume": 1_000_000.0,
+                    "vwap": 103.0,
+                    "transactions": 100,
+                },
+                {
+                    "date": datetime.date(2024, 1, 3),
+                    "ticker": "AAPL",
+                    "open": 106.0,
+                    "high": 109.0,
+                    "low": 103.0,
+                    "close": 106.0,
+                    "volume": 3_000_000.0,
+                    "vwap": 106.0,
+                    "transactions": 100,
+                },
+            ]
+        )
+        hvcs = _make_minimal_hvcs([("AAPL", datetime.date(2024, 1, 1), 1_500_000.0)])
+
+        result = compute_hvc_vwap_anchors(bars, hvcs)
+
+        assert len(result) == 3
+        assert result["anchor_date"].unique().to_list() == [datetime.date(2024, 1, 1)]
+
+    def test_vwap_math(self):
+        """Verify exact VWAP calculation: cumsum(typical_price * volume) / cumsum(volume).
+
+        Day 0 (anchor): tp=(103+97+100)/3=100.0, vol=4M
+            VWAP = (100*4M) / 4M = 100.0
+        Day 1: tp=(106+100+103)/3=103.0, vol=1M
+            VWAP = (100*4M + 103*1M) / (4M+1M) = 503M/5M = 100.6
+        Day 2: tp=(109+103+106)/3=106.0, vol=1M
+            VWAP = (503M + 106*1M) / (5M+1M) = 609M/6M = 101.5
+        """
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 1),
+                    "ticker": "AAPL",
+                    "open": 98.0,
+                    "high": 103.0,
+                    "low": 97.0,
+                    "close": 100.0,
+                    "volume": 4_000_000.0,
+                    "vwap": 100.0,
+                    "transactions": 100,
+                },
+                {
+                    "date": datetime.date(2024, 1, 2),
+                    "ticker": "AAPL",
+                    "open": 101.0,
+                    "high": 106.0,
+                    "low": 100.0,
+                    "close": 103.0,
+                    "volume": 1_000_000.0,
+                    "vwap": 103.0,
+                    "transactions": 100,
+                },
+                {
+                    "date": datetime.date(2024, 1, 3),
+                    "ticker": "AAPL",
+                    "open": 104.0,
+                    "high": 109.0,
+                    "low": 103.0,
+                    "close": 106.0,
+                    "volume": 1_000_000.0,
+                    "vwap": 106.0,
+                    "transactions": 100,
+                },
+            ]
+        )
+        hvcs = _make_minimal_hvcs([("AAPL", datetime.date(2024, 1, 1), 1_500_000.0)])
+
+        result = compute_hvc_vwap_anchors(bars, hvcs)
+        vwaps = result.sort("date")["vwap_value"].to_list()
+
+        assert vwaps[0] == pytest.approx(100.0, abs=1e-2)
+        assert vwaps[1] == pytest.approx(100.6, abs=1e-2)
+        assert vwaps[2] == pytest.approx(101.5, abs=1e-2)
+
+    def test_multiple_anchors_independent(self):
+        """Two HVC anchors in the same ticker produce independent VWAP lines.
+
+        Anchor 1 at day 0 runs through all 3 bars.
+        Anchor 2 at day 1 runs through days 1-2 only.
+        Each anchor's VWAP resets independently.
+        """
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 1),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 103.0,
+                    "low": 97.0,
+                    "close": 100.0,
+                    "volume": 2_000_000.0,
+                    "vwap": 100.0,
+                    "transactions": 100,
+                },
+                {
+                    "date": datetime.date(2024, 1, 2),
+                    "ticker": "AAPL",
+                    "open": 103.0,
+                    "high": 106.0,
+                    "low": 100.0,
+                    "close": 103.0,
+                    "volume": 1_500_000.0,
+                    "vwap": 103.0,
+                    "transactions": 100,
+                },
+                {
+                    "date": datetime.date(2024, 1, 3),
+                    "ticker": "AAPL",
+                    "open": 106.0,
+                    "high": 109.0,
+                    "low": 103.0,
+                    "close": 106.0,
+                    "volume": 1_000_000.0,
+                    "vwap": 106.0,
+                    "transactions": 100,
+                },
+            ]
+        )
+        hvcs = _make_minimal_hvcs(
+            [
+                ("AAPL", datetime.date(2024, 1, 1), 1_500_000.0),
+                ("AAPL", datetime.date(2024, 1, 2), 1_500_000.0),
+            ]
+        )
+
+        result = compute_hvc_vwap_anchors(bars, hvcs)
+
+        anchor_1 = result.filter(
+            pl.col("anchor_date") == datetime.date(2024, 1, 1)
+        ).sort("date")
+        anchor_2 = result.filter(
+            pl.col("anchor_date") == datetime.date(2024, 1, 2)
+        ).sort("date")
+
+        # Anchor 1 spans all 3 days
+        assert len(anchor_1) == 3
+        # Anchor 2 spans days 1-2 only
+        assert len(anchor_2) == 2
+
+        # Anchor 2's first VWAP = typical_price of day 1 only
+        # tp = (106+100+103)/3 = 103.0
+        assert anchor_2["vwap_value"][0] == pytest.approx(103.0, abs=1e-2)
+
+    def test_volume_floor_excludes(self):
+        """HVCs with volume_sma_20 below the floor are excluded from VWAP computation."""
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 1),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 103.0,
+                    "low": 97.0,
+                    "close": 100.0,
+                    "volume": 500_000.0,
+                    "vwap": 100.0,
+                    "transactions": 100,
+                },
+            ]
+        )
+        hvcs = _make_minimal_hvcs([("AAPL", datetime.date(2024, 1, 1), 500_000.0)])
+
+        result = compute_hvc_vwap_anchors(bars, hvcs)
+
+        assert result.is_empty()
+
+    def test_volume_floor_boundary(self):
+        """HVCs with volume_sma_20 exactly at the floor are included."""
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 1),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 103.0,
+                    "low": 97.0,
+                    "close": 100.0,
+                    "volume": 1_000_000.0,
+                    "vwap": 100.0,
+                    "transactions": 100,
+                },
+            ]
+        )
+        hvcs = _make_minimal_hvcs([("AAPL", datetime.date(2024, 1, 1), 1_000_000.0)])
+
+        result = compute_hvc_vwap_anchors(bars, hvcs)
+
+        assert len(result) == 1
+
+    def test_per_ticker_isolation(self):
+        """VWAPs are computed independently per ticker with no cross-contamination."""
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 1),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 103.0,
+                    "low": 97.0,
+                    "close": 100.0,
+                    "volume": 2_000_000.0,
+                    "vwap": 100.0,
+                    "transactions": 100,
+                },
+                {
+                    "date": datetime.date(2024, 1, 1),
+                    "ticker": "MSFT",
+                    "open": 200.0,
+                    "high": 206.0,
+                    "low": 194.0,
+                    "close": 200.0,
+                    "volume": 3_000_000.0,
+                    "vwap": 200.0,
+                    "transactions": 100,
+                },
+            ]
+        )
+        hvcs = _make_minimal_hvcs(
+            [
+                ("AAPL", datetime.date(2024, 1, 1), 1_500_000.0),
+                ("MSFT", datetime.date(2024, 1, 1), 2_000_000.0),
+            ]
+        )
+
+        result = compute_hvc_vwap_anchors(bars, hvcs)
+
+        aapl_vwap = result.filter(pl.col("ticker") == "AAPL")["vwap_value"][0]
+        msft_vwap = result.filter(pl.col("ticker") == "MSFT")["vwap_value"][0]
+
+        # AAPL tp = (103+97+100)/3 = 100.0, MSFT tp = (206+194+200)/3 = 200.0
+        assert aapl_vwap == pytest.approx(100.0, abs=1e-2)
+        assert msft_vwap == pytest.approx(200.0, abs=1e-2)
+
+    def test_empty_hvcs(self):
+        """Empty HVCs DataFrame returns empty result with correct schema."""
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 1),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 103.0,
+                    "low": 97.0,
+                    "close": 100.0,
+                    "volume": 1_000_000.0,
+                    "vwap": 100.0,
+                    "transactions": 100,
+                },
+            ]
+        )
+        empty_hvcs = _make_minimal_hvcs([])
+
+        result = compute_hvc_vwap_anchors(bars, empty_hvcs)
+
+        assert result.is_empty()
+        assert result.columns == list(HVC_VWAP_SCHEMA.keys())
+
+    def test_output_schema(self):
+        """Output columns and types match HVC_VWAP_SCHEMA exactly."""
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 1),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 103.0,
+                    "low": 97.0,
+                    "close": 100.0,
+                    "volume": 2_000_000.0,
+                    "vwap": 100.0,
+                    "transactions": 100,
+                },
+            ]
+        )
+        hvcs = _make_minimal_hvcs([("AAPL", datetime.date(2024, 1, 1), 1_500_000.0)])
+
+        result = compute_hvc_vwap_anchors(bars, hvcs)
+
+        assert result.columns == list(HVC_VWAP_SCHEMA.keys())
+        assert result.dtypes == list(HVC_VWAP_SCHEMA.values())
+
+    def test_custom_volume_floor(self):
+        """Custom volume_floor parameter overrides the 1M default."""
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 1),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 103.0,
+                    "low": 97.0,
+                    "close": 100.0,
+                    "volume": 500_000.0,
+                    "vwap": 100.0,
+                    "transactions": 100,
+                },
+            ]
+        )
+        hvcs = _make_minimal_hvcs([("AAPL", datetime.date(2024, 1, 1), 500_000.0)])
+
+        # Default floor (1M) excludes this HVC
+        assert compute_hvc_vwap_anchors(bars, hvcs).is_empty()
+        # Lower floor (400K) includes it
+        assert len(compute_hvc_vwap_anchors(bars, hvcs, volume_floor=400_000.0)) == 1
+
+    def test_anchor_only_includes_forward_bars(self):
+        """Anchored VWAP only includes bars on or after the anchor date, not before."""
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 1),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 103.0,
+                    "low": 97.0,
+                    "close": 100.0,
+                    "volume": 1_500_000.0,
+                    "vwap": 100.0,
+                    "transactions": 100,
+                },
+                {
+                    "date": datetime.date(2024, 1, 2),
+                    "ticker": "AAPL",
+                    "open": 110.0,
+                    "high": 115.0,
+                    "low": 105.0,
+                    "close": 110.0,
+                    "volume": 2_000_000.0,
+                    "vwap": 110.0,
+                    "transactions": 100,
+                },
+                {
+                    "date": datetime.date(2024, 1, 3),
+                    "ticker": "AAPL",
+                    "open": 120.0,
+                    "high": 125.0,
+                    "low": 115.0,
+                    "close": 120.0,
+                    "volume": 1_000_000.0,
+                    "vwap": 120.0,
+                    "transactions": 100,
+                },
+            ]
+        )
+        # Anchor at day 1 (Jan 2), so day 0 (Jan 1) should be excluded
+        hvcs = _make_minimal_hvcs([("AAPL", datetime.date(2024, 1, 2), 1_500_000.0)])
+
+        result = compute_hvc_vwap_anchors(bars, hvcs)
+
+        assert len(result) == 2
+        assert datetime.date(2024, 1, 1) not in result["date"].to_list()
+        # First VWAP = typical_price of day 1 only: (115+105+110)/3 = 110.0
+        assert result.sort("date")["vwap_value"][0] == pytest.approx(110.0, abs=1e-2)

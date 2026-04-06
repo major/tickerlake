@@ -479,3 +479,86 @@ def detect_hvcs(bars: pl.DataFrame, metrics: pl.DataFrame) -> pl.DataFrame:
             "rs",
         ]
     )
+
+
+HVC_VWAP_SCHEMA = {
+    "ticker": pl.Utf8,
+    "date": pl.Date,
+    "anchor_date": pl.Date,
+    "vwap_value": pl.Float32,
+}
+
+
+def compute_hvc_vwap_anchors(
+    bars: pl.DataFrame,
+    hvcs: pl.DataFrame,
+    volume_floor: float = 1_000_000.0,
+) -> pl.DataFrame:
+    """Compute anchored VWAP lines from qualifying High Volume Catalyst events.
+
+    For each HVC where volume_sma_20 >= volume_floor, computes a running VWAP
+    (cumulative typical_price * volume / cumulative volume) from the HVC date
+    forward through all subsequent bars. The volume floor ensures VWAPs are only
+    anchored to HVCs in liquid stocks where the volume signal is meaningful.
+
+    Returns a normalized DataFrame with one row per (ticker, date, anchor_date)
+    combination. Multiple rows per (ticker, date) indicate multiple active VWAP
+    lines from different HVC anchors.
+
+    Typical price = (high + low + close) / 3. Float64 intermediate computation
+    with Float32 storage. Zero-volume bars produce null vwap_value via
+    fill_nan(None).
+
+    Returns an empty DataFrame with correct schema when no qualifying HVCs exist.
+    """
+    if hvcs.is_empty():
+        return pl.DataFrame(schema=HVC_VWAP_SCHEMA)
+
+    anchors = hvcs.filter(pl.col("volume_sma_20") >= volume_floor).select(
+        [pl.col("ticker"), pl.col("date").alias("anchor_date")]
+    )
+
+    if anchors.is_empty():
+        return pl.DataFrame(schema=HVC_VWAP_SCHEMA)
+
+    # Join each anchor with all bars for the same ticker at or after the anchor
+    # date, then compute cumulative VWAP per anchor group.
+    expanded = (
+        anchors.join(
+            bars.select(["ticker", "date", "high", "low", "close", "volume"]),
+            on="ticker",
+            how="inner",
+        )
+        .filter(pl.col("date") >= pl.col("anchor_date"))
+        .sort(["ticker", "anchor_date", "date"])
+    )
+
+    if expanded.is_empty():
+        return pl.DataFrame(schema=HVC_VWAP_SCHEMA)
+
+    typical_price = (
+        pl.col("high").cast(pl.Float64)
+        + pl.col("low").cast(pl.Float64)
+        + pl.col("close").cast(pl.Float64)
+    ) / 3
+
+    return (
+        expanded.with_columns(
+            (typical_price * pl.col("volume").cast(pl.Float64)).alias("_pv"),
+        )
+        .with_columns(
+            pl.col("_pv").cum_sum().over(["ticker", "anchor_date"]).alias("_cum_pv"),
+            pl.col("volume")
+            .cast(pl.Float64)
+            .cum_sum()
+            .over(["ticker", "anchor_date"])
+            .alias("_cum_vol"),
+        )
+        .with_columns(
+            (pl.col("_cum_pv") / pl.col("_cum_vol"))
+            .fill_nan(None)
+            .cast(pl.Float32)
+            .alias("vwap_value"),
+        )
+        .select(list(HVC_VWAP_SCHEMA.keys()))
+    )

@@ -1,12 +1,13 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-03-16
-**Commit:** 5f55e22
+**Generated:** 2026-04-06
 **Branch:** main
+
+> **Maintenance note:** Keep this file updated when adding new tables, transforms, schemas, or pipeline stages.
 
 ## OVERVIEW
 
-US equity market ETL pipeline. Pulls OHLCV bars, splits, and ticker metadata from Massive API (Polygon.io-compatible), adjusts for splits, computes technical indicators (SMA-50/200), and stores in DuckDB. Python 3.14 + Polars + DuckDB.
+US equity market ETL pipeline. Pulls OHLCV bars, splits, and ticker metadata from Massive API (Polygon.io-compatible), adjusts for splits, computes technical indicators (SMA-50/200, ATR, RS, VARS), detects High Volume Catalyst (HVC) events, computes HVC-anchored VWAPs, and stores in DuckDB. Python 3.14 + Polars + DuckDB.
 
 ## STRUCTURE
 
@@ -18,7 +19,7 @@ tickerlake/
 │   ├── client.py       # Thin wrapper around massive.RESTClient
 │   ├── calendar.py     # NYSE trading day calendar via exchange_calendars
 │   ├── extract.py      # API objects -> polars DataFrames (schema-driven)
-│   ├── transform.py    # Split adjustment, ticker filtering, SMA metrics
+│   ├── transform.py    # Split adjustment, ticker filtering, SMA metrics, HVC detection, HVC-anchored VWAPs
 │   ├── load.py         # DuckDB I/O via temporary parquet intermediaries
 │   └── pipeline.py     # Orchestrates E->T->L for backfill/update/info
 ├── tests/              # 1:1 test files per module + conftest fixtures
@@ -51,7 +52,7 @@ tickerlake/
 - **Float32 for prices** -- saves space, Float64 only for adjustment factors
 - **Dataclasses over Pydantic** -- `Config` uses `@dataclass` with `__post_init__` validation
 - **`pathlib.Path` everywhere** -- never raw strings for file paths
-- **Print for user feedback** -- no logging framework, plain `print()` statements
+- **Logging via `logging` module** -- `logger = logging.getLogger(__name__)` in pipeline.py
 - **Temp parquet for DuckDB I/O** -- write polars -> parquet -> DuckDB SQL, cleanup in `finally`
 - **Functional ETL** -- pure functions, no base classes or inheritance
 - **Test fixtures** -- pytest fixtures (not helper functions) for reusable test data
@@ -82,6 +83,9 @@ uv run ty check src/                             # Type check
 
 - **MASSIVE_API_KEY** env var is required -- `Config.__post_init__` raises `ValueError` if missing
 - **Two DuckDB files**: `raw.duckdb` (raw bars) and `tickerlake.duckdb` (adjusted bars + metrics + tickers)
+- **Consumer DB tables**: `daily_bars`, `daily_metrics`, `tickers`, `daily_hvcs`, `hvc_vwap_anchors`, `weekly_bars`, `weekly_metrics`, `weekly_hvcs`
+- **HVC detection**: volume >= 3x volume_sma_20, close >= $5.00, with warmup guards
+- **HVC-anchored VWAPs**: normalized table `(ticker, date, anchor_date, vwap_value)` computing forward VWAP from each qualifying HVC (volume_sma_20 >= 1M floor). One row per active VWAP per trading day.
 - **Update is incremental**: reads max date from `raw.duckdb`, fetches only newer trading days, appends, then rebuilds consumer DB from scratch
 - **No CI test step**: GitHub Actions only runs the data pipeline, not tests/linting
 - **Downstream notifications**: daily workflow can trigger `repository_dispatch` to a downstream repo via `DOWNSTREAM_PAT` secret
