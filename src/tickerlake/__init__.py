@@ -26,6 +26,19 @@ def _parse_date(s: str) -> datetime.date:
         raise argparse.ArgumentTypeError(msg) from err
 
 
+def _parse_positive_int(s: str) -> int:
+    """Parse a positive integer, raising argparse.ArgumentTypeError on failure."""
+    try:
+        value = int(s)
+    except ValueError as err:
+        msg = f"Invalid positive integer: {s!r}."
+        raise argparse.ArgumentTypeError(msg) from err
+    if value < 1:
+        msg = "Value must be >= 1."
+        raise argparse.ArgumentTypeError(msg)
+    return value
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build and return the argument parser with all subcommands."""
     parser = argparse.ArgumentParser(
@@ -50,6 +63,24 @@ def _build_parser() -> argparse.ArgumentParser:
         "compact", help="Rebuild raw.duckdb to reclaim space"
     )
     compact_parser.add_argument("--output-dir", type=Path, metavar="DIR")
+
+    pivots_parser = subparsers.add_parser(
+        "pivots", help="Find confirmed pivots for one ticker"
+    )
+    pivots_parser.add_argument("ticker", help="Ticker symbol, e.g. AAPL")
+    pivots_parser.add_argument(
+        "--timeframe",
+        choices=["daily", "weekly", "monthly"],
+        default="weekly",
+        help="Bar timeframe for pivot detection (default: weekly)",
+    )
+    pivots_parser.add_argument(
+        "--k",
+        type=_parse_positive_int,
+        default=4,
+        help="Bars on each side required to confirm a pivot (default: 4)",
+    )
+    pivots_parser.add_argument("--output-dir", type=Path, metavar="DIR")
 
     return parser
 
@@ -79,10 +110,21 @@ def main() -> None:
     config = _make_config(args)
 
     if args.command == "backfill":
-        pipeline.backfill(config)
+        try:
+            pipeline.backfill(config)
+        except ValueError as err:
+            parser.error(str(err))
     elif args.command == "update":
-        pipeline.update(config)
+        try:
+            pipeline.update(config)
+        except ValueError as err:
+            parser.error(str(err))
     elif args.command == "info":
         pipeline.info(config)
     elif args.command == "compact":
         pipeline.compact(config)
+    elif args.command == "pivots":
+        try:
+            pipeline.pivots(config, args.ticker, args.timeframe, args.k)
+        except ValueError as err:
+            parser.error(str(err))

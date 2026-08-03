@@ -14,6 +14,8 @@ _compute_atr = transform._compute_atr
 _compute_adr_pct = transform._compute_adr_pct
 aggregate_to_weekly = transform.aggregate_to_weekly
 aggregate_to_monthly = transform.aggregate_to_monthly
+bars_for_timeframe = transform.bars_for_timeframe
+find_pivots = transform.find_pivots
 DAILY_AGGS_SCHEMA = extract.DAILY_AGGS_SCHEMA
 
 
@@ -416,14 +418,174 @@ class TestAggregateToWeekly:
         assert result.columns == list(DAILY_AGGS_SCHEMA.keys())
         assert result.dtypes == list(DAILY_AGGS_SCHEMA.values())
 
-    def test_empty_input(self):
-        empty_bars = pl.DataFrame(schema=BARS_SCHEMA)
 
-        result = aggregate_to_weekly(empty_bars)
+def test_aggregate_to_monthly_values_and_last_trading_day():
+    bars = make_bars(
+        [
+            {
+                "date": datetime.date(2024, 1, 30),
+                "ticker": "AAPL",
+                "open": 100.0,
+                "high": 102.0,
+                "low": 99.0,
+                "close": 101.0,
+                "volume": 1000.0,
+                "vwap": 100.5,
+                "transactions": 10,
+            },
+            {
+                "date": datetime.date(2024, 1, 31),
+                "ticker": "AAPL",
+                "open": 101.0,
+                "high": 105.0,
+                "low": 98.0,
+                "close": 104.0,
+                "volume": 1100.0,
+                "vwap": 103.5,
+                "transactions": 11,
+            },
+            {
+                "date": datetime.date(2024, 2, 1),
+                "ticker": "AAPL",
+                "open": 104.0,
+                "high": 106.0,
+                "low": 103.0,
+                "close": 105.0,
+                "volume": 1200.0,
+                "vwap": 104.5,
+                "transactions": 12,
+            },
+        ]
+    )
 
-        assert result.is_empty()
-        assert result.columns == list(DAILY_AGGS_SCHEMA.keys())
-        assert result.dtypes == list(DAILY_AGGS_SCHEMA.values())
+    result = aggregate_to_monthly(bars)
+    january = result.row(0, named=True)
+    expected_vwap = (100.5 * 1000.0 + 103.5 * 1100.0) / 2100.0
+
+    assert result.columns == list(DAILY_AGGS_SCHEMA.keys())
+    assert january["date"] == datetime.date(2024, 1, 31)
+    assert january["open"] == pytest.approx(100.0)
+    assert january["high"] == pytest.approx(105.0)
+    assert january["low"] == pytest.approx(98.0)
+    assert january["close"] == pytest.approx(104.0)
+    assert january["volume"] == pytest.approx(2100.0)
+    assert january["vwap"] == pytest.approx(expected_vwap)
+    assert january["transactions"] == 21
+
+
+def test_bars_for_timeframe_daily_weekly_monthly():
+    bars = make_metric_bars(
+        {"AAPL": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]},
+        datetime.date(2024, 1, 29),
+    )
+
+    daily = bars_for_timeframe(bars.reverse(), "daily")
+    weekly = bars_for_timeframe(bars, "weekly")
+    monthly = bars_for_timeframe(bars, "monthly")
+
+    assert daily["date"].to_list() == sorted(bars["date"].to_list())
+    assert weekly["date"].to_list() == [datetime.date(2024, 2, 3)]
+    assert monthly["date"].to_list() == [
+        datetime.date(2024, 1, 31),
+        datetime.date(2024, 2, 3),
+    ]
+
+
+def test_bars_for_timeframe_invalid():
+    with pytest.raises(ValueError, match="timeframe"):
+        bars_for_timeframe(pl.DataFrame(schema=BARS_SCHEMA), "yearly")
+
+
+def test_find_pivots_high_low_plateau_and_confirmation():
+    bars = make_ohlc_bars(
+        {
+            "AAPL": [
+                (10.0, 10.0, 5.0, 10.0),
+                (11.0, 12.0, 4.0, 11.0),
+                (12.0, 15.0, 6.0, 12.0),
+                (12.0, 15.0, 7.0, 12.0),
+                (11.0, 11.0, 3.0, 11.0),
+                (10.0, 10.0, 4.0, 10.0),
+                (9.0, 9.0, 5.0, 9.0),
+            ]
+        }
+    )
+
+    result = find_pivots(bars, k=1)
+
+    assert result.to_dicts() == [
+        {
+            "date": datetime.date(2024, 1, 2),
+            "ticker": "AAPL",
+            "pivot_type": "low",
+            "price": 4.0,
+            "confirmed_at": datetime.date(2024, 1, 3),
+        },
+        {
+            "date": datetime.date(2024, 1, 3),
+            "ticker": "AAPL",
+            "pivot_type": "high",
+            "price": 15.0,
+            "confirmed_at": datetime.date(2024, 1, 4),
+        },
+        {
+            "date": datetime.date(2024, 1, 5),
+            "ticker": "AAPL",
+            "pivot_type": "low",
+            "price": 3.0,
+            "confirmed_at": datetime.date(2024, 1, 6),
+        },
+    ]
+
+
+def test_find_pivots_edges_remain_unknown():
+    bars = make_ohlc_bars(
+        {
+            "AAPL": [
+                (1.0, 100.0, 0.0, 1.0),
+                (1.0, 1.0, 1.0, 1.0),
+                (1.0, 99.0, -1.0, 1.0),
+            ]
+        }
+    )
+
+    result = find_pivots(bars, k=1)
+
+    assert result.is_empty()
+
+
+def test_find_pivots_k2_first_and_last_two_bars_never_emitted():
+    bars = make_ohlc_bars(
+        {
+            "AAPL": [
+                (1.0, 100.0, 0.0, 1.0),
+                (1.0, 9.0, 1.0, 1.0),
+                (1.0, 5.0, 5.0, 1.0),
+                (1.0, 20.0, 2.0, 1.0),
+                (1.0, 6.0, 6.0, 1.0),
+                (1.0, 8.0, -1.0, 1.0),
+                (1.0, 101.0, -2.0, 1.0),
+            ]
+        }
+    )
+
+    result = find_pivots(bars, k=2)
+
+    assert result["date"].to_list() == [datetime.date(2024, 1, 4)]
+    assert result["confirmed_at"].null_count() == 0
+
+
+def test_find_pivots_invalid_k():
+    with pytest.raises(ValueError, match="k"):
+        find_pivots(pl.DataFrame(schema=BARS_SCHEMA), k=0)
+
+
+def test_find_pivots_empty_input():
+    result = find_pivots(pl.DataFrame(schema=BARS_SCHEMA), k=2)
+
+    assert result.is_empty()
+    assert result.columns == ["date", "ticker", "pivot_type", "price", "confirmed_at"]
+    assert result.dtypes == [pl.Date, pl.Utf8, pl.Utf8, pl.Float32, pl.Date]
 
 
 class TestAggregateToMonthly:

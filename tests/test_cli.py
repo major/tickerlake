@@ -192,6 +192,89 @@ class TestCompactSubcommand:
             assert isinstance(config, Config)
             assert config.output_dir == tmp_path
 
+
+class TestPivotsSubcommand:
+    """Test pivots subcommand and its options."""
+
+    def test_pivots_subcommand_calls_pipeline(self, monkeypatch, tmp_path):
+        """Verify pivots subcommand invokes pipeline.pivots."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.pivots") as mock_pivots:
+            monkeypatch.setattr(
+                "sys.argv",
+                [
+                    "tickerlake",
+                    "pivots",
+                    "aapl",
+                    "--timeframe",
+                    "monthly",
+                    "--k",
+                    "3",
+                    "--output-dir",
+                    str(tmp_path),
+                ],
+            )
+            main()
+            mock_pivots.assert_called_once()
+            config, ticker, timeframe, k = mock_pivots.call_args[0]
+            assert isinstance(config, Config)
+            assert config.output_dir == tmp_path
+            assert ticker == "aapl"
+            assert timeframe == "monthly"
+            assert k == 3
+
+    def test_pivots_defaults_to_weekly_k4(self, monkeypatch):
+        """Verify pivots defaults to weekly timeframe and k=4."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.pivots") as mock_pivots:
+            monkeypatch.setattr("sys.argv", ["tickerlake", "pivots", "AAPL"])
+            main()
+            _, _, timeframe, k = mock_pivots.call_args[0]
+            assert timeframe == "weekly"
+            assert k == 4
+
+    def test_pivots_without_api_key_dispatches(self, monkeypatch):
+        """Verify read-only pivots command does not require MASSIVE_API_KEY."""
+        monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+        with patch("tickerlake.pipeline.pivots") as mock_pivots:
+            monkeypatch.setattr("sys.argv", ["tickerlake", "pivots", "AAPL"])
+            main()
+
+        mock_pivots.assert_called_once()
+        config = mock_pivots.call_args[0][0]
+        assert config.api_key == ""
+
+    def test_pivots_invalid_timeframe(self, monkeypatch):
+        """Verify invalid timeframe exits with error."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        monkeypatch.setattr(
+            "sys.argv", ["tickerlake", "pivots", "AAPL", "--timeframe", "yearly"]
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code != 0
+
+    def test_pivots_invalid_k_parse_failure(self, monkeypatch):
+        """Verify --k must be a positive integer."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        monkeypatch.setattr("sys.argv", ["tickerlake", "pivots", "AAPL", "--k", "0"])
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code != 0
+
+    def test_pivots_value_error_becomes_cli_error(self, monkeypatch, capsys):
+        """Verify pivot lookup ValueError exits cleanly without traceback."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.pivots", side_effect=ValueError("missing db")):
+            monkeypatch.setattr("sys.argv", ["tickerlake", "pivots", "AAPL"])
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        captured = capsys.readouterr()
+        assert exc_info.value.code != 0
+        assert "missing db" in captured.err
+        assert "Traceback" not in captured.err
+
     def test_compact_custom_output_dir(self, monkeypatch, tmp_path):
         """Verify --output-dir option sets config.output_dir for compact."""
         monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
@@ -246,3 +329,29 @@ class TestConfigDefaults:
             main()
             config = mock_info.call_args[0][0]
             assert isinstance(config, Config)
+
+    def test_backfill_without_api_key_exits_cleanly(self, monkeypatch, capsys):
+        """Verify Massive commands require MASSIVE_API_KEY at dispatch."""
+        monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+        monkeypatch.setattr("sys.argv", ["tickerlake", "backfill"])
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        captured = capsys.readouterr()
+        assert exc_info.value.code != 0
+        assert "MASSIVE_API_KEY environment variable is required" in captured.err
+        assert "Traceback" not in captured.err
+
+    def test_update_without_api_key_exits_cleanly(self, monkeypatch, capsys):
+        """Verify update requires MASSIVE_API_KEY at dispatch."""
+        monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+        monkeypatch.setattr("sys.argv", ["tickerlake", "update"])
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        captured = capsys.readouterr()
+        assert exc_info.value.code != 0
+        assert "MASSIVE_API_KEY environment variable is required" in captured.err
+        assert "Traceback" not in captured.err

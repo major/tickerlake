@@ -5,8 +5,6 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from tickerlake.config import Config
 
 
@@ -19,15 +17,12 @@ class TestApiKey:
             config = Config()
             assert config.api_key == "test-key-123"
 
-    def test_missing_api_key_raises(self) -> None:
-        """Config() without env var raises ValueError with clear message."""
-        with (
-            patch.dict(os.environ, {}, clear=True),
-            pytest.raises(
-                ValueError, match="MASSIVE_API_KEY environment variable is required"
-            ),
-        ):
-            Config()
+    def test_missing_api_key_allowed(self) -> None:
+        """Config() without env var is valid for read-only commands."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = Config(output_dir=Path("./relative/path"))
+        assert config.api_key == ""
+        assert config.output_dir == Path("./relative/path").resolve()
 
 
 class TestDates:

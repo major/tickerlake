@@ -191,6 +191,38 @@ def read_splits(path: Path) -> pl.DataFrame:
         tmp.unlink(missing_ok=True)
 
 
+def read_adjusted_daily_bars_for_ticker(path: Path, ticker: str) -> pl.DataFrame:
+    """Read split-adjusted daily_bars for one ticker from the consumer DB."""
+    if not path.exists():
+        msg = f"Consumer DB not found: {path}"
+        raise ValueError(msg)
+
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+        tmp = Path(f.name)
+    try:
+        con = duckdb.connect(str(path), read_only=True)
+        try:
+            con.execute(
+                "COPY ("
+                "SELECT * FROM daily_bars WHERE ticker = ? ORDER BY ticker, date"
+                f") TO '{tmp}' (FORMAT PARQUET)",
+                [ticker.upper()],
+            )
+        except duckdb.CatalogException as err:
+            msg = f"daily_bars table not found in consumer DB: {path}"
+            raise ValueError(msg) from err
+        finally:
+            con.close()
+
+        bars = pl.read_parquet(tmp)
+        if bars.is_empty():
+            msg = f"No adjusted daily bars found for ticker {ticker.upper()}"
+            raise ValueError(msg)
+        return bars
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def compact_raw_db(path: Path) -> None:
     """Rebuild raw.duckdb by exporting and reimporting to reclaim fragmented space."""
     bars = read_raw_db(path)

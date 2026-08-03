@@ -26,6 +26,101 @@ def _make_config(tmp_path: Path):
     )
 
 
+def test_find_ticker_pivots_uses_adjusted_daily_consumer_data(
+    tmp_path: Path, sample_bars: pl.DataFrame
+) -> None:
+    """find_ticker_pivots() reads adjusted daily bars then derives timeframe pivots."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    timeframe_bars = sample_bars.filter(pl.col("ticker") == "AAPL")
+    expected = pl.DataFrame(
+        {
+            "date": [datetime.date(2024, 1, 2)],
+            "ticker": ["AAPL"],
+            "pivot_type": ["high"],
+            "price": [152.0],
+            "confirmed_at": [datetime.date(2024, 1, 9)],
+        }
+    )
+
+    with (
+        patch(
+            f"{_PIPELINE}.read_adjusted_daily_bars_for_ticker",
+            return_value=sample_bars,
+        ) as read_bars,
+        patch(
+            f"{_PIPELINE}.bars_for_timeframe", return_value=timeframe_bars
+        ) as bars_for_tf,
+        patch(f"{_PIPELINE}.find_pivots", return_value=expected) as find,
+        patch(f"{_PIPELINE}.write_consumer_db") as write_consumer,
+        patch(f"{_PIPELINE}.write_raw_db") as write_raw,
+        patch(f"{_PIPELINE}.write_splits") as write_splits_mock,
+    ):
+        result = pipeline.find_ticker_pivots(config, "AAPL", "weekly", 5)
+
+    read_bars.assert_called_once_with(config.output_dir / "tickerlake.duckdb", "AAPL")
+    bars_for_tf.assert_called_once_with(sample_bars, "weekly")
+    find.assert_called_once_with(timeframe_bars, k=5)
+    write_consumer.assert_not_called()
+    write_raw.assert_not_called()
+    write_splits_mock.assert_not_called()
+    assert result.equals(expected)
+
+
+def test_pivots_logs_empty_result(tmp_path: Path, caplog) -> None:
+    """pivots() logs a warning when no pivots are found."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    empty = pl.DataFrame(
+        schema={
+            "date": pl.Date,
+            "ticker": pl.Utf8,
+            "pivot_type": pl.Utf8,
+            "price": pl.Float32,
+            "confirmed_at": pl.Date,
+        }
+    )
+
+    with patch(f"{_PIPELINE}.find_ticker_pivots", return_value=empty):
+        pipeline.pivots(config, "AAPL", "daily", 3)
+
+    assert "No pivots found for AAPL" in caplog.text
+
+
+def test_find_ticker_pivots_invalid_k_does_not_read_db(tmp_path: Path) -> None:
+    """find_ticker_pivots() validates k before reading the consumer DB."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+
+    with (
+        patch(f"{_PIPELINE}.read_adjusted_daily_bars_for_ticker") as read_bars,
+        pytest.raises(ValueError, match="k must be >= 1"),
+    ):
+        pipeline.find_ticker_pivots(config, "AAPL", "weekly", 0)
+
+    read_bars.assert_not_called()
+
+
+def test_find_ticker_pivots_invalid_timeframe_does_not_read_db(
+    tmp_path: Path,
+) -> None:
+    """find_ticker_pivots() validates timeframe before reading the consumer DB."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+
+    with (
+        patch(f"{_PIPELINE}.read_adjusted_daily_bars_for_ticker") as read_bars,
+        pytest.raises(ValueError, match="timeframe must be one of"),
+    ):
+        pipeline.find_ticker_pivots(config, "AAPL", "yearly", 5)
+
+    read_bars.assert_not_called()
+
+
 @pytest.fixture
 def sample_bars():
     """Minimal bars DataFrame for pipeline tests."""

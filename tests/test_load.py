@@ -13,6 +13,7 @@ from tickerlake.load import (
     delete_raw_dates,
     get_db_info,
     get_existing_dates,
+    read_adjusted_daily_bars_for_ticker,
     read_raw_db,
     read_splits,
     write_consumer_db,
@@ -279,6 +280,54 @@ def test_consumer_query_pattern(
     con.close()
 
     assert len(result) > 0
+
+
+def test_read_adjusted_daily_bars_for_ticker(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+) -> None:
+    """read_adjusted_daily_bars_for_ticker() returns sorted rows for one ticker."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    write_consumer_db(sample_bars_df, sample_metrics_df, sample_tickers_df, db_path)
+
+    result = read_adjusted_daily_bars_for_ticker(db_path, "aapl")
+
+    assert isinstance(result, pl.DataFrame)
+    assert set(result["ticker"].to_list()) == {"AAPL"}
+    assert result["date"].to_list() == sorted(result["date"].to_list())
+
+
+def test_read_adjusted_daily_bars_missing_db(tmp_path: Path) -> None:
+    """read_adjusted_daily_bars_for_ticker() rejects a missing consumer DB."""
+    with pytest.raises(ValueError, match="Consumer DB not found"):
+        read_adjusted_daily_bars_for_ticker(tmp_path / "missing.duckdb", "AAPL")
+
+
+def test_read_adjusted_daily_bars_missing_table(tmp_path: Path) -> None:
+    """read_adjusted_daily_bars_for_ticker() rejects DBs without daily_bars."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    con = duckdb.connect(str(db_path))
+    con.execute("CREATE TABLE unrelated (x INT)")
+    con.close()
+
+    with pytest.raises(ValueError, match="daily_bars table not found"):
+        read_adjusted_daily_bars_for_ticker(db_path, "AAPL")
+
+
+def test_read_adjusted_daily_bars_missing_ticker(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+) -> None:
+    """read_adjusted_daily_bars_for_ticker() rejects tickers with no rows."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    write_consumer_db(sample_bars_df, sample_metrics_df, sample_tickers_df, db_path)
+
+    with pytest.raises(ValueError, match="No adjusted daily bars found"):
+        read_adjusted_daily_bars_for_ticker(db_path, "ZZZZ")
 
 
 def test_get_db_info(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
