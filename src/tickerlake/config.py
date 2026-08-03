@@ -11,7 +11,9 @@ class Config:
     """Configuration for tickerlake ETL pipeline.
 
     Attributes:
-        api_key: MASSIVE API key (from MASSIVE_API_KEY env var when available)
+        api_key: MASSIVE API key (loaded from MASSIVE_API_KEY env var when set;
+            may be empty for read-only commands. Massive-backed commands enforce
+            the requirement at their own boundary.)
         output_dir: Directory for output files (defaults to current working directory)
         start_date: Start date for data collection (defaults to 1 year ago)
         end_date: End date for data collection (defaults to today)
