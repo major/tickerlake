@@ -1,11 +1,13 @@
 """Thin wrapper around massive.RESTClient for the tickerlake pipeline."""
 
-import datetime
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from massive import RESTClient
 
-from tickerlake.config import Config
+if TYPE_CHECKING:
+    import datetime
+
+    from tickerlake.config import Config
 
 
 class MassiveClient:
@@ -18,7 +20,7 @@ class MassiveClient:
     def fetch_daily_aggs(self, date: datetime.date) -> list[Any]:
         """Fetch grouped daily aggregates for all tickers on a given date."""
         return cast(
-            list[Any],
+            "list[Any]",
             self._client.get_grouped_daily_aggs(
                 date=date,
                 adjusted=False,
@@ -27,7 +29,9 @@ class MassiveClient:
             ),
         )
 
-    def fetch_splits(self, start_date: datetime.date, end_date: datetime.date) -> list[Any]:
+    def fetch_splits(
+        self, start_date: datetime.date, end_date: datetime.date
+    ) -> list[Any]:
         """Fetch stock splits in the given date range."""
         return list(
             self._client.list_stocks_splits(

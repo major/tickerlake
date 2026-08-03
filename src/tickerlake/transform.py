@@ -3,6 +3,7 @@ import polars as pl
 from tickerlake.extract import DAILY_AGGS_SCHEMA
 
 PRICE_COLUMNS = ("open", "high", "low", "close", "vwap")
+_MIN_HVC_CLOSE_PRICE = 5.0
 
 
 def adjust_splits(bars: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
@@ -107,7 +108,10 @@ def _compute_adr_pct(bars: pl.DataFrame, period: int = 20) -> pl.DataFrame:
 
 
 def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
-    """Compute per-ticker technical metrics: SMA-50, SMA-200, ATR-14, ATR%, SMA50_ATR_Distance, RS, RS_SMA_20, VARS, VARS_SMA_20, volume_sma_20.
+    """Compute per-ticker technical metrics.
+
+    Computes: SMA-50, SMA-200, ATR-14, ATR%, SMA50_ATR_Distance, RS, RS_SMA_20,
+    VARS, VARS_SMA_20, volume_sma_20.
 
     RS measures cumulative return outperformance vs SPY over a 50-day rolling window:
     rolling_sum(stock_pct - spy_pct, 50). RS_SMA_20 is the 20-day rolling mean of RS.
@@ -117,7 +121,8 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
     where norm = daily_change / ATR14. VARS_SMA_20 is the 20-day rolling mean of VARS.
 
     ATR% (atr_pct) = ATR-14 / close price (ATR as fraction of closing price).
-    SMA50_ATR_Distance (sma50_atr_distance) = ((close - SMA-50) / SMA-50) / ATR% (ATR% multiple from 50-MA).
+    SMA50_ATR_Distance (sma50_atr_distance) = ((close - SMA-50) / SMA-50) / ATR%
+    (ATR% multiple from 50-MA).
 
     When SPY is absent, rs, rs_sma_20, vars, and vars_sma_20 are null for all tickers.
     ATR-14 is always computed regardless of SPY presence.
@@ -297,7 +302,7 @@ def aggregate_to_weekly(bars: pl.DataFrame) -> pl.DataFrame:
         )
     )
 
-    weekly = (
+    return (
         bars_with_week_end.group_by(["ticker", "week_end"])
         .agg(
             [
@@ -315,8 +320,6 @@ def aggregate_to_weekly(bars: pl.DataFrame) -> pl.DataFrame:
         .sort(["ticker", "date"])
         .select(list(DAILY_AGGS_SCHEMA.keys()))
     )
-
-    return weekly
 
 
 HVC_SCHEMA = {
@@ -448,7 +451,7 @@ def detect_hvcs(bars: pl.DataFrame, metrics: pl.DataFrame) -> pl.DataFrame:
 
     filtered = joined.filter(
         (pl.col("volume") >= 3.0 * pl.col("volume_sma_20"))
-        & (pl.col("close") >= 5.0)
+        & (pl.col("close") >= _MIN_HVC_CLOSE_PRICE)
         & pl.col("volume_sma_20").is_not_null()
         & pl.col("prev_close").is_not_null()
     )

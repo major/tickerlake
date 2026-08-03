@@ -15,14 +15,17 @@ class Config:
         output_dir: Directory for output files (defaults to current working directory)
         start_date: Start date for data collection (defaults to 1 year ago)
         end_date: End date for data collection (defaults to today)
-        ticker_types: List of ticker types to process (defaults to ["CS", "ETF", "ETV", "ETN", "ADRC"])
+        ticker_types: List of ticker types to process (defaults to
+            ["CS", "ETF", "ETV", "ETN", "ADRC"])
     """
 
     api_key: str = field(default="")
     output_dir: Path = field(default_factory=Path.cwd)
     start_date: datetime.date = field(
-        default_factory=lambda: datetime.datetime.now(tz=datetime.UTC).date().replace(
-            year=datetime.datetime.now(tz=datetime.UTC).date().year - 5
+        default_factory=lambda: (
+            datetime.datetime.now(tz=datetime.UTC)
+            .date()
+            .replace(year=datetime.datetime.now(tz=datetime.UTC).date().year - 5)
         )
     )
     end_date: datetime.date = field(
@@ -37,5 +40,6 @@ class Config:
         if not self.api_key:
             self.api_key = os.environ.get("MASSIVE_API_KEY", "")
         if not self.api_key:
-            raise ValueError("MASSIVE_API_KEY environment variable is required")
+            msg = "MASSIVE_API_KEY environment variable is required"
+            raise ValueError(msg)
         self.output_dir = Path(self.output_dir).resolve()

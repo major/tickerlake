@@ -2,6 +2,7 @@
 
 import datetime
 import logging
+from typing import TYPE_CHECKING
 
 import polars as pl
 from rich.progress import (
@@ -13,7 +14,9 @@ from rich.progress import (
 )
 
 from tickerlake import console
-from tickerlake.client import MassiveClient
+
+if TYPE_CHECKING:
+    from tickerlake.client import MassiveClient
 
 logger = logging.getLogger(__name__)
 

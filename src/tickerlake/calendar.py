@@ -36,9 +36,4 @@ def get_trading_days(
     # Current time as tz-aware for comparison with session_close (which is tz-aware UTC)
     now = pd.Timestamp.now(tz="UTC")
 
-    result = []
-    for session in sessions:
-        if cal.session_close(session) <= now:
-            result.append(session.date())
-
-    return result
+    return [session.date() for session in sessions if cal.session_close(session) <= now]

@@ -13,16 +13,17 @@ from rich.logging import RichHandler
 # partially-initialised package (circular import).
 console = Console(stderr=True)
 
-from tickerlake import pipeline
-from tickerlake.config import Config
+from tickerlake import pipeline  # noqa: E402
+from tickerlake.config import Config  # noqa: E402
 
 
 def _parse_date(s: str) -> datetime.date:
     """Parse ISO date string, raising argparse.ArgumentTypeError on failure."""
     try:
         return datetime.date.fromisoformat(s)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"Invalid date format: {s!r}. Use YYYY-MM-DD.")
+    except ValueError as err:
+        msg = f"Invalid date format: {s!r}. Use YYYY-MM-DD."
+        raise argparse.ArgumentTypeError(msg) from err
 
 
 def _build_parser() -> argparse.ArgumentParser:

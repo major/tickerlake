@@ -2,11 +2,14 @@
 
 import datetime
 import os
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import DEFAULT, patch
 
 import polars as pl
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _PIPELINE = "tickerlake.pipeline"
 
@@ -173,7 +176,7 @@ def sample_hvcs():
 
 @pytest.fixture
 def pipeline_mocks():
-    """Patch all pipeline dependencies via patch.multiple, yielding a name-keyed dict."""
+    """Patch all pipeline dependencies via patch.multiple, yielding a name-keyed dict."""  # noqa: E501
     with patch.multiple(
         _PIPELINE,
         get_trading_days=DEFAULT,
@@ -699,7 +702,7 @@ def test_verify_split_adjustment_skips_small_splits():
 
 
 def test_verify_split_adjustment_skips_extreme_splits():
-    """Spot check skips splits with factor < 0.02 (OTC noise, same-day offsetting splits)."""
+    """Spot check skips splits with factor < 0.02 (OTC noise, same-day offsetting splits)."""  # noqa: E501
     from tickerlake.pipeline import _verify_split_adjustment
 
     raw = pl.DataFrame(

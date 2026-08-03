@@ -1,13 +1,16 @@
 """Write polars DataFrames to DuckDB files with correct schema types."""
 
-import datetime
 import logging
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import duckdb
 import polars as pl
+
+if TYPE_CHECKING:
+    import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +40,8 @@ def write_raw_db(bars: pl.DataFrame, path: Path) -> None:
     with _tmp_parquet(bars) as tmp:
         con = duckdb.connect(str(path))
         con.execute(
-            f"CREATE OR REPLACE TABLE raw_daily_bars AS {_read_parquet_sql(tmp, 'ticker, date')}"
+            "CREATE OR REPLACE TABLE raw_daily_bars AS "
+            f"{_read_parquet_sql(tmp, 'ticker, date')}"
         )
         con.execute("CHECKPOINT")
         con.close()
@@ -80,7 +84,8 @@ def read_raw_db(path: Path) -> pl.DataFrame:
     try:
         con = duckdb.connect(str(path), read_only=True)
         con.execute(
-            f"COPY (SELECT * FROM raw_daily_bars ORDER BY ticker, date) TO '{tmp}' (FORMAT PARQUET)"
+            "COPY (SELECT * FROM raw_daily_bars ORDER BY ticker, date) "
+            f"TO '{tmp}' (FORMAT PARQUET)"
         )
         con.close()
         return pl.read_parquet(tmp)
@@ -89,7 +94,10 @@ def read_raw_db(path: Path) -> pl.DataFrame:
 
 
 def get_existing_dates(path: Path) -> set[datetime.date]:
-    """Return the set of dates already stored in raw_daily_bars without loading all rows."""
+    """Return the set of dates already stored in raw_daily_bars.
+
+    Without loading all rows.
+    """
     if not path.exists():
         return set()
     con = None
@@ -119,7 +127,7 @@ def write_consumer_db(
     weekly_metrics: pl.DataFrame | None = None,
     weekly_hvcs: pl.DataFrame | None = None,
 ) -> None:
-    """Write bars, metrics, tickers, and optionally HVC, VWAP anchors, and weekly DataFrames to consumer DuckDB file."""
+    """Write bars, metrics, tickers, and optionally HVC, VWAP anchors, and weekly DataFrames to consumer DuckDB file."""  # noqa: E501
     with (
         _tmp_parquet(bars) as bars_tmp,
         _tmp_parquet(metrics) as metrics_tmp,
@@ -127,38 +135,46 @@ def write_consumer_db(
     ):
         con = duckdb.connect(str(path))
         con.execute(
-            f"CREATE OR REPLACE TABLE daily_bars AS {_read_parquet_sql(bars_tmp, 'ticker, date')}"
+            "CREATE OR REPLACE TABLE daily_bars AS "
+            f"{_read_parquet_sql(bars_tmp, 'ticker, date')}"
         )
         con.execute(
-            f"CREATE OR REPLACE TABLE daily_metrics AS {_read_parquet_sql(metrics_tmp, 'ticker, date')}"
+            "CREATE OR REPLACE TABLE daily_metrics AS "
+            f"{_read_parquet_sql(metrics_tmp, 'ticker, date')}"
         )
         con.execute(
-            f"CREATE OR REPLACE TABLE tickers AS {_read_parquet_sql(tickers_tmp, 'ticker')}"
+            "CREATE OR REPLACE TABLE tickers AS "
+            f"{_read_parquet_sql(tickers_tmp, 'ticker')}"
         )
         if hvcs is not None:
             with _tmp_parquet(hvcs) as hvcs_tmp:
                 con.execute(
-                    f"CREATE OR REPLACE TABLE daily_hvcs AS {_read_parquet_sql(hvcs_tmp, 'ticker, date')}"
+                    "CREATE OR REPLACE TABLE daily_hvcs AS "
+                    f"{_read_parquet_sql(hvcs_tmp, 'ticker, date')}"
                 )
         if hvc_vwap_anchors is not None:
             with _tmp_parquet(hvc_vwap_anchors) as vwap_tmp:
                 con.execute(
-                    f"CREATE OR REPLACE TABLE hvc_vwap_anchors AS {_read_parquet_sql(vwap_tmp, 'ticker, anchor_date, date')}"
+                    "CREATE OR REPLACE TABLE hvc_vwap_anchors AS "
+                    f"{_read_parquet_sql(vwap_tmp, 'ticker, anchor_date, date')}"
                 )
         if weekly_bars is not None:
             with _tmp_parquet(weekly_bars) as wb_tmp:
                 con.execute(
-                    f"CREATE OR REPLACE TABLE weekly_bars AS {_read_parquet_sql(wb_tmp, 'ticker, date')}"
+                    "CREATE OR REPLACE TABLE weekly_bars AS "
+                    f"{_read_parquet_sql(wb_tmp, 'ticker, date')}"
                 )
         if weekly_metrics is not None:
             with _tmp_parquet(weekly_metrics) as wm_tmp:
                 con.execute(
-                    f"CREATE OR REPLACE TABLE weekly_metrics AS {_read_parquet_sql(wm_tmp, 'ticker, date')}"
+                    "CREATE OR REPLACE TABLE weekly_metrics AS "
+                    f"{_read_parquet_sql(wm_tmp, 'ticker, date')}"
                 )
         if weekly_hvcs is not None:
             with _tmp_parquet(weekly_hvcs) as wh_tmp:
                 con.execute(
-                    f"CREATE OR REPLACE TABLE weekly_hvcs AS {_read_parquet_sql(wh_tmp, 'ticker, date')}"
+                    "CREATE OR REPLACE TABLE weekly_hvcs AS "
+                    f"{_read_parquet_sql(wh_tmp, 'ticker, date')}"
                 )
         con.execute("CHECKPOINT")
         con.close()
@@ -169,7 +185,8 @@ def write_splits(splits: pl.DataFrame, path: Path) -> None:
     with _tmp_parquet(splits) as tmp:
         con = duckdb.connect(str(path))
         con.execute(
-            f"CREATE OR REPLACE TABLE splits AS {_read_parquet_sql(tmp, 'ticker, execution_date')}"
+            "CREATE OR REPLACE TABLE splits AS "
+            f"{_read_parquet_sql(tmp, 'ticker, execution_date')}"
         )
         con.execute("CHECKPOINT")
         con.close()
@@ -182,7 +199,8 @@ def read_splits(path: Path) -> pl.DataFrame:
     try:
         con = duckdb.connect(str(path), read_only=True)
         con.execute(
-            f"COPY (SELECT * FROM splits ORDER BY ticker, execution_date) TO '{tmp}' (FORMAT PARQUET)"
+            "COPY (SELECT * FROM splits ORDER BY ticker, execution_date) "
+            f"TO '{tmp}' (FORMAT PARQUET)"
         )
         con.close()
         return pl.read_parquet(tmp)
@@ -206,7 +224,7 @@ def _table_date_range(con: duckdb.DuckDBPyConnection, table: str) -> dict | None
 
 
 def get_db_info(path: Path) -> dict:
-    """Return metadata about a DuckDB file: tables, row counts, date range, file size."""
+    """Return metadata about a DuckDB file: tables, row counts, date range, file size."""  # noqa: E501
     con = duckdb.connect(str(path), read_only=True)
     tables = [row[0] for row in con.execute("SHOW TABLES").fetchall()]
     row_counts = {

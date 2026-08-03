@@ -21,8 +21,11 @@ class TestApiKey:
 
     def test_missing_api_key_raises(self) -> None:
         """Config() without env var raises ValueError with clear message."""
-        with patch.dict(os.environ, {}, clear=True), pytest.raises(
-            ValueError, match="MASSIVE_API_KEY environment variable is required"
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            pytest.raises(
+                ValueError, match="MASSIVE_API_KEY environment variable is required"
+            ),
         ):
             Config()
 

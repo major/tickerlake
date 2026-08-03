@@ -1,7 +1,7 @@
 """Tests for tickerlake.load — DuckDB writer with schema validation."""
 
 import datetime
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import duckdb
 import polars as pl
@@ -19,6 +19,9 @@ from tickerlake.load import (
     write_raw_db,
     write_splits,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -59,7 +62,7 @@ def sample_metrics_df(sample_bars_df: pl.DataFrame) -> pl.DataFrame:
 
 @pytest.fixture
 def sample_hvcs_df() -> pl.DataFrame:
-    """Create a sample HVC DataFrame with 2 realistic rows matching the 21-column schema."""
+    """Create a sample HVC DataFrame with 2 realistic rows matching the 21-column schema."""  # noqa: E501
     return pl.DataFrame(
         {
             "ticker": ["AAPL", "MSFT"],
@@ -222,7 +225,7 @@ def test_get_existing_dates_missing_file(tmp_path: Path) -> None:
 
 
 def test_get_existing_dates_missing_table(tmp_path: Path) -> None:
-    """get_existing_dates() returns empty set when raw_daily_bars table doesn't exist."""
+    """get_existing_dates() returns empty set when raw_daily_bars table doesn't exist."""  # noqa: E501
     db_path = tmp_path / "empty.duckdb"
     # Create an empty DuckDB file with no tables
     con = duckdb.connect(str(db_path))
@@ -281,7 +284,7 @@ def test_write_consumer_db_schema(
     sample_metrics_df: pl.DataFrame,
     sample_tickers_df: pl.DataFrame,
 ) -> None:
-    """Price columns are FLOAT, date is DATE, transactions is UINTEGER in consumer db."""
+    """Price columns are FLOAT, date is DATE, transactions is UINTEGER in consumer db."""  # noqa: E501
     db_path = tmp_path / "tickerlake.duckdb"
     write_consumer_db(sample_bars_df, sample_metrics_df, sample_tickers_df, db_path)
 
@@ -528,7 +531,7 @@ def test_write_consumer_db_backward_compat(
     sample_metrics_df: pl.DataFrame,
     sample_tickers_df: pl.DataFrame,
 ) -> None:
-    """Existing positional call write_consumer_db(bars, metrics, tickers, path) still works."""
+    """Existing positional call write_consumer_db(bars, metrics, tickers, path) still works."""  # noqa: E501
     db_path = tmp_path / "tickerlake.duckdb"
     write_consumer_db(sample_bars_df, sample_metrics_df, sample_tickers_df, db_path)
 

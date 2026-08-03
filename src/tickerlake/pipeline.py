@@ -2,13 +2,12 @@
 
 import datetime
 import logging
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import polars as pl
 
 from tickerlake.calendar import get_trading_days
 from tickerlake.client import MassiveClient
-from tickerlake.config import Config
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
 from tickerlake.load import (
     append_raw_db,
@@ -29,6 +28,11 @@ from tickerlake.transform import (
     detect_hvcs,
     filter_tickers,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from tickerlake.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -80,11 +84,12 @@ def _verify_split_adjustment(
         actual = adj_close / raw_close
 
         if abs(actual - expected) / abs(expected) > _SPOT_CHECK_TOLERANCE:
-            raise ValueError(
+            msg = (
                 f"Split adjustment spot check failed: {ticker} on {check_date} "
                 f"expected factor {expected:.6f}, got {actual:.6f} "
                 f"(raw={raw_close:.2f}, adjusted={adj_close:.2f})"
             )
+            raise ValueError(msg)
         verified += 1
         if verified >= _SPOT_CHECK_SAMPLE_SIZE:
             break
@@ -201,7 +206,7 @@ def backfill(config: Config) -> None:
 
 
 def update(config: Config) -> None:
-    """Incrementally update raw.duckdb with new trading days, then rebuild consumer db."""
+    """Incrementally update raw.duckdb with new trading days, then rebuild consumer db."""  # noqa: E501
     raw_path = config.output_dir / "raw.duckdb"
 
     if not raw_path.exists():
@@ -211,7 +216,9 @@ def update(config: Config) -> None:
 
     existing_bars = read_raw_db(raw_path)
     max_date_val = existing_bars["date"].max()
-    assert isinstance(max_date_val, datetime.date), f"Expected date, got {type(max_date_val)}"
+    if not isinstance(max_date_val, datetime.date):
+        msg = f"Expected date, got {type(max_date_val)}"
+        raise TypeError(msg)
     max_date: datetime.date = max_date_val
     next_day = max_date + datetime.timedelta(days=1)
 

@@ -31,3 +31,37 @@ dev = [
     "ty>=0.0.23",
     "vulture>=2.15",
 ]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D",       # pydocstyle: mandatory docstrings not enforced project-wide
+    "DOC",     # pydoclint: docstring content rules, paired with D
+    "ANN",     # flake8-annotations: mandatory type annotations not enforced project-wide
+    "CPY001",  # no copyright header convention in this project
+    # Rules that conflict with the ruff formatter:
+    # https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules
+    "W191", "E111", "E114", "E117",
+    "Q000", "Q001", "Q002", "Q003", "Q004",
+    "COM812", "COM819", "ISC002",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S101",    # assert is the standard pytest assertion mechanism
+    "S108",    # /tmp usage in test fixtures is expected
+    "PLR2004", # magic-value comparisons are fine in test assertions
+    "PLR0913", # mock-heavy tests (patch.multiple) need many parameters
+    "PLR0917",
+    "PLC0415", # local imports are needed as patch.multiple() targets
+    "SLF001",  # tests intentionally exercise private members
+    "ARG",     # unused fixture arguments are a normal pytest pattern
+    "FBT",     # boolean positional args are fine in test call sites
+]
+"src/tickerlake/load.py" = [
+    "S608",    # SQL built from internal table/path names, not user input
+    "PLR0913", # write_consumer_db() takes keyword-only extension tables by design
+]
+
+[tool.ruff.lint.pylint]
+max-statements = 60 # backfill/update orchestrate a long, linear ETL sequence

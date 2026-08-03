@@ -690,7 +690,7 @@ def test_adjust_splits_multiple_tickers():
 
 
 @pytest.mark.parametrize(
-    "ticker, splits_data, checks",
+    ("ticker", "splits_data", "checks"),
     [
         pytest.param(
             "ANET",
@@ -1193,8 +1193,8 @@ def test_compute_metrics_vars_correct():
 
     AAPL: daily_change=+2.0, spread=1.0. TR = max(2.0, |close+1-(close-2)|, ...) = 3.0.
     ATR = 3.0. stock_norm = 2.0 / 3.0 = 0.6667.
-    SPY: daily_change=+0.5, spread=0.5. TR = max(1.0, |close+0.5-(close-0.5)|, ...) = 1.0.
-    ATR = 1.0. spy_norm = 0.5 / 1.0 = 0.5.
+    SPY: daily_change=+0.5, spread=0.5. TR = max(1.0, |close+0.5-(close-0.5)|, ...) =
+    1.0. ATR = 1.0. spy_norm = 0.5 / 1.0 = 0.5.
     vars_daily = 0.6667 - 0.5 = 0.1667. VARS = 0.1667 * 50 = 8.333.
     """
     n = 80
@@ -1205,7 +1205,8 @@ def test_compute_metrics_vars_correct():
     result = compute_metrics(bars)
 
     # ATR warmup: 13 nulls. rolling_sum(50) needs 50 non-null stock_norm values.
-    # stock_norm first non-null at row 13 (ATR binding). VARS first non-null at row 13+49=62.
+    # stock_norm first non-null at row 13 (ATR binding). VARS first non-null at
+    # row 13+49=62.
     target_date = datetime.date(2024, 1, 1) + datetime.timedelta(days=62)
     row = result.filter(
         (pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)
@@ -1216,7 +1217,9 @@ def test_compute_metrics_vars_correct():
 
 
 def test_compute_metrics_vars_vs_rs_divergence():
-    """VARS and RS can disagree: high-ATR stock outperforms in % but underperforms in ATR units.
+    """VARS and RS can disagree: high-ATR stock outperforms in % but underperforms.
+
+    In ATR units.
 
     AAPL: close=100, spread=10 → ATR≈20, daily_change=+2 → stock_norm=2/20=0.1
     SPY:  close=400, spread=2  → ATR≈4,  daily_change=+2 → spy_norm=2/4=0.5
@@ -1224,7 +1227,8 @@ def test_compute_metrics_vars_vs_rs_divergence():
     RS daily = stock_pct - spy_pct = (2/100) - (2/400) = 0.02 - 0.005 = +0.015 → RS > 0
     vars_daily = 0.1 - 0.5 = -0.4 → VARS < 0
 
-    Jeff Sun's insight: a 2% move in a 20% ATR name is weak vs SPY moving 0.5% on 1% ATR.
+    Jeff Sun's insight: a 2% move in a 20% ATR name is weak vs SPY moving 0.5% on
+    1% ATR.
     """
     n = 80
     # AAPL: spread=10 → ATR≈20, daily_change=+2
@@ -1334,7 +1338,7 @@ def test_compute_metrics_vars_atr_zero():
         (pl.col("ticker") == "AAPL") & pl.col("atr_14").is_not_null()
     )
     assert len(aapl_after_warmup) > 0
-    # All VARS values after ATR warmup should be null (ATR=0 → norm=null → rolling_sum=null)
+    # All VARS values after ATR warmup should be null (ATR=0 → norm=null → rolling_sum=null)  # noqa: E501
     assert aapl_after_warmup["vars"].null_count() == len(aapl_after_warmup)
 
 
@@ -1387,7 +1391,7 @@ def test_compute_metrics_atr_pct_correct():
 
 
 def test_compute_metrics_atr_pct_null_count():
-    """atr_pct inherits ATR(14)'s 13-row warmup — exactly 13 leading nulls per ticker."""
+    """atr_pct inherits ATR(14)'s 13-row warmup — exactly 13 leading nulls per ticker."""  # noqa: E501
     ohlc = [(100.0, 102.0, 98.0, 100.0)] * 30
     bars = make_ohlc_bars({"AAPL": ohlc, "MSFT": ohlc})
 
@@ -1519,11 +1523,13 @@ def test_compute_metrics_sma50_atr_distance_no_spy():
 
 
 def test_compute_metrics_atr_pct_per_ticker():
-    """atr_pct is computed independently per ticker — different spreads yield different values.
+    """atr_pct is computed independently per ticker.
+
+    Different spreads yield different values.
 
     AAPL: spread=2, close=100 → TR=4 → atr_14=4 → atr_pct=4/100=0.04.
     MSFT: spread=1, close=100 → TR=2 → atr_14=2 → atr_pct=2/100=0.02.
-    AAPL's atr_pct should be approximately 2× MSFT's.
+    AAPL's atr_pct should be approximately 2x MSFT's.
     """
     aapl_ohlc = [(100.0, 102.0, 98.0, 100.0)] * 20
     msft_ohlc = [(100.0, 101.0, 99.0, 100.0)] * 20
@@ -1546,7 +1552,9 @@ def test_compute_metrics_atr_pct_per_ticker():
 
 
 def test_compute_metrics_volume_sma20_correct():
-    """volume_sma_20 = rolling_mean(volume, 20). With increasing volumes, SMA is correct.
+    """volume_sma_20 = rolling_mean(volume, 20).
+
+    With increasing volumes, SMA is correct.
 
     Volumes: 1.0, 2.0, ..., 30.0. At row 19 (20th bar), SMA(20) = mean(1..20) = 10.5.
     """
@@ -1564,7 +1572,7 @@ def test_compute_metrics_volume_sma20_correct():
 
 
 def test_compute_metrics_volume_sma20_null_count():
-    """volume_sma_20 has exactly 19 leading nulls per ticker (rolling_mean(20) warmup)."""
+    """volume_sma_20 has exactly 19 leading nulls per ticker (rolling_mean(20) warmup)."""  # noqa: E501
     bars = make_metric_bars(
         {
             "AAPL": [100.0] * 250,
@@ -1581,7 +1589,9 @@ def test_compute_metrics_volume_sma20_null_count():
 
 
 def test_compute_metrics_volume_sma20_per_ticker():
-    """volume_sma_20 is computed independently per ticker — different volumes yield different values.
+    """volume_sma_20 is computed independently per ticker.
+
+    Different volumes yield different values.
 
     AAPL: volume=1000.0 (default) → volume_sma_20=1000.0.
     MSFT: volume=2000.0 (overridden) → volume_sma_20=2000.0.
@@ -1614,7 +1624,7 @@ def test_compute_metrics_volume_sma20_per_ticker():
 
 
 def test_compute_adr_pct_basic():
-    """ADR%(20) equals SMA20((high-low)/close). With constant spread=4, close=100: ADR%=0.04."""
+    """ADR%(20) equals SMA20((high-low)/close). With constant spread=4, close=100: ADR%=0.04."""  # noqa: E501
     ohlc = [(100.0, 102.0, 98.0, 100.0)] * 25
     bars = make_ohlc_bars({"AAPL": ohlc})
     result = _compute_adr_pct(bars)
@@ -1624,7 +1634,7 @@ def test_compute_adr_pct_basic():
 
 
 def test_compute_adr_pct_warmup_nulls():
-    """ADR%(20) has exactly 19 leading nulls per ticker (rolling_mean(20) needs 20 values)."""
+    """ADR%(20) has exactly 19 leading nulls per ticker (rolling_mean(20) needs 20 values)."""  # noqa: E501
     ohlc = [(100.0, 102.0, 98.0, 100.0)] * 30
     bars = make_ohlc_bars({"AAPL": ohlc, "MSFT": ohlc})
     result = _compute_adr_pct(bars)
@@ -1921,7 +1931,9 @@ def test_detect_hvcs_first_row_excluded():
 def _make_minimal_hvcs(
     anchors: list[tuple[str, datetime.date, float]],
 ) -> pl.DataFrame:
-    """Build a minimal HVCs DataFrame with only the columns compute_hvc_vwap_anchors needs.
+    """Build a minimal HVCs DataFrame with only the columns needed.
+
+    Specifically, only the columns compute_hvc_vwap_anchors needs.
 
     Each tuple is (ticker, date, volume_sma_20). Other HVC_SCHEMA columns are
     omitted since compute_hvc_vwap_anchors only reads ticker, date, and
@@ -1990,7 +2002,9 @@ class TestComputeHvcVwapAnchors:
         assert result["anchor_date"].unique().to_list() == [datetime.date(2024, 1, 1)]
 
     def test_vwap_math(self):
-        """Verify exact VWAP calculation: cumsum(typical_price * volume) / cumsum(volume).
+        """Verify exact VWAP calculation.
+
+        cumsum(typical_price * volume) / cumsum(volume).
 
         Day 0 (anchor): tp=(103+97+100)/3=100.0, vol=4M
             VWAP = (100*4M) / 4M = 100.0
@@ -2115,7 +2129,7 @@ class TestComputeHvcVwapAnchors:
         assert anchor_2["vwap_value"][0] == pytest.approx(103.0, abs=1e-2)
 
     def test_volume_floor_excludes(self):
-        """HVCs with volume_sma_20 below the floor are excluded from VWAP computation."""
+        """HVCs with volume_sma_20 below the floor are excluded from VWAP computation."""  # noqa: E501
         bars = make_bars(
             [
                 {
