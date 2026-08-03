@@ -8,8 +8,11 @@ from tickerlake.fib_zones import (
     WEEKLY_FIB_ZONES_SCHEMA,
     _classify_status,
     _classify_zone,
+    _find_bar_index,
     _find_most_recent_unswept_leg,
+    _is_swept,
     _levels_and_zones,
+    _try_leg_for_low,
     compute_fib_zones_for_ticker,
     compute_weekly_fib_zones_all,
 )
@@ -401,3 +404,94 @@ def test_find_most_recent_unswept_leg_empty_pivots() -> None:
         schema={"date": pl.Date, "pivot_type": pl.Utf8, "price": pl.Float64}
     )
     assert _find_most_recent_unswept_leg(pivots, [], 0.20) is None
+
+
+def test_find_most_recent_unswept_leg_no_low_pivots() -> None:
+    """Pivots with only highs → None (no lows to anchor on)."""
+    pivots = pl.DataFrame(
+        {
+            "date": [datetime.date(2024, 1, 1), datetime.date(2024, 2, 1)],
+            "pivot_type": ["high", "high"],
+            "price": [10.0, 20.0],
+        },
+        schema_overrides={"date": pl.Date},
+    )
+    assert _find_most_recent_unswept_leg(pivots, [], 0.20) is None
+
+
+def test_find_bar_index_not_found() -> None:
+    """_find_bar_index returns None when the date is not in the bars."""
+    bars = [{"date": datetime.date(2024, 1, 1), "high": 10.0, "low": 8.0}]
+    assert _find_bar_index(bars, datetime.date(2024, 6, 1)) is None
+
+
+def test_is_swept_true() -> None:
+    """_is_swept returns True when a bar after start_idx has a low below threshold."""
+    bars = [
+        {"date": datetime.date(2024, 1, 1), "high": 20.0, "low": 10.0},
+        {"date": datetime.date(2024, 2, 1), "high": 18.0, "low": 8.0},  # below 10
+        {"date": datetime.date(2024, 3, 1), "high": 15.0, "low": 9.0},
+    ]
+    assert _is_swept(bars, 0, 10.0) is True
+
+
+def test_try_leg_for_low_no_candidate_highs() -> None:
+    """_try_leg_for_low returns None when no pivot highs exist after the low."""
+    low_row = {
+        "date": datetime.date(2024, 1, 1),
+        "price": 10.0,
+    }
+    pivots = pl.DataFrame(
+        {
+            "date": [datetime.date(2024, 1, 1)],
+            "pivot_type": ["low"],
+            "price": [10.0],
+        },
+        schema_overrides={"date": pl.Date},
+    )
+    bars = [{"date": datetime.date(2024, 1, 1), "high": 10.0, "low": 10.0}]
+    assert _try_leg_for_low(low_row, pivots, bars, 0.20, 2) is None
+
+
+def test_compute_weekly_fib_zones_all_eligible_ticker_missing_from_bars() -> None:
+    """Eligible tickers not present in bars are silently skipped."""
+    bars = pl.DataFrame(
+        {
+            "ticker": ["AAA"],
+            "date": [datetime.date(2024, 1, 1)],
+            "high": [20.0],
+            "low": [18.0],
+            "close": [19.0],
+        },
+        schema_overrides={"date": pl.Date},
+    )
+    result = compute_weekly_fib_zones_all(bars, eligible_tickers={"AAA", "ZZZ"})
+    # ZZZ not in bars — skipped silently. AAA has only 1 bar, no pivots.
+    assert result.is_empty()
+
+
+def test_compute_weekly_fib_zones_all_successful_path() -> None:
+    """Eligible ticker with a valid V-shape produces a row in the result."""
+    highs = [20.0, 18.0, 15.0, 12.0, 11.0, 10.0, 10.0, 14.0, 20.0,
+             25.0, 30.0, 28.0, 24.0, 20.0, 14.0]
+    lows = [18.0, 15.0, 12.0, 10.0, 9.0, 8.0, 8.0, 12.0, 18.0,
+            22.0, 28.0, 25.0, 21.0, 18.0, 12.0]
+    dates = [datetime.date(2024, 1, 1) + datetime.timedelta(weeks=i) for i in range(15)]
+    closes = [(h + lo) / 2 for h, lo in zip(highs, lows, strict=True)]
+    bars = pl.DataFrame(
+        {
+            "ticker": ["AAA"] * 15,
+            "date": dates,
+            "open": closes,
+            "high": highs,
+            "low": lows,
+            "close": closes,
+            "volume": [1_000_000.0] * 15,
+        },
+        schema_overrides={"date": pl.Date},
+    )
+    result = compute_weekly_fib_zones_all(
+        bars, eligible_tickers={"AAA"}, k=3, min_leg_pct=0.20
+    )
+    assert not result.is_empty()
+    assert result["ticker"][0] == "AAA"
