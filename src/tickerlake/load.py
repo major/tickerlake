@@ -111,40 +111,56 @@ def write_consumer_db(
     *,
     weekly_bars: pl.DataFrame | None = None,
     weekly_metrics: pl.DataFrame | None = None,
+    monthly_bars: pl.DataFrame | None = None,
+    monthly_metrics: pl.DataFrame | None = None,
 ) -> None:
-    """Write bars, metrics, tickers, and optionally weekly DataFrames to consumer DuckDB file."""  # noqa: E501
+    """Write bars, metrics, tickers, and optional period DataFrames to consumer DuckDB file."""  # noqa: E501
     with (
         _tmp_parquet(bars) as bars_tmp,
         _tmp_parquet(metrics) as metrics_tmp,
         _tmp_parquet(tickers) as tickers_tmp,
     ):
         con = duckdb.connect(str(path))
-        con.execute(
-            "CREATE OR REPLACE TABLE daily_bars AS "
-            f"{_read_parquet_sql(bars_tmp, 'ticker, date')}"
-        )
-        con.execute(
-            "CREATE OR REPLACE TABLE daily_metrics AS "
-            f"{_read_parquet_sql(metrics_tmp, 'ticker, date')}"
-        )
-        con.execute(
-            "CREATE OR REPLACE TABLE tickers AS "
-            f"{_read_parquet_sql(tickers_tmp, 'ticker')}"
-        )
-        if weekly_bars is not None:
-            with _tmp_parquet(weekly_bars) as wb_tmp:
-                con.execute(
-                    "CREATE OR REPLACE TABLE weekly_bars AS "
-                    f"{_read_parquet_sql(wb_tmp, 'ticker, date')}"
-                )
-        if weekly_metrics is not None:
-            with _tmp_parquet(weekly_metrics) as wm_tmp:
-                con.execute(
-                    "CREATE OR REPLACE TABLE weekly_metrics AS "
-                    f"{_read_parquet_sql(wm_tmp, 'ticker, date')}"
-                )
-        con.execute("CHECKPOINT")
-        con.close()
+        try:
+            con.execute(
+                "CREATE OR REPLACE TABLE daily_bars AS "
+                f"{_read_parquet_sql(bars_tmp, 'ticker, date')}"
+            )
+            con.execute(
+                "CREATE OR REPLACE TABLE daily_metrics AS "
+                f"{_read_parquet_sql(metrics_tmp, 'ticker, date')}"
+            )
+            con.execute(
+                "CREATE OR REPLACE TABLE tickers AS "
+                f"{_read_parquet_sql(tickers_tmp, 'ticker')}"
+            )
+            if weekly_bars is not None:
+                with _tmp_parquet(weekly_bars) as wb_tmp:
+                    con.execute(
+                        "CREATE OR REPLACE TABLE weekly_bars AS "
+                        f"{_read_parquet_sql(wb_tmp, 'ticker, date')}"
+                    )
+            if weekly_metrics is not None:
+                with _tmp_parquet(weekly_metrics) as wm_tmp:
+                    con.execute(
+                        "CREATE OR REPLACE TABLE weekly_metrics AS "
+                        f"{_read_parquet_sql(wm_tmp, 'ticker, date')}"
+                    )
+            if monthly_bars is not None:
+                with _tmp_parquet(monthly_bars) as mb_tmp:
+                    con.execute(
+                        "CREATE OR REPLACE TABLE monthly_bars AS "
+                        f"{_read_parquet_sql(mb_tmp, 'ticker, date')}"
+                    )
+            if monthly_metrics is not None:
+                with _tmp_parquet(monthly_metrics) as mm_tmp:
+                    con.execute(
+                        "CREATE OR REPLACE TABLE monthly_metrics AS "
+                        f"{_read_parquet_sql(mm_tmp, 'ticker, date')}"
+                    )
+            con.execute("CHECKPOINT")
+        finally:
+            con.close()
 
 
 def write_splits(splits: pl.DataFrame, path: Path) -> None:

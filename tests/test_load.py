@@ -423,6 +423,31 @@ def test_write_consumer_db_weekly_tables_created(
     assert "weekly_metrics" in tables
 
 
+def test_write_consumer_db_monthly_tables_created(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+) -> None:
+    """Monthly tables exist when monthly params are provided."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    write_consumer_db(
+        sample_bars_df,
+        sample_metrics_df,
+        sample_tickers_df,
+        db_path,
+        monthly_bars=sample_bars_df,
+        monthly_metrics=sample_metrics_df,
+    )
+    con = duckdb.connect(str(db_path), read_only=True)
+    try:
+        tables = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
+    finally:
+        con.close()
+    assert "monthly_bars" in tables
+    assert "monthly_metrics" in tables
+
+
 def test_write_consumer_db_weekly_tables_optional(
     tmp_path: Path,
     sample_bars_df: pl.DataFrame,
@@ -437,6 +462,8 @@ def test_write_consumer_db_weekly_tables_optional(
     con.close()
     assert "weekly_bars" not in tables
     assert "weekly_metrics" not in tables
+    assert "monthly_bars" not in tables
+    assert "monthly_metrics" not in tables
     assert "weekly_hvcs" not in tables
     assert len(tables) == 3  # daily_bars, daily_metrics, tickers
 
