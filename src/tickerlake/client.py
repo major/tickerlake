@@ -15,6 +15,9 @@ class MassiveClient:
 
     def __init__(self, config: Config) -> None:
         """Initialize with Config, creating the underlying RESTClient."""
+        if not config.api_key:
+            msg = "MASSIVE_API_KEY environment variable is required"
+            raise ValueError(msg)
         self._client = RESTClient(api_key=config.api_key)
 
     def fetch_daily_aggs(self, date: datetime.date) -> list[Any]:

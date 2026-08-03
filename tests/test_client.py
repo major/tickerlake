@@ -1,6 +1,8 @@
 """Tests for the Massive API client wrapper."""
 
 import datetime
+import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,7 +16,7 @@ def sample_config() -> Config:
     """Create a sample Config for testing."""
     return Config(
         api_key="test-api-key",
-        output_dir="/tmp",
+        output_dir=Path("/tmp"),
         start_date=datetime.date(2024, 1, 1),
         end_date=datetime.date(2024, 12, 31),
         ticker_types=["CS", "ETF", "ETV", "ETN", "ADRC"],
@@ -35,6 +37,19 @@ class TestMassiveClientInit:
 
         mock_rest_class.assert_called_once_with(api_key="test-api-key")
         assert client._client is not None
+
+    @patch("tickerlake.client.RESTClient")
+    def test_init_requires_api_key(self, mock_rest_class: MagicMock) -> None:
+        """MassiveClient rejects missing API keys with a clear message."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = Config(api_key="")
+
+        with pytest.raises(
+            ValueError, match="MASSIVE_API_KEY environment variable is required"
+        ):
+            MassiveClient(config)
+
+        mock_rest_class.assert_not_called()
 
 
 class TestFetchDailyAggs:

@@ -82,7 +82,7 @@ uv run ty check src/                             # Type check
 
 ## NOTES
 
-- **MASSIVE_API_KEY** env var is required -- `Config.__post_init__` raises `ValueError` if missing
+- **MASSIVE_API_KEY** env var is required for Massive-backed commands (`backfill`, `update`, `compact`). `Config.__post_init__` is permissive (may be empty for read-only commands like `pivots` and `info`); enforcement happens at the command boundary via `pipeline._require_api_key` (raises `ValueError("MASSIVE_API_KEY environment variable is required")` on empty key) and in `MassiveClient.__init__` as defense in depth.
 - **Two DuckDB files**: `raw.duckdb` (raw bars) and `tickerlake.duckdb` (adjusted bars + metrics + tickers)
 - **Consumer DB tables**: `daily_bars`, `daily_metrics`, `tickers`, `weekly_bars`, `weekly_metrics`, `monthly_bars`, `monthly_metrics`
 - **Update is incremental and revision-aware**: delegates to the backfill sequence (`_run_backfill(config, bars_start=...)`) with the bars-fetch start narrowed to a trailing `_REVISION_WINDOW_DAYS`-day window of already-cached dates (fetch-then-swap: fetch first, then delete+replace only the dates Massive actually returned data for in that window), so revisions Massive makes to already-published bars (up to ~5 trading days back) get picked up on the next run. Splits/tickers extraction always covers the full `config.start_date`-`config.end_date` range regardless. Consumer db is always fully rebuilt from raw.duckdb.

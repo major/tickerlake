@@ -11,7 +11,9 @@ class Config:
     """Configuration for tickerlake ETL pipeline.
 
     Attributes:
-        api_key: MASSIVE API key (required, from MASSIVE_API_KEY env var)
+        api_key: MASSIVE API key (loaded from MASSIVE_API_KEY env var when set;
+            may be empty for read-only commands. Massive-backed commands enforce
+            the requirement at their own boundary.)
         output_dir: Directory for output files (defaults to current working directory)
         start_date: Start date for data collection (defaults to 1 year ago)
         end_date: End date for data collection (defaults to today)
@@ -39,7 +41,4 @@ class Config:
         """Validate and normalize configuration after initialization."""
         if not self.api_key:
             self.api_key = os.environ.get("MASSIVE_API_KEY", "")
-        if not self.api_key:
-            msg = "MASSIVE_API_KEY environment variable is required"
-            raise ValueError(msg)
         self.output_dir = Path(self.output_dir).resolve()

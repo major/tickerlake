@@ -16,17 +16,21 @@ from tickerlake.load import (
     delete_raw_dates,
     get_db_info,
     get_existing_dates,
+    read_adjusted_daily_bars_for_ticker,
     read_raw_db,
     write_consumer_db,
     write_raw_db,
     write_splits,
 )
 from tickerlake.transform import (
+    VALID_TIMEFRAMES,
     adjust_splits,
     aggregate_to_monthly,
     aggregate_to_weekly,
+    bars_for_timeframe,
     compute_metrics,
     filter_tickers,
+    find_pivots,
 )
 
 if TYPE_CHECKING:
@@ -211,11 +215,13 @@ def _run_backfill(config: Config, *, bars_start: datetime.date | None = None) ->
 
 def backfill(config: Config) -> None:
     """Run a full backfill of the ETL pipeline from scratch."""
+    _require_api_key(config)
     _run_backfill(config)
 
 
 def update(config: Config) -> None:
     """Incrementally update raw.duckdb with new trading days, then rebuild consumer db."""  # noqa: E501
+    _require_api_key(config)
     raw_path = config.output_dir / "raw.duckdb"
 
     if not raw_path.exists():
@@ -239,6 +245,49 @@ def update(config: Config) -> None:
         config.end_date,
     )
     _run_backfill(config, bars_start=window_start)
+
+
+def find_ticker_pivots(
+    config: Config, ticker: str, timeframe: str = "weekly", k: int = 4
+) -> pl.DataFrame:
+    """Return pivots for a ticker/timeframe from adjusted consumer daily bars."""
+    if k < 1:
+        msg = "k must be >= 1"
+        raise ValueError(msg)
+    if timeframe not in VALID_TIMEFRAMES:
+        msg = f"timeframe must be one of: {', '.join(sorted(VALID_TIMEFRAMES))}"
+        raise ValueError(msg)
+    bars = read_adjusted_daily_bars_for_ticker(
+        config.output_dir / "tickerlake.duckdb", ticker
+    )
+    timeframe_bars = bars_for_timeframe(bars, timeframe)
+    return find_pivots(timeframe_bars, k=k)
+
+
+def _require_api_key(config: Config) -> None:
+    """Raise a clear error when a Massive API command lacks credentials."""
+    if not config.api_key:
+        msg = "MASSIVE_API_KEY environment variable is required"
+        raise ValueError(msg)
+
+
+def pivots(config: Config, ticker: str, timeframe: str = "weekly", k: int = 4) -> None:
+    """Log confirmed pivots for a ticker/timeframe without writing any data."""
+    ticker = ticker.upper()
+    result = find_ticker_pivots(config, ticker, timeframe, k)
+    if result.is_empty():
+        logger.warning("No pivots found for %s (%s, k=%d).", ticker, timeframe, k)
+        return
+
+    logger.info("Pivots for %s (%s, k=%d):", ticker, timeframe, k)
+    for row in result.iter_rows(named=True):
+        logger.info(
+            "%s %-4s %10.2f confirmed_at=%s",
+            row["date"],
+            row["pivot_type"],
+            row["price"],
+            row["confirmed_at"],
+        )
 
 
 def _log_db_info(label: str, path: Path) -> None:
