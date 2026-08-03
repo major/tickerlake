@@ -309,8 +309,10 @@ def test_read_adjusted_daily_bars_missing_table(tmp_path: Path) -> None:
     """read_adjusted_daily_bars_for_ticker() rejects DBs without daily_bars."""
     db_path = tmp_path / "tickerlake.duckdb"
     con = duckdb.connect(str(db_path))
-    con.execute("CREATE TABLE unrelated (x INT)")
-    con.close()
+    try:
+        con.execute("CREATE TABLE unrelated (x INT)")
+    finally:
+        con.close()
 
     with pytest.raises(ValueError, match="daily_bars table not found"):
         read_adjusted_daily_bars_for_ticker(db_path, "AAPL")
