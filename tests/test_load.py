@@ -259,6 +259,98 @@ def test_write_consumer_db_schema(
     assert tickers_schema["active"] == "BOOLEAN"
 
 
+def test_write_consumer_db_rejects_missing_column(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+) -> None:
+    """Consumer schema validation rejects missing required columns."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    bad_metrics = sample_metrics_df.drop("sma_20")
+
+    with pytest.raises(ValueError, match=r"daily_metrics.*missing columns: sma_20"):
+        write_consumer_db(sample_bars_df, bad_metrics, sample_tickers_df, db_path)
+
+
+def test_write_consumer_db_rejects_wrong_dtype(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+) -> None:
+    """Consumer schema validation rejects incorrect column dtypes."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    bad_bars = sample_bars_df.with_columns(pl.col("close").cast(pl.Float64))
+
+    with pytest.raises(
+        ValueError, match=r"daily_bars.*close: expected Float32, got Float64"
+    ):
+        write_consumer_db(bad_bars, sample_metrics_df, sample_tickers_df, db_path)
+
+
+def test_write_consumer_db_validates_optional_weekly_schema(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+) -> None:
+    """Optional weekly tables are schema-validated when provided."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    bad_weekly_metrics = sample_metrics_df.with_columns(
+        pl.col("volume_sma_20").cast(pl.Float64)
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"weekly_metrics.*volume_sma_20: expected Float32, got Float64",
+    ):
+        write_consumer_db(
+            sample_bars_df,
+            sample_metrics_df,
+            sample_tickers_df,
+            db_path,
+            weekly_metrics=bad_weekly_metrics,
+        )
+
+
+def test_write_consumer_db_validates_optional_monthly_schema(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+) -> None:
+    """Optional monthly tables are schema-validated when provided."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    bad_monthly_bars = sample_bars_df.drop("transactions")
+
+    with pytest.raises(
+        ValueError,
+        match=r"monthly_bars.*missing columns: transactions",
+    ):
+        write_consumer_db(
+            sample_bars_df,
+            sample_metrics_df,
+            sample_tickers_df,
+            db_path,
+            monthly_bars=bad_monthly_bars,
+        )
+
+
+def test_write_consumer_db_error_identifies_failing_table(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+) -> None:
+    """Schema validation errors identify the failing table name."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    bad_tickers = sample_tickers_df.drop("active")
+
+    with pytest.raises(ValueError, match=r"^tickers schema mismatch"):
+        write_consumer_db(sample_bars_df, sample_metrics_df, bad_tickers, db_path)
+
+
 def test_consumer_query_pattern(
     tmp_path: Path,
     sample_bars_df: pl.DataFrame,
