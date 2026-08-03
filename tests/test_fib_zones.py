@@ -76,10 +76,40 @@ def test_compute_fib_zones_empty_bars() -> None:
 
 def test_compute_fib_zones_v_shape() -> None:
     """Clear V-shape: down to 8, up to 30, retrace to 14 → finds 8→30 leg."""
-    highs = [20.0, 18.0, 15.0, 12.0, 11.0, 10.0, 10.0, 14.0, 20.0,
-             25.0, 30.0, 28.0, 24.0, 20.0, 14.0]
-    lows = [18.0, 15.0, 12.0, 10.0, 9.0, 8.0, 8.0, 12.0, 18.0,
-            22.0, 28.0, 25.0, 21.0, 18.0, 12.0]
+    highs = [
+        20.0,
+        18.0,
+        15.0,
+        12.0,
+        11.0,
+        10.0,
+        10.0,
+        14.0,
+        20.0,
+        25.0,
+        30.0,
+        28.0,
+        24.0,
+        20.0,
+        14.0,
+    ]
+    lows = [
+        18.0,
+        15.0,
+        12.0,
+        10.0,
+        9.0,
+        8.0,
+        8.0,
+        12.0,
+        18.0,
+        22.0,
+        28.0,
+        25.0,
+        21.0,
+        18.0,
+        12.0,
+    ]
     bars = _make_bars(highs, lows, datetime.date(2024, 1, 1))
     result = compute_fib_zones_for_ticker(
         bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=2
@@ -91,10 +121,40 @@ def test_compute_fib_zones_v_shape() -> None:
 
 def test_compute_fib_zones_min_leg_pct_too_strict() -> None:
     """With min_leg_pct=0.99, no leg passes and the algorithm returns None."""
-    highs = [20.0, 18.0, 15.0, 12.0, 11.0, 10.0, 10.0, 14.0, 20.0,
-             25.0, 30.0, 28.0, 24.0, 20.0, 14.0]
-    lows = [18.0, 15.0, 12.0, 10.0, 9.0, 8.0, 8.0, 12.0, 18.0,
-            22.0, 28.0, 25.0, 21.0, 18.0, 12.0]
+    highs = [
+        20.0,
+        18.0,
+        15.0,
+        12.0,
+        11.0,
+        10.0,
+        10.0,
+        14.0,
+        20.0,
+        25.0,
+        30.0,
+        28.0,
+        24.0,
+        20.0,
+        14.0,
+    ]
+    lows = [
+        18.0,
+        15.0,
+        12.0,
+        10.0,
+        9.0,
+        8.0,
+        8.0,
+        12.0,
+        18.0,
+        22.0,
+        28.0,
+        25.0,
+        21.0,
+        18.0,
+        12.0,
+    ]
     bars = _make_bars(highs, lows, datetime.date(2024, 1, 1))
     result = compute_fib_zones_for_ticker(
         bars, k=3, min_leg_pct=0.99, min_bars_between_pivots=2
@@ -104,10 +164,40 @@ def test_compute_fib_zones_min_leg_pct_too_strict() -> None:
 
 def test_compute_fib_zones_min_bars_between_pivots_too_strict() -> None:
     """min_bars_between_pivots=1000 → no leg has that gap → None."""
-    highs = [20.0, 18.0, 15.0, 12.0, 11.0, 10.0, 10.0, 14.0, 20.0,
-             25.0, 30.0, 28.0, 24.0, 20.0, 14.0]
-    lows = [18.0, 15.0, 12.0, 10.0, 9.0, 8.0, 8.0, 12.0, 18.0,
-            22.0, 28.0, 25.0, 21.0, 18.0, 12.0]
+    highs = [
+        20.0,
+        18.0,
+        15.0,
+        12.0,
+        11.0,
+        10.0,
+        10.0,
+        14.0,
+        20.0,
+        25.0,
+        30.0,
+        28.0,
+        24.0,
+        20.0,
+        14.0,
+    ]
+    lows = [
+        18.0,
+        15.0,
+        12.0,
+        10.0,
+        9.0,
+        8.0,
+        8.0,
+        12.0,
+        18.0,
+        22.0,
+        28.0,
+        25.0,
+        21.0,
+        18.0,
+        12.0,
+    ]
     bars = _make_bars(highs, lows, datetime.date(2024, 1, 1))
     result = compute_fib_zones_for_ticker(
         bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=1000
@@ -117,10 +207,40 @@ def test_compute_fib_zones_min_bars_between_pivots_too_strict() -> None:
 
 def test_compute_fib_zones_min_bars_between_pivots_relaxed() -> None:
     """min_bars_between_pivots=1 → 8→30 leg accepted."""
-    highs = [20.0, 18.0, 15.0, 12.0, 11.0, 10.0, 10.0, 14.0, 20.0,
-             25.0, 30.0, 28.0, 24.0, 20.0, 14.0]
-    lows = [18.0, 15.0, 12.0, 10.0, 9.0, 8.0, 8.0, 12.0, 18.0,
-            22.0, 28.0, 25.0, 21.0, 18.0, 12.0]
+    highs = [
+        20.0,
+        18.0,
+        15.0,
+        12.0,
+        11.0,
+        10.0,
+        10.0,
+        14.0,
+        20.0,
+        25.0,
+        30.0,
+        28.0,
+        24.0,
+        20.0,
+        14.0,
+    ]
+    lows = [
+        18.0,
+        15.0,
+        12.0,
+        10.0,
+        9.0,
+        8.0,
+        8.0,
+        12.0,
+        18.0,
+        22.0,
+        28.0,
+        25.0,
+        21.0,
+        18.0,
+        12.0,
+    ]
     bars = _make_bars(highs, lows, datetime.date(2024, 1, 1))
     result = compute_fib_zones_for_ticker(
         bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=1
@@ -133,14 +253,58 @@ def test_compute_fib_zones_min_bars_between_pivots_relaxed() -> None:
 def test_compute_fib_zones_highest_high_not_most_recent() -> None:
     """Anchors on most-recent pivot low, pairs with highest high after it."""
     highs = [
-        20.0, 18.0, 15.0, 12.0, 11.0, 10.0, 10.0, 14.0, 20.0, 25.0, 30.0,
-        28.0, 25.0, 22.0, 20.0, 22.0, 30.0, 40.0, 50.0, 60.0, 58.0,
-        55.0, 50.0, 45.0, 40.0,
+        20.0,
+        18.0,
+        15.0,
+        12.0,
+        11.0,
+        10.0,
+        10.0,
+        14.0,
+        20.0,
+        25.0,
+        30.0,
+        28.0,
+        25.0,
+        22.0,
+        20.0,
+        22.0,
+        30.0,
+        40.0,
+        50.0,
+        60.0,
+        58.0,
+        55.0,
+        50.0,
+        45.0,
+        40.0,
     ]
     lows = [
-        18.0, 15.0, 12.0, 10.0, 9.0, 8.0, 8.0, 12.0, 18.0, 22.0, 28.0,
-        25.0, 22.0, 20.0, 18.0, 20.0, 28.0, 38.0, 48.0, 58.0, 55.0,
-        52.0, 48.0, 42.0, 38.0,
+        18.0,
+        15.0,
+        12.0,
+        10.0,
+        9.0,
+        8.0,
+        8.0,
+        12.0,
+        18.0,
+        22.0,
+        28.0,
+        25.0,
+        22.0,
+        20.0,
+        18.0,
+        20.0,
+        28.0,
+        38.0,
+        48.0,
+        58.0,
+        55.0,
+        52.0,
+        48.0,
+        42.0,
+        38.0,
     ]
     bars = _make_bars(highs, lows, datetime.date(2024, 1, 1))
     result = compute_fib_zones_for_ticker(
@@ -153,10 +317,40 @@ def test_compute_fib_zones_highest_high_not_most_recent() -> None:
 
 def test_compute_fib_zones_schema_compliance() -> None:
     """Returned dict has all WEEKLY_FIB_ZONES_SCHEMA keys."""
-    highs = [20.0, 18.0, 15.0, 12.0, 11.0, 10.0, 10.0, 14.0, 20.0,
-             25.0, 30.0, 28.0, 24.0, 20.0, 14.0]
-    lows = [18.0, 15.0, 12.0, 10.0, 9.0, 8.0, 8.0, 12.0, 18.0,
-            22.0, 28.0, 25.0, 21.0, 18.0, 12.0]
+    highs = [
+        20.0,
+        18.0,
+        15.0,
+        12.0,
+        11.0,
+        10.0,
+        10.0,
+        14.0,
+        20.0,
+        25.0,
+        30.0,
+        28.0,
+        24.0,
+        20.0,
+        14.0,
+    ]
+    lows = [
+        18.0,
+        15.0,
+        12.0,
+        10.0,
+        9.0,
+        8.0,
+        8.0,
+        12.0,
+        18.0,
+        22.0,
+        28.0,
+        25.0,
+        21.0,
+        18.0,
+        12.0,
+    ]
     bars = _make_bars(highs, lows, datetime.date(2024, 1, 1))
     result = compute_fib_zones_for_ticker(
         bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=2
