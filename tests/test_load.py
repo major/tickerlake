@@ -16,9 +16,11 @@ from tickerlake.load import (
     read_adjusted_daily_bars_for_ticker,
     read_raw_db,
     read_splits,
+    read_weekly_fib_zones,
     write_consumer_db,
     write_raw_db,
     write_splits,
+    write_weekly_fib_zones,
 )
 
 if TYPE_CHECKING:
@@ -802,3 +804,90 @@ def test_get_db_info_table_without_date_column(tmp_path: Path) -> None:
     assert info["row_counts"]["no_date_col"] == 1
     # Table without date column should not appear in date_range
     assert "no_date_col" not in info.get("date_range", {})
+
+
+def _sample_fib_zones_df() -> pl.DataFrame:
+    """Build a small weekly_fib_zones DataFrame for load tests."""
+    from tickerlake.fib_zones import WEEKLY_FIB_ZONES_SCHEMA
+
+    return pl.DataFrame(
+        {
+            "ticker": ["AAPL", "MSFT"],
+            "as_of_date": [datetime.date(2026, 8, 3), datetime.date(2026, 8, 3)],
+            "swing_low": [150.0, 380.0],
+            "swing_high": [200.0, 420.0],
+            "range": [50.0, 40.0],
+            "swing_low_date": [datetime.date(2025, 1, 1), datetime.date(2025, 6, 1)],
+            "swing_high_date": [datetime.date(2026, 1, 1), datetime.date(2026, 3, 1)],
+            "bars_since_swing_high": [30, 20],
+            "ibz_low": [160.0, 388.0],
+            "ibz_high": [169.1, 395.3],
+            "smz_low": [157.7, 386.0],
+            "smz_high": [160.0, 388.0],
+            "current_price": [165.0, 392.0],
+            "pct_retracement": [70.0, 80.0],
+            "zone": ["in_ibz", "in_smz"],
+            "primary_degree": [1, 1],
+            "primary_status": ["live", "live"],
+            "still_making_new_highs": [False, False],
+            "zigzag_pct": [0.0, 0.0],
+            "bar_count": [100, 100],
+        },
+        schema=WEEKLY_FIB_ZONES_SCHEMA,
+    )
+
+
+def test_write_weekly_fib_zones_creates_table(tmp_path: Path) -> None:
+    """write_weekly_fib_zones creates a weekly_fib_zones table."""
+    db_path = tmp_path / "test.duckdb"
+    df = _sample_fib_zones_df()
+
+    write_weekly_fib_zones(df, db_path)
+
+    con = duckdb.connect(str(db_path), read_only=True)
+    tables = [r[0] for r in con.execute("SHOW TABLES").fetchall()]
+    con.close()
+    assert "weekly_fib_zones" in tables
+
+
+def test_write_weekly_fib_zones_roundtrip(tmp_path: Path) -> None:
+    """write then read returns the same data."""
+    db_path = tmp_path / "test.duckdb"
+    df = _sample_fib_zones_df()
+
+    write_weekly_fib_zones(df, db_path)
+    result = read_weekly_fib_zones(db_path)
+
+    assert result.sort("ticker").height == df.height
+    assert set(result["ticker"].to_list()) == {"AAPL", "MSFT"}
+
+
+def test_read_weekly_fib_zones_zone_filter(tmp_path: Path) -> None:
+    """read_weekly_fib_zones filters by zone (single string and list)."""
+    db_path = tmp_path / "test.duckdb"
+    write_weekly_fib_zones(_sample_fib_zones_df(), db_path)
+
+    in_ibz = read_weekly_fib_zones(db_path, zone="in_ibz")
+    assert in_ibz.height == 1
+    assert in_ibz["ticker"][0] == "AAPL"
+
+    in_smz = read_weekly_fib_zones(db_path, zone=["in_ibz", "in_smz"])
+    assert in_smz.height == 2
+
+
+def test_read_weekly_fib_zones_missing_file(tmp_path: Path) -> None:
+    """read_weekly_fib_zones raises ValueError when the DB file is missing."""
+    db_path = tmp_path / "nonexistent.duckdb"
+    with pytest.raises(ValueError, match="Consumer DB not found"):
+        read_weekly_fib_zones(db_path)
+
+
+def test_read_weekly_fib_zones_missing_table(tmp_path: Path) -> None:
+    """read_weekly_fib_zones raises ValueError when the table is missing."""
+    db_path = tmp_path / "test.duckdb"
+    con = duckdb.connect(str(db_path))
+    con.execute("CREATE TABLE other_table (id INT)")
+    con.close()
+
+    with pytest.raises(ValueError, match="weekly_fib_zones table not found"):
+        read_weekly_fib_zones(db_path)

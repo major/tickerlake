@@ -63,6 +63,9 @@ ignore = [
     "S608",    # SQL built from internal table/path names, not user input
     "PLR0913", # write_consumer_db() takes keyword-only extension tables by design
 ]
+"src/tickerlake/pipeline.py" = [
+    "S608",    # SQL built from internal table/path names, not user input
+]
 
 [tool.ruff.lint.pylint]
 max-statements = 60 # backfill/update orchestrate a long, linear ETL sequence

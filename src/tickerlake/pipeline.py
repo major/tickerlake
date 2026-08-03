@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import logging
+import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+import duckdb
 import polars as pl
+from rich.table import Table
 
+from tickerlake import console
 from tickerlake.calendar import get_trading_days
 from tickerlake.client import MassiveClient
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
+from tickerlake.fib_zones import WEEKLY_FIB_ZONES_SCHEMA, compute_weekly_fib_zones_all
 from tickerlake.load import (
     append_raw_db,
     compact_raw_db,
@@ -18,9 +24,11 @@ from tickerlake.load import (
     get_existing_dates,
     read_adjusted_daily_bars_for_ticker,
     read_raw_db,
+    read_weekly_fib_zones,
     write_consumer_db,
     write_raw_db,
     write_splits,
+    write_weekly_fib_zones,
 )
 from tickerlake.transform import (
     VALID_TIMEFRAMES,
@@ -35,7 +43,6 @@ from tickerlake.transform import (
 
 if TYPE_CHECKING:
     import datetime
-    from pathlib import Path
 
     from tickerlake.config import Config
 
@@ -46,6 +53,13 @@ _SPOT_CHECK_TOLERANCE = 1e-3
 # Massive revises published daily bars up to this many trading days after
 # initial publication; always refresh this trailing window on every run.
 _REVISION_WINDOW_DAYS = 5
+# Liquidity gate for weekly fib zones: a ticker must average at least this many
+# shares per week on its latest weekly_metrics row to be eligible.
+_LIQUIDITY_VOLUME_THRESHOLD = 1_000_000.0
+# Zone values shown by default in `screen` (zone="all"); rows whose primary
+# degree is void are additionally excluded because their swing-low setup has
+# already broken.
+_ACTIONABLE_ZONES = ["in_ibz", "in_smz", "below_smz"]
 
 
 def _verify_split_adjustment(
@@ -335,3 +349,168 @@ def info(config: Config) -> None:
     """Print metadata about existing DuckDB files."""
     _log_db_info("raw.duckdb", config.output_dir / "raw.duckdb")
     _log_db_info("tickerlake.duckdb", config.output_dir / "tickerlake.duckdb")
+
+
+def _read_weekly_fib_inputs(consumer_path: Path) -> tuple[pl.DataFrame, set[str]]:
+    """Read weekly_bars and the set of liquid tickers from the consumer DB.
+
+    A ticker is liquid when its most recent weekly_metrics row has
+    volume_sma_20 >= _LIQUIDITY_VOLUME_THRESHOLD.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as bars_file:
+        bars_tmp = Path(bars_file.name)
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as elig_file:
+        eligible_tmp = Path(elig_file.name)
+    try:
+        con = duckdb.connect(str(consumer_path), read_only=True)
+        try:
+            con.execute(
+                "COPY (SELECT * FROM weekly_bars ORDER BY ticker, date) "
+                f"TO '{bars_tmp}' (FORMAT PARQUET)"
+            )
+            con.execute(
+                "COPY (SELECT m.ticker FROM weekly_metrics m "
+                "JOIN (SELECT ticker, MAX(date) AS max_date "
+                "      FROM weekly_metrics GROUP BY ticker) latest "
+                "  ON m.ticker = latest.ticker AND m.date = latest.max_date "
+                f"WHERE m.volume_sma_20 >= {_LIQUIDITY_VOLUME_THRESHOLD}) "
+                f"TO '{eligible_tmp}' (FORMAT PARQUET)"
+            )
+        except duckdb.CatalogException as err:
+            msg = (
+                "weekly_bars/weekly_metrics tables not found in consumer DB: "
+                f"{consumer_path}. Run backfill first."
+            )
+            raise ValueError(msg) from err
+        finally:
+            con.close()
+        bars = pl.read_parquet(bars_tmp)
+        eligible = set(pl.read_parquet(eligible_tmp)["ticker"].to_list())
+        return bars, eligible
+    finally:
+        bars_tmp.unlink(missing_ok=True)
+        eligible_tmp.unlink(missing_ok=True)
+
+
+def _validate_weekly_fib_zones_schema(df: pl.DataFrame) -> None:
+    """Raise ValueError when df does not match WEEKLY_FIB_ZONES_SCHEMA."""
+    actual = dict(df.schema)
+    mismatches = [
+        f"{col}: expected {dtype}, got {actual[col]}"
+        for col, dtype in WEEKLY_FIB_ZONES_SCHEMA.items()
+        if col in actual and actual[col] != dtype
+    ]
+    missing = sorted(set(WEEKLY_FIB_ZONES_SCHEMA) - set(actual))
+    extra = sorted(set(actual) - set(WEEKLY_FIB_ZONES_SCHEMA))
+    problems = [
+        *([f"missing columns: {', '.join(missing)}"] if missing else []),
+        *([f"unexpected columns: {', '.join(extra)}"] if extra else []),
+        *mismatches,
+    ]
+    if problems:
+        msg = "weekly_fib_zones schema mismatch: " + "; ".join(problems)
+        raise ValueError(msg)
+
+
+def compute_weekly_fib_zones(config: Config) -> None:
+    """Compute weekly fib zones for all eligible tickers and persist them.
+
+    Eligible tickers are those whose latest weekly_metrics row has
+    volume_sma_20 >= _LIQUIDITY_VOLUME_THRESHOLD. The lookback is the full
+    weekly_bars window (no truncation). Logs the number of eligible tickers,
+    per-zone counts, void count, and rows written.
+    """
+    consumer_path = config.output_dir / "tickerlake.duckdb"
+    if not consumer_path.exists():
+        msg = f"Consumer DB not found: {consumer_path}. Run backfill first."
+        raise ValueError(msg)
+
+    weekly_bars, eligible_tickers = _read_weekly_fib_inputs(consumer_path)
+    logger.info(
+        "Weekly fib zones: %d eligible tickers (volume_sma_20 >= %s).",
+        len(eligible_tickers),
+        f"{_LIQUIDITY_VOLUME_THRESHOLD:,.0f}",
+    )
+
+    zones = compute_weekly_fib_zones_all(weekly_bars, eligible_tickers=eligible_tickers)
+    _validate_weekly_fib_zones_schema(zones)
+
+    n_in_ibz = int(zones.filter(pl.col("zone") == "in_ibz").height)
+    n_in_smz = int(zones.filter(pl.col("zone") == "in_smz").height)
+    n_below_smz = int(zones.filter(pl.col("zone") == "below_smz").height)
+    n_above_ibz = int(zones.filter(pl.col("zone") == "above_ibz").height)
+    n_void = int(zones.filter(pl.col("primary_status") == "void").height)
+
+    write_weekly_fib_zones(zones, consumer_path)
+
+    logger.info(
+        "Weekly fib zones written: n_in_ibz=%d, n_in_smz=%d, n_below_smz=%d, "
+        "n_above_ibz=%d, n_void=%d, n_written=%d.",
+        n_in_ibz,
+        n_in_smz,
+        n_below_smz,
+        n_above_ibz,
+        n_void,
+        len(zones),
+    )
+
+
+def screen_fib_zones(
+    config: Config,
+    *,
+    zone: str = "all",
+    limit: int | None = None,
+) -> None:
+    """Print a screen of persisted weekly fib zones to the console.
+
+    zone="all" restricts to the actionable zones (in_ibz, in_smz, below_smz)
+    with primary_status != 'void'. Any other zone value filters to that single
+    zone regardless of status. Results are sorted by ticker and optionally
+    capped at `limit` rows.
+    """
+    consumer_path = config.output_dir / "tickerlake.duckdb"
+    if not consumer_path.exists():
+        msg = f"Consumer DB not found: {consumer_path}. Run fib-zones compute first."
+        raise ValueError(msg)
+
+    if zone == "all":
+        result = read_weekly_fib_zones(consumer_path, zone=_ACTIONABLE_ZONES)
+        result = result.filter(pl.col("primary_status") != "void")
+    else:
+        result = read_weekly_fib_zones(consumer_path, zone=zone)
+    result = result.sort("ticker")
+
+    total = result.height
+    displayed = result.head(limit) if limit is not None else result
+
+    table = Table(title="Weekly fib zones screen", header_style="bold")
+    table.add_column("ticker", style="bold")
+    table.add_column("current_price", justify="right")
+    table.add_column("zone")
+    table.add_column("pct_retracement", justify="right")
+    table.add_column("swing_low", justify="right")
+    table.add_column("swing_high", justify="right")
+    table.add_column("primary_degree", justify="right")
+    table.add_column("primary_status")
+
+    for row in displayed.iter_rows(named=True):
+        table.add_row(
+            row["ticker"],
+            f"{row['current_price']:.2f}",
+            row["zone"],
+            f"{row['pct_retracement']:.2f}%",
+            f"{row['swing_low']:.2f}",
+            f"{row['swing_high']:.2f}",
+            str(row["primary_degree"]),
+            row["primary_status"],
+        )
+    console.print(table)
+
+    limit_label = str(limit) if limit is not None else "unlimited"
+    logger.info(
+        "Screen: %d total matches, %d displayed (zone=%s, limit=%s).",
+        total,
+        displayed.height,
+        zone,
+        limit_label,
+    )

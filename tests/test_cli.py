@@ -355,3 +355,154 @@ class TestConfigDefaults:
         assert exc_info.value.code != 0
         assert "MASSIVE_API_KEY environment variable is required" in captured.err
         assert "Traceback" not in captured.err
+
+
+class TestFibZonesSubcommand:
+    """Test the fib-zones compute/screen subcommands."""
+
+    def test_fib_zones_compute_calls_pipeline(self, monkeypatch, tmp_path):
+        """Verify fib-zones compute invokes pipeline.compute_weekly_fib_zones."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.compute_weekly_fib_zones") as mock_compute:
+            monkeypatch.setattr(
+                "sys.argv",
+                [
+                    "tickerlake",
+                    "fib-zones",
+                    "compute",
+                    "--output-dir",
+                    str(tmp_path),
+                ],
+            )
+            main()
+            mock_compute.assert_called_once()
+            config = mock_compute.call_args[0][0]
+            assert isinstance(config, Config)
+            assert config.output_dir == tmp_path
+
+    def test_fib_zones_screen_calls_pipeline(self, monkeypatch, tmp_path):
+        """Verify fib-zones screen passes zone and output-dir to the pipeline."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.screen_fib_zones") as mock_screen:
+            monkeypatch.setattr(
+                "sys.argv",
+                [
+                    "tickerlake",
+                    "fib-zones",
+                    "screen",
+                    "--zone",
+                    "in_ibz",
+                    "--output-dir",
+                    str(tmp_path),
+                ],
+            )
+            main()
+            mock_screen.assert_called_once()
+            config = mock_screen.call_args[0][0]
+            assert isinstance(config, Config)
+            assert config.output_dir == tmp_path
+            assert mock_screen.call_args.kwargs["zone"] == "in_ibz"
+
+    def test_fib_zones_screen_defaults(self, monkeypatch, tmp_path):
+        """Verify fib-zones screen defaults to zone=all and no limit."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.screen_fib_zones") as mock_screen:
+            monkeypatch.setattr(
+                "sys.argv",
+                ["tickerlake", "fib-zones", "screen", "--output-dir", str(tmp_path)],
+            )
+            main()
+            assert mock_screen.call_args.kwargs["zone"] == "all"
+            assert mock_screen.call_args.kwargs["limit"] is None
+
+    def test_fib_zones_screen_limit(self, monkeypatch, tmp_path):
+        """Verify fib-zones screen --limit caps the number of rows displayed."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.screen_fib_zones") as mock_screen:
+            monkeypatch.setattr(
+                "sys.argv",
+                [
+                    "tickerlake",
+                    "fib-zones",
+                    "screen",
+                    "--limit",
+                    "5",
+                    "--output-dir",
+                    str(tmp_path),
+                ],
+            )
+            main()
+            assert mock_screen.call_args.kwargs["limit"] == 5
+
+    def test_fib_zones_screen_invalid_zone(self, monkeypatch):
+        """Verify an unknown --zone value exits with an argparse error."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        monkeypatch.setattr(
+            "sys.argv",
+            ["tickerlake", "fib-zones", "screen", "--zone", "bogus"],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code != 0
+
+    def test_fib_zones_screen_invalid_limit(self, monkeypatch):
+        """Verify --limit must be a positive integer."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        monkeypatch.setattr(
+            "sys.argv",
+            ["tickerlake", "fib-zones", "screen", "--limit", "0"],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code != 0
+
+    def test_fib_zones_screen_invalid_limit_type(self, monkeypatch):
+        """Verify --limit rejects a non-integer value."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        monkeypatch.setattr(
+            "sys.argv",
+            ["tickerlake", "fib-zones", "screen", "--limit", "many"],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code != 0
+
+    def test_fib_zones_no_subcommand(self, monkeypatch):
+        """Verify fib-zones without a subcommand exits with an error."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        monkeypatch.setattr("sys.argv", ["tickerlake", "fib-zones"])
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code != 0
+
+    def test_fib_zones_compute_value_error_becomes_cli_error(self, monkeypatch, capsys):
+        """Verify a compute ValueError exits cleanly without a traceback."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch(
+            "tickerlake.pipeline.compute_weekly_fib_zones",
+            side_effect=ValueError("missing db"),
+        ):
+            monkeypatch.setattr("sys.argv", ["tickerlake", "fib-zones", "compute"])
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        captured = capsys.readouterr()
+        assert exc_info.value.code != 0
+        assert "missing db" in captured.err
+        assert "Traceback" not in captured.err
+
+    def test_fib_zones_screen_value_error_becomes_cli_error(self, monkeypatch, capsys):
+        """Verify a screen ValueError exits cleanly without a traceback."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch(
+            "tickerlake.pipeline.screen_fib_zones",
+            side_effect=ValueError("missing db"),
+        ):
+            monkeypatch.setattr("sys.argv", ["tickerlake", "fib-zones", "screen"])
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        captured = capsys.readouterr()
+        assert exc_info.value.code != 0
+        assert "missing db" in captured.err
+        assert "Traceback" not in captured.err

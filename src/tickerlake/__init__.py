@@ -82,6 +82,37 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     pivots_parser.add_argument("--output-dir", type=Path, metavar="DIR")
 
+    fib_zones_parser = subparsers.add_parser(
+        "fib-zones",
+        help="Compute and screen weekly Fibonacci-retracement IBZ/SMZ zones",
+    )
+    fib_zones_subparsers = fib_zones_parser.add_subparsers(
+        dest="fib_zones_command", metavar="COMMAND"
+    )
+    fib_zones_subparsers.required = True
+
+    fib_zones_compute_parser = fib_zones_subparsers.add_parser(
+        "compute", help="Compute and persist weekly fib zones for all eligible tickers"
+    )
+    fib_zones_compute_parser.add_argument("--output-dir", type=Path, metavar="DIR")
+
+    fib_zones_screen_parser = fib_zones_subparsers.add_parser(
+        "screen", help="Screen persisted weekly fib zones"
+    )
+    fib_zones_screen_parser.add_argument(
+        "--zone",
+        choices=["in_ibz", "in_smz", "below_smz", "above_ibz", "all"],
+        default="all",
+        help="Zone to filter on (default: all actionable zones)",
+    )
+    fib_zones_screen_parser.add_argument(
+        "--limit",
+        type=_parse_positive_int,
+        default=None,
+        help="Cap the number of rows displayed",
+    )
+    fib_zones_screen_parser.add_argument("--output-dir", type=Path, metavar="DIR")
+
     return parser
 
 
@@ -95,6 +126,22 @@ def _make_config(args: argparse.Namespace) -> Config:
     if args.output_dir is not None:
         kwargs["output_dir"] = args.output_dir
     return Config(**kwargs)
+
+
+def _dispatch_fib_zones(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: Config
+) -> None:
+    """Dispatch the fib-zones compute/screen subcommands, wrapping ValueErrors."""
+    if args.fib_zones_command == "compute":
+        try:
+            pipeline.compute_weekly_fib_zones(config)
+        except ValueError as err:
+            parser.error(str(err))
+    elif args.fib_zones_command == "screen":
+        try:
+            pipeline.screen_fib_zones(config, zone=args.zone, limit=args.limit)
+        except ValueError as err:
+            parser.error(str(err))
 
 
 def main() -> None:
@@ -128,3 +175,5 @@ def main() -> None:
             pipeline.pivots(config, args.ticker, args.timeframe, args.k)
         except ValueError as err:
             parser.error(str(err))
+    elif args.command == "fib-zones":
+        _dispatch_fib_zones(parser, args, config)

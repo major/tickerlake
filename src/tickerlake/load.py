@@ -294,6 +294,55 @@ def _table_date_range(con: duckdb.DuckDBPyConnection, table: str) -> dict | None
     return {"min": row[0], "max": row[1]} if row else None
 
 
+def write_weekly_fib_zones(df: pl.DataFrame, path: Path) -> None:
+    """Write df to the weekly_fib_zones table, replacing any existing data."""
+    with _tmp_parquet(df) as tmp:
+        con = duckdb.connect(str(path))
+        try:
+            con.execute(
+                "CREATE OR REPLACE TABLE weekly_fib_zones AS "
+                f"{_read_parquet_sql(tmp, 'ticker')}"
+            )
+            con.execute("CHECKPOINT")
+        finally:
+            con.close()
+
+
+def read_weekly_fib_zones(
+    path: Path, *, zone: str | list[str] | None = None
+) -> pl.DataFrame:
+    """Read weekly_fib_zones table from DuckDB file. Optionally filter by zone.
+
+    Returns DataFrame sorted by ticker.
+    """
+    if not path.exists():
+        msg = f"Consumer DB not found: {path}"
+        raise ValueError(msg)
+
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+        tmp = Path(f.name)
+    try:
+        con = duckdb.connect(str(path), read_only=True)
+        try:
+            sql = "COPY (SELECT * FROM weekly_fib_zones"
+            params: list = []
+            if zone is not None:
+                zones = [zone] if isinstance(zone, str) else list(zone)
+                placeholders = ", ".join(["?"] * len(zones))
+                sql += f" WHERE zone IN ({placeholders})"
+                params = zones
+            sql += f" ORDER BY ticker) TO '{tmp}' (FORMAT PARQUET)"
+            con.execute(sql, params)
+        except duckdb.CatalogException as err:
+            msg = f"weekly_fib_zones table not found in consumer DB: {path}"
+            raise ValueError(msg) from err
+        finally:
+            con.close()
+        return pl.read_parquet(tmp)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def get_db_info(path: Path) -> dict:
     """Return metadata about a DuckDB file: tables, row counts, date range, file size."""  # noqa: E501
     con = duckdb.connect(str(path), read_only=True)

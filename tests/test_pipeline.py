@@ -2,14 +2,14 @@
 
 import datetime
 import os
-from typing import TYPE_CHECKING
+import tempfile
+from pathlib import Path
 from unittest.mock import DEFAULT, patch
 
+import duckdb
 import polars as pl
 import pytest
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from rich.console import Console
 
 _PIPELINE = "tickerlake.pipeline"
 
@@ -1291,3 +1291,386 @@ def test_update_persists_splits(
     pipeline_mocks["write_splits"].assert_called_once_with(
         sample_splits, config.output_dir / "raw.duckdb"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Weekly fib zones compute + screen
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _weekly_bars_df() -> pl.DataFrame:
+    """Weekly bars for AAPL, MSFT, and SPY matching the consumer bars schema."""
+    return pl.DataFrame(
+        {
+            "date": [
+                datetime.date(2024, 1, 1),
+                datetime.date(2024, 1, 8),
+                datetime.date(2024, 1, 1),
+                datetime.date(2024, 1, 8),
+                datetime.date(2024, 1, 1),
+                datetime.date(2024, 1, 8),
+            ],
+            "ticker": ["AAPL", "AAPL", "MSFT", "MSFT", "SPY", "SPY"],
+            "open": [150.0, 155.0, 380.0, 385.0, 400.0, 405.0],
+            "high": [152.0, 157.0, 382.0, 387.0, 402.0, 407.0],
+            "low": [149.0, 154.0, 379.0, 384.0, 399.0, 404.0],
+            "close": [151.5, 156.5, 381.5, 386.5, 401.5, 406.5],
+            "volume": [
+                1_000_000.0,
+                1_100_000.0,
+                1_200_000.0,
+                1_300_000.0,
+                3_000_000.0,
+                3_100_000.0,
+            ],
+            "vwap": [151.2, 156.2, 381.2, 386.2, 401.2, 406.2],
+            "transactions": [5000, 5100, 6000, 6100, 7000, 7100],
+        }
+    ).cast(
+        {
+            "date": pl.Date,
+            "open": pl.Float32,
+            "high": pl.Float32,
+            "low": pl.Float32,
+            "close": pl.Float32,
+            "volume": pl.Float32,
+            "vwap": pl.Float32,
+            "transactions": pl.UInt32,
+        }
+    )
+
+
+def _weekly_metrics_df() -> pl.DataFrame:
+    """Weekly metrics: AAPL liquid only on its latest row, MSFT illiquid, SPY liquid."""
+    return pl.DataFrame(
+        {
+            "date": [
+                datetime.date(2024, 1, 1),
+                datetime.date(2024, 1, 8),
+                datetime.date(2024, 1, 8),
+                datetime.date(2024, 1, 8),
+            ],
+            "ticker": ["AAPL", "AAPL", "MSFT", "SPY"],
+            "sma_20": [None] * 4,
+            "sma_50": [None] * 4,
+            "sma_200": [None] * 4,
+            "atr_14": [None] * 4,
+            "atr_pct": [None] * 4,
+            "adr_pct": [None] * 4,
+            "volume_sma_20": [100_000.0, 2_000_000.0, 500_000.0, 3_000_000.0],
+        }
+    ).cast(
+        {
+            "date": pl.Date,
+            "sma_20": pl.Float32,
+            "sma_50": pl.Float32,
+            "sma_200": pl.Float32,
+            "atr_14": pl.Float32,
+            "atr_pct": pl.Float32,
+            "adr_pct": pl.Float32,
+            "volume_sma_20": pl.Float32,
+        }
+    )
+
+
+def _build_consumer_db(tmp_path: Path, metrics: pl.DataFrame) -> Path:
+    """Create a consumer DuckDB with weekly tables plus minimal daily/tickers tables."""
+    from tickerlake.load import write_consumer_db
+
+    bars = _weekly_bars_df()
+    tickers = pl.DataFrame(
+        {
+            "ticker": ["AAPL", "MSFT", "SPY"],
+            "name": ["Apple Inc.", "Microsoft Corp.", "SPDR S&P 500 ETF"],
+            "type": ["CS", "CS", "ETF"],
+            "primary_exchange": ["XNAS", "XNAS", "XNYS"],
+            "cik": ["", "", ""],
+            "active": [True, True, True],
+        }
+    )
+    db = tmp_path / "tickerlake.duckdb"
+    write_consumer_db(
+        bars,
+        metrics,
+        tickers,
+        db,
+        weekly_bars=bars,
+        weekly_metrics=metrics,
+    )
+    return db
+
+
+def _zones_df() -> pl.DataFrame:
+    """Weekly fib zones rows in deliberately non-sorted ticker order.
+
+    Includes two in_ibz rows (one live, one void), an in_smz, a below_smz
+    (void), and an above_ibz row.
+    """
+    from tickerlake.fib_zones import WEEKLY_FIB_ZONES_SCHEMA
+
+    def row(
+        ticker: str,
+        swing_low: float,
+        swing_high: float,
+        current_price: float,
+        zone: str,
+        status: str,
+        degree: int,
+    ) -> dict:
+        rng = swing_high - swing_low
+        return {
+            "ticker": ticker,
+            "as_of_date": datetime.date(2024, 1, 8),
+            "swing_low": swing_low,
+            "swing_high": swing_high,
+            "range": rng,
+            "swing_low_date": datetime.date(2023, 11, 1),
+            "swing_high_date": datetime.date(2024, 1, 5),
+            "bars_since_swing_high": 1,
+            "ibz_low": round(swing_low + 0.786 * rng, 2),
+            "ibz_high": round(swing_low + 0.618 * rng, 2),
+            "smz_low": round(swing_low + 0.826 * rng, 2),
+            "smz_high": round(swing_low + 0.786 * rng, 2),
+            "current_price": current_price,
+            "pct_retracement": (swing_high - current_price) / rng * 100,
+            "zone": zone,
+            "primary_degree": degree,
+            "primary_status": status,
+            "still_making_new_highs": zone == "above_ibz",
+            "zigzag_pct": 0.12,
+            "bar_count": 200,
+        }
+
+    rows = [
+        row("NVDA", 400.0, 600.0, 500.0, "in_ibz", "void", 1),
+        row("SPY", 280.0, 400.0, 300.0, "below_smz", "void", 2),
+        row("AAPL", 80.0, 120.0, 100.0, "in_ibz", "live", 1),
+        row("TSLA", 200.0, 500.0, 480.0, "above_ibz", "live", 3),
+        row("MSFT", 150.0, 250.0, 200.0, "in_smz", "deep", 2),
+    ]
+    return pl.DataFrame(rows).cast(WEEKLY_FIB_ZONES_SCHEMA)
+
+
+def _write_fib_zones_table(db_path: Path, df: pl.DataFrame) -> None:
+    """Create/replace the weekly_fib_zones table from a DataFrame."""
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+        tmp = Path(f.name)
+    try:
+        df.write_parquet(tmp)
+        con = duckdb.connect(str(db_path))
+        try:
+            con.execute(
+                "CREATE OR REPLACE TABLE weekly_fib_zones AS "
+                "SELECT * FROM read_parquet(?)",
+                [str(tmp)],
+            )
+        finally:
+            con.close()
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def test_compute_weekly_fib_zones_writes_rows(tmp_path: Path, caplog) -> None:
+    """compute_weekly_fib_zones persists the computed zones to the consumer DB."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    db = _build_consumer_db(tmp_path, _weekly_metrics_df())
+
+    with (
+        patch(f"{_PIPELINE}.compute_weekly_fib_zones_all", return_value=_zones_df()),
+        caplog.at_level("INFO"),
+    ):
+        pipeline.compute_weekly_fib_zones(config)
+
+    con = duckdb.connect(str(db), read_only=True)
+    try:
+        rows = con.execute(
+            "SELECT ticker, zone FROM weekly_fib_zones ORDER BY ticker"
+        ).fetchall()
+    finally:
+        con.close()
+
+    assert rows == [
+        ("AAPL", "in_ibz"),
+        ("MSFT", "in_smz"),
+        ("NVDA", "in_ibz"),
+        ("SPY", "below_smz"),
+        ("TSLA", "above_ibz"),
+    ]
+    assert "2 eligible tickers" in caplog.text
+    assert (
+        "n_in_ibz=2, n_in_smz=1, n_below_smz=1, n_above_ibz=1, n_void=2" in caplog.text
+    )
+    assert "n_written=5" in caplog.text
+
+
+def test_compute_weekly_fib_zones_filters_by_liquidity(tmp_path: Path) -> None:
+    """compute_weekly_fib_zones passes only liquid tickers to the compute function.
+
+    AAPL's stale low-volume row must not override its latest liquid row; MSFT
+    is below the threshold and must be excluded.
+    """
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _build_consumer_db(tmp_path, _weekly_metrics_df())
+
+    captured: dict = {}
+
+    def fake_compute(weekly_bars, *, eligible_tickers, **kwargs):
+        captured["bars"] = weekly_bars
+        captured["eligible"] = set(eligible_tickers)
+        return pl.DataFrame(schema=_zones_df().schema)
+
+    with (
+        patch(f"{_PIPELINE}.compute_weekly_fib_zones_all", side_effect=fake_compute),
+        patch(f"{_PIPELINE}.write_weekly_fib_zones") as mock_write,
+    ):
+        pipeline.compute_weekly_fib_zones(config)
+
+    assert captured["eligible"] == {"AAPL", "SPY"}
+    assert captured["bars"].is_empty() is False
+    mock_write.assert_called_once()
+    assert mock_write.call_args[0][1] == config.output_dir / "tickerlake.duckdb"
+
+
+def test_compute_weekly_fib_zones_missing_db(tmp_path: Path) -> None:
+    """compute_weekly_fib_zones raises ValueError when the consumer DB is absent."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+
+    with pytest.raises(ValueError, match="Consumer DB not found"):
+        pipeline.compute_weekly_fib_zones(config)
+
+
+def test_compute_weekly_fib_zones_missing_weekly_tables(tmp_path: Path) -> None:
+    """compute_weekly_fib_zones raises ValueError when weekly tables are absent."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    db = tmp_path / "tickerlake.duckdb"
+    con = duckdb.connect(str(db))
+    try:
+        con.execute("CREATE TABLE unrelated (x INT)")
+    finally:
+        con.close()
+
+    with pytest.raises(ValueError, match="tables not found"):
+        pipeline.compute_weekly_fib_zones(config)
+
+
+def test_compute_weekly_fib_zones_rejects_bad_schema(tmp_path: Path) -> None:
+    """compute_weekly_fib_zones rejects a malformed compute result."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _build_consumer_db(tmp_path, _weekly_metrics_df())
+    bad = _zones_df().drop("current_price")
+
+    with (
+        patch(f"{_PIPELINE}.compute_weekly_fib_zones_all", return_value=bad),
+        pytest.raises(ValueError, match="weekly_fib_zones schema mismatch"),
+    ):
+        pipeline.compute_weekly_fib_zones(config)
+
+
+def test_screen_fib_zones_all_excludes_void(tmp_path: Path, caplog) -> None:
+    """zone="all" shows actionable zones and hides void rows."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _write_fib_zones_table(tmp_path / "tickerlake.duckdb", _zones_df())
+    recording = Console(record=True)
+
+    with (
+        patch(f"{_PIPELINE}.console", recording),
+        caplog.at_level("INFO"),
+    ):
+        pipeline.screen_fib_zones(config, zone="all")
+
+    text = recording.export_text()
+    assert "AAPL" in text
+    assert "MSFT" in text
+    assert "SPY" not in text  # below_smz but void
+    assert "NVDA" not in text  # void
+    assert "TSLA" not in text  # above_ibz is not actionable
+    assert "50.00%" in text
+    assert "Screen: 2 total matches, 2 displayed" in caplog.text
+
+
+def test_screen_fib_zones_in_ibz_filters_zone(tmp_path: Path) -> None:
+    """zone="in_ibz" filters to that single zone regardless of status."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _write_fib_zones_table(tmp_path / "tickerlake.duckdb", _zones_df())
+    recording = Console(record=True)
+
+    with patch(f"{_PIPELINE}.console", recording):
+        pipeline.screen_fib_zones(config, zone="in_ibz")
+
+    text = recording.export_text()
+    assert "AAPL" in text
+    assert "NVDA" in text  # void row still shown when a specific zone is requested
+    assert "MSFT" not in text
+    assert "SPY" not in text
+
+
+def test_screen_fib_zones_limit_caps_displayed(tmp_path: Path, caplog) -> None:
+    """limit=N queries all rows but displays only the first N."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _write_fib_zones_table(tmp_path / "tickerlake.duckdb", _zones_df())
+    recording = Console(record=True)
+
+    with (
+        patch(f"{_PIPELINE}.console", recording),
+        caplog.at_level("INFO"),
+    ):
+        pipeline.screen_fib_zones(config, zone="all", limit=1)
+
+    text = recording.export_text()
+    assert "AAPL" in text
+    assert "MSFT" not in text
+    assert "Screen: 2 total matches, 1 displayed (zone=all, limit=1)" in caplog.text
+
+
+def test_screen_fib_zones_sorted_by_ticker(tmp_path: Path) -> None:
+    """Screen output is sorted by ticker even when the table is unsorted."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _write_fib_zones_table(tmp_path / "tickerlake.duckdb", _zones_df())
+    recording = Console(record=True)
+
+    with patch(f"{_PIPELINE}.console", recording):
+        pipeline.screen_fib_zones(config, zone="in_ibz")
+
+    text = recording.export_text()
+    assert text.index("AAPL") < text.index("NVDA")
+
+
+def test_screen_fib_zones_missing_table(tmp_path: Path) -> None:
+    """screen_fib_zones raises ValueError when weekly_fib_zones is absent."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    db = tmp_path / "tickerlake.duckdb"
+    con = duckdb.connect(str(db))
+    con.close()
+
+    with pytest.raises(ValueError, match="weekly_fib_zones"):
+        pipeline.screen_fib_zones(config, zone="all")
+
+
+def test_screen_fib_zones_missing_db(tmp_path: Path) -> None:
+    """screen_fib_zones raises ValueError when the consumer DB is absent."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+
+    with pytest.raises(ValueError, match="Consumer DB not found"):
+        pipeline.screen_fib_zones(config, zone="all")
