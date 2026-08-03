@@ -38,10 +38,7 @@ def sample_metrics_df(sample_bars_df: pl.DataFrame) -> pl.DataFrame:
             "atr_pct": [None] * n,
             "adr_pct": [None] * n,
             "sma50_atr_distance": [None] * n,
-            "rs": [None] * n,
-            "rs_sma_20": [None] * n,
-            "vars": [None] * n,
-            "vars_sma_20": [None] * n,
+            "volume_sma_20": [None] * n,
         },
         schema={
             "date": pl.Date,
@@ -52,63 +49,7 @@ def sample_metrics_df(sample_bars_df: pl.DataFrame) -> pl.DataFrame:
             "atr_pct": pl.Float32,
             "adr_pct": pl.Float32,
             "sma50_atr_distance": pl.Float32,
-            "rs": pl.Float32,
-            "rs_sma_20": pl.Float32,
-            "vars": pl.Float32,
-            "vars_sma_20": pl.Float32,
-        },
-    )
-
-
-@pytest.fixture
-def sample_hvcs_df() -> pl.DataFrame:
-    """Create a sample HVC DataFrame with 2 realistic rows matching the 21-column schema."""  # noqa: E501
-    return pl.DataFrame(
-        {
-            "ticker": ["AAPL", "MSFT"],
-            "date": [datetime.date(2024, 1, 3), datetime.date(2024, 1, 3)],
-            "open": [155.0, 385.0],
-            "high": [160.0, 392.0],
-            "low": [154.0, 383.0],
-            "close": [158.0, 390.0],
-            "prev_close": [151.5, 381.5],
-            "volume": [3_100_000.0, 3_900_000.0],
-            "volume_sma_20": [1_000_000.0, 1_200_000.0],
-            "volume_multiplier": [3.1, 3.25],
-            "total_move_pct": [4.3, 2.23],
-            "gap_pct": [2.3, 0.92],
-            "intraday_move_pct": [1.94, 1.30],
-            "bar_range_pct": [3.97, 2.23],
-            "adr_pct": [0.04, 0.02],
-            "atr_pct": [0.03, 0.018],
-            "close_position_in_range": [0.67, 0.83],
-            "is_up_day": [True, True],
-            "price_vs_sma50_pct": [5.2, 3.1],
-            "price_vs_sma200_pct": [12.5, 8.7],
-            "rs": [0.15, 0.08],
-        },
-        schema={
-            "ticker": pl.Utf8,
-            "date": pl.Date,
-            "open": pl.Float32,
-            "high": pl.Float32,
-            "low": pl.Float32,
-            "close": pl.Float32,
-            "prev_close": pl.Float32,
-            "volume": pl.Float32,
             "volume_sma_20": pl.Float32,
-            "volume_multiplier": pl.Float32,
-            "total_move_pct": pl.Float32,
-            "gap_pct": pl.Float32,
-            "intraday_move_pct": pl.Float32,
-            "bar_range_pct": pl.Float32,
-            "adr_pct": pl.Float32,
-            "atr_pct": pl.Float32,
-            "close_position_in_range": pl.Float32,
-            "is_up_day": pl.Boolean,
-            "price_vs_sma50_pct": pl.Float32,
-            "price_vs_sma200_pct": pl.Float32,
-            "rs": pl.Float32,
         },
     )
 
@@ -312,10 +253,6 @@ def test_write_consumer_db_schema(
     assert metrics_schema["atr_14"] == "FLOAT"
     assert metrics_schema["atr_pct"] == "FLOAT"
     assert metrics_schema["sma50_atr_distance"] == "FLOAT"
-    assert metrics_schema["rs"] == "FLOAT"
-    assert metrics_schema["rs_sma_20"] == "FLOAT"
-    assert metrics_schema["vars"] == "FLOAT"
-    assert metrics_schema["vars_sma_20"] == "FLOAT"
 
     # tickers schema
     assert tickers_schema["ticker"] == "VARCHAR"
@@ -426,87 +363,6 @@ def test_append_raw_db_sorted(tmp_path: Path, sample_bars_df: pl.DataFrame) -> N
     assert len(rows) == len(sample_bars_df) * 2
 
 
-def test_write_consumer_db_hvcs_table_created(
-    tmp_path: Path,
-    sample_bars_df: pl.DataFrame,
-    sample_metrics_df: pl.DataFrame,
-    sample_tickers_df: pl.DataFrame,
-    sample_hvcs_df: pl.DataFrame,
-) -> None:
-    """write_consumer_db() with hvcs kwarg creates 4th daily_hvcs table."""
-    db_path = tmp_path / "tickerlake.duckdb"
-    write_consumer_db(
-        sample_bars_df,
-        sample_metrics_df,
-        sample_tickers_df,
-        db_path,
-        hvcs=sample_hvcs_df,
-    )
-
-    con = duckdb.connect(str(db_path), read_only=True)
-    tables = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
-    con.close()
-
-    assert "daily_hvcs" in tables
-    assert len(tables) == 4
-
-
-def test_write_consumer_db_hvcs_schema(
-    tmp_path: Path,
-    sample_bars_df: pl.DataFrame,
-    sample_metrics_df: pl.DataFrame,
-    sample_tickers_df: pl.DataFrame,
-    sample_hvcs_df: pl.DataFrame,
-) -> None:
-    """HVC table schema: DATE, VARCHAR, FLOAT columns, BOOLEAN for is_up_day."""
-    db_path = tmp_path / "tickerlake.duckdb"
-    write_consumer_db(
-        sample_bars_df,
-        sample_metrics_df,
-        sample_tickers_df,
-        db_path,
-        hvcs=sample_hvcs_df,
-    )
-
-    con = duckdb.connect(str(db_path), read_only=True)
-    schema = {row[0]: row[1] for row in con.execute("DESCRIBE daily_hvcs").fetchall()}
-    con.close()
-
-    assert schema["date"] == "DATE"
-    assert schema["ticker"] == "VARCHAR"
-    assert schema["close"] == "FLOAT"
-    assert schema["volume"] == "FLOAT"
-    assert schema["volume_multiplier"] == "FLOAT"
-    assert schema["is_up_day"] == "BOOLEAN"
-    assert schema["rs"] == "FLOAT"
-
-
-def test_write_consumer_db_hvcs_row_count(
-    tmp_path: Path,
-    sample_bars_df: pl.DataFrame,
-    sample_metrics_df: pl.DataFrame,
-    sample_tickers_df: pl.DataFrame,
-    sample_hvcs_df: pl.DataFrame,
-) -> None:
-    """HVC table has the same number of rows as the sample_hvcs_df input."""
-    db_path = tmp_path / "tickerlake.duckdb"
-    write_consumer_db(
-        sample_bars_df,
-        sample_metrics_df,
-        sample_tickers_df,
-        db_path,
-        hvcs=sample_hvcs_df,
-    )
-
-    con = duckdb.connect(str(db_path), read_only=True)
-    row = con.execute("SELECT COUNT(*) FROM daily_hvcs").fetchone()
-    con.close()
-
-    assert row is not None
-    count = row[0]
-    assert count == len(sample_hvcs_df)
-
-
 def test_write_consumer_db_hvcs_none_no_table(
     tmp_path: Path,
     sample_bars_df: pl.DataFrame,
@@ -549,7 +405,6 @@ def test_write_consumer_db_weekly_tables_created(
     sample_bars_df: pl.DataFrame,
     sample_metrics_df: pl.DataFrame,
     sample_tickers_df: pl.DataFrame,
-    sample_hvcs_df: pl.DataFrame,
 ) -> None:
     """Weekly tables exist when weekly params are provided."""
     db_path = tmp_path / "tickerlake.duckdb"
@@ -558,17 +413,14 @@ def test_write_consumer_db_weekly_tables_created(
         sample_metrics_df,
         sample_tickers_df,
         db_path,
-        hvcs=sample_hvcs_df,
         weekly_bars=sample_bars_df,
         weekly_metrics=sample_metrics_df,
-        weekly_hvcs=sample_hvcs_df,
     )
     con = duckdb.connect(str(db_path), read_only=True)
     tables = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
     con.close()
     assert "weekly_bars" in tables
     assert "weekly_metrics" in tables
-    assert "weekly_hvcs" in tables
 
 
 def test_write_consumer_db_weekly_tables_optional(
@@ -649,28 +501,6 @@ def test_write_consumer_db_weekly_metrics_sorted(
     )
     con = duckdb.connect(str(db_path), read_only=True)
     rows = con.execute("SELECT ticker, date FROM weekly_metrics").fetchall()
-    con.close()
-    assert rows == sorted(rows)
-
-
-def test_write_consumer_db_weekly_hvcs_sorted(
-    tmp_path: Path,
-    sample_bars_df: pl.DataFrame,
-    sample_metrics_df: pl.DataFrame,
-    sample_tickers_df: pl.DataFrame,
-    sample_hvcs_df: pl.DataFrame,
-) -> None:
-    """weekly_hvcs is sorted by (ticker, date)."""
-    db_path = tmp_path / "tickerlake.duckdb"
-    write_consumer_db(
-        sample_bars_df,
-        sample_metrics_df,
-        sample_tickers_df,
-        db_path,
-        weekly_hvcs=sample_hvcs_df,
-    )
-    con = duckdb.connect(str(db_path), read_only=True)
-    rows = con.execute("SELECT ticker, date FROM weekly_hvcs").fetchall()
     con.close()
     assert rows == sorted(rows)
 
@@ -786,105 +616,6 @@ def test_get_existing_dates_missing_table_returns_empty(tmp_path: Path) -> None:
     result = get_existing_dates(db_path)
 
     assert result == set()
-
-
-@pytest.fixture
-def sample_hvc_vwap_anchors_df() -> pl.DataFrame:
-    """Create a sample HVC VWAP anchors DataFrame."""
-    return pl.DataFrame(
-        {
-            "ticker": ["AAPL", "MSFT"],
-            "anchor_date": [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)],
-            "date": [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)],
-            "vwap_value": [151.5, 382.5],
-        }
-    ).cast(
-        {
-            "ticker": pl.Utf8,
-            "anchor_date": pl.Date,
-            "date": pl.Date,
-            "vwap_value": pl.Float32,
-        }
-    )
-
-
-def test_write_consumer_db_hvc_vwap_anchors_table_created(
-    tmp_path: Path,
-    sample_bars_df: pl.DataFrame,
-    sample_metrics_df: pl.DataFrame,
-    sample_tickers_df: pl.DataFrame,
-    sample_hvc_vwap_anchors_df: pl.DataFrame,
-) -> None:
-    """write_consumer_db() with hvc_vwap_anchors kwarg creates table."""
-    db_path = tmp_path / "tickerlake.duckdb"
-    write_consumer_db(
-        sample_bars_df,
-        sample_metrics_df,
-        sample_tickers_df,
-        db_path,
-        hvc_vwap_anchors=sample_hvc_vwap_anchors_df,
-    )
-
-    con = duckdb.connect(str(db_path), read_only=True)
-    tables = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
-    con.close()
-
-    assert "hvc_vwap_anchors" in tables
-
-
-def test_write_consumer_db_hvc_vwap_anchors_schema(
-    tmp_path: Path,
-    sample_bars_df: pl.DataFrame,
-    sample_metrics_df: pl.DataFrame,
-    sample_tickers_df: pl.DataFrame,
-    sample_hvc_vwap_anchors_df: pl.DataFrame,
-) -> None:
-    """hvc_vwap_anchors table has correct schema: DATE, VARCHAR, FLOAT columns."""
-    db_path = tmp_path / "tickerlake.duckdb"
-    write_consumer_db(
-        sample_bars_df,
-        sample_metrics_df,
-        sample_tickers_df,
-        db_path,
-        hvc_vwap_anchors=sample_hvc_vwap_anchors_df,
-    )
-
-    con = duckdb.connect(str(db_path), read_only=True)
-    schema = {
-        row[0]: row[1] for row in con.execute("DESCRIBE hvc_vwap_anchors").fetchall()
-    }
-    con.close()
-
-    assert schema["ticker"] == "VARCHAR"
-    assert schema["anchor_date"] == "DATE"
-    assert schema["date"] == "DATE"
-    assert schema["vwap_value"] == "FLOAT"
-
-
-def test_write_consumer_db_hvc_vwap_anchors_row_count(
-    tmp_path: Path,
-    sample_bars_df: pl.DataFrame,
-    sample_metrics_df: pl.DataFrame,
-    sample_tickers_df: pl.DataFrame,
-    sample_hvc_vwap_anchors_df: pl.DataFrame,
-) -> None:
-    """hvc_vwap_anchors table has the same number of rows as input."""
-    db_path = tmp_path / "tickerlake.duckdb"
-    write_consumer_db(
-        sample_bars_df,
-        sample_metrics_df,
-        sample_tickers_df,
-        db_path,
-        hvc_vwap_anchors=sample_hvc_vwap_anchors_df,
-    )
-
-    con = duckdb.connect(str(db_path), read_only=True)
-    row = con.execute("SELECT COUNT(*) FROM hvc_vwap_anchors").fetchone()
-    con.close()
-
-    assert row is not None
-    count = row[0]
-    assert count == len(sample_hvc_vwap_anchors_df)
 
 
 def test_get_db_info_table_without_date_column(tmp_path: Path) -> None:

@@ -109,13 +109,10 @@ def write_consumer_db(
     tickers: pl.DataFrame,
     path: Path,
     *,
-    hvcs: pl.DataFrame | None = None,
-    hvc_vwap_anchors: pl.DataFrame | None = None,
     weekly_bars: pl.DataFrame | None = None,
     weekly_metrics: pl.DataFrame | None = None,
-    weekly_hvcs: pl.DataFrame | None = None,
 ) -> None:
-    """Write bars, metrics, tickers, and optionally HVC, VWAP anchors, and weekly DataFrames to consumer DuckDB file."""  # noqa: E501
+    """Write bars, metrics, tickers, and optionally weekly DataFrames to consumer DuckDB file."""  # noqa: E501
     with (
         _tmp_parquet(bars) as bars_tmp,
         _tmp_parquet(metrics) as metrics_tmp,
@@ -134,18 +131,6 @@ def write_consumer_db(
             "CREATE OR REPLACE TABLE tickers AS "
             f"{_read_parquet_sql(tickers_tmp, 'ticker')}"
         )
-        if hvcs is not None:
-            with _tmp_parquet(hvcs) as hvcs_tmp:
-                con.execute(
-                    "CREATE OR REPLACE TABLE daily_hvcs AS "
-                    f"{_read_parquet_sql(hvcs_tmp, 'ticker, date')}"
-                )
-        if hvc_vwap_anchors is not None:
-            with _tmp_parquet(hvc_vwap_anchors) as vwap_tmp:
-                con.execute(
-                    "CREATE OR REPLACE TABLE hvc_vwap_anchors AS "
-                    f"{_read_parquet_sql(vwap_tmp, 'ticker, anchor_date, date')}"
-                )
         if weekly_bars is not None:
             with _tmp_parquet(weekly_bars) as wb_tmp:
                 con.execute(
@@ -157,12 +142,6 @@ def write_consumer_db(
                 con.execute(
                     "CREATE OR REPLACE TABLE weekly_metrics AS "
                     f"{_read_parquet_sql(wm_tmp, 'ticker, date')}"
-                )
-        if weekly_hvcs is not None:
-            with _tmp_parquet(weekly_hvcs) as wh_tmp:
-                con.execute(
-                    "CREATE OR REPLACE TABLE weekly_hvcs AS "
-                    f"{_read_parquet_sql(wh_tmp, 'ticker, date')}"
                 )
         con.execute("CHECKPOINT")
         con.close()

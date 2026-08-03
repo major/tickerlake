@@ -7,7 +7,7 @@
 
 ## OVERVIEW
 
-US equity market ETL pipeline. Pulls OHLCV bars, splits, and ticker metadata from Massive API (Polygon.io-compatible), adjusts for splits, computes technical indicators (SMA-50/200, ATR, RS, VARS), detects High Volume Catalyst (HVC) events, computes HVC-anchored VWAPs, and stores in DuckDB. Python 3.14 + Polars + DuckDB.
+US equity market ETL pipeline. Pulls OHLCV bars, splits, and ticker metadata from Massive API (Polygon.io-compatible), adjusts for splits, computes technical indicators (SMA-50/200, ATR, ADR%), and stores in DuckDB. Python 3.14 + Polars + DuckDB.
 
 ## STRUCTURE
 
@@ -19,7 +19,7 @@ tickerlake/
 │   ├── client.py       # Thin wrapper around massive.RESTClient
 │   ├── calendar.py     # NYSE trading day calendar via exchange_calendars
 │   ├── extract.py      # API objects -> polars DataFrames (schema-driven)
-│   ├── transform.py    # Split adjustment, ticker filtering, SMA metrics, HVC detection, HVC-anchored VWAPs
+│   ├── transform.py    # Split adjustment, ticker filtering, SMA/ATR metrics
 │   ├── load.py         # DuckDB I/O via temporary parquet intermediaries
 │   └── pipeline.py     # Orchestrates E->T->L for backfill/update/info
 ├── tests/              # 1:1 test files per module + conftest fixtures
@@ -84,8 +84,6 @@ uv run ty check src/                             # Type check
 
 - **MASSIVE_API_KEY** env var is required -- `Config.__post_init__` raises `ValueError` if missing
 - **Two DuckDB files**: `raw.duckdb` (raw bars) and `tickerlake.duckdb` (adjusted bars + metrics + tickers)
-- **Consumer DB tables**: `daily_bars`, `daily_metrics`, `tickers`, `daily_hvcs`, `hvc_vwap_anchors`, `weekly_bars`, `weekly_metrics`, `weekly_hvcs`
-- **HVC detection**: volume >= 3x volume_sma_20, close >= $5.00, with warmup guards
-- **HVC-anchored VWAPs**: normalized table `(ticker, date, anchor_date, vwap_value)` computing forward VWAP from each qualifying HVC (volume_sma_20 >= 1M floor). One row per active VWAP per trading day.
+- **Consumer DB tables**: `daily_bars`, `daily_metrics`, `tickers`, `weekly_bars`, `weekly_metrics`
 - **Update is incremental and revision-aware**: delegates to the backfill sequence (`_run_backfill(config, bars_start=...)`) with the bars-fetch start narrowed to a trailing `_REVISION_WINDOW_DAYS`-day window of already-cached dates (fetch-then-swap: fetch first, then delete+replace only the dates Massive actually returned data for in that window), so revisions Massive makes to already-published bars (up to ~5 trading days back) get picked up on the next run. Splits/tickers extraction always covers the full `config.start_date`-`config.end_date` range regardless. Consumer db is always fully rebuilt from raw.duckdb.
 - **Python 3.14 only**: `requires-python = ">=3.14,<3.15"` -- uses modern syntax throughout
