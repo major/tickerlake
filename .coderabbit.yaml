@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Inherits and merges with github.com/major/coderabbit (central config).
+# Only tickerlake-specific additions/overrides belong here.
+inheritance: true
+
+reviews:
+  pre_merge_checks:
+    custom_checks:
+      - name: "no-pandas-dataframes"
+        mode: warning
+        instructions: |
+          This pipeline is Polars-only. Flag any use of pandas DataFrames in
+          src/ or tests/. pandas is an allowed transitive dependency solely
+          for tz-naive pd.Timestamp objects in calendar.py -- nothing else.
+
+      - name: "utc-tzinfo-to-exchange-calendars"
+        mode: error
+        instructions: |
+          Flag any call into exchange_calendars (schedule lookups, valid-day
+          checks, etc.) that passes a tz-aware datetime.timezone.utc value or
+          a datetime/Timestamp constructed with tzinfo=UTC. exchange_calendars
+          raises AttributeError on aware UTC input; only tz-naive pd.Timestamp
+          objects are safe. See calendar.py.
+
+      - name: "duckdb-connection-lifecycle"
+        mode: warning
+        instructions: |
+          duckdb.connect() has no context-manager support in this codebase's
+          usage. Flag any duckdb.connect() call that is not paired with
+          con.close() in a try/finally (or otherwise guaranteed to close on
+          every exit path, including exceptions).
+
+      - name: "named-temp-parquet-cleanup"
+        mode: warning
+        instructions: |
+          Flag tempfile.NamedTemporaryFile usage for parquet intermediaries
+          that sets delete=True, or that omits delete=False plus a
+          Path.unlink(missing_ok=True) cleanup in a finally block. The path
+          must remain usable after the file handle is closed and before
+          DuckDB reads/writes it.
+
+      - name: "float-precision-for-prices"
+        mode: warning
+        instructions: |
+          OHLCV price/volume columns should use Float32 to save space.
+          Float64 is reserved for split-adjustment factors and other
+          multiplicative accumulators where precision compounds. Flag new
+          columns that reverse this convention without justification.
+
+      - name: "schema-dict-cast-pattern"
+        mode: warning
+        instructions: |
+          New columns or data sources in extract.py/transform.py should
+          define an explicit {"col": pl.Type} schema dict and apply it via
+          .cast(schema) rather than relying on Polars' inferred dtypes.
+
+      - name: "functional-etl-no-classes"
+        mode: warning
+        instructions: |
+          transform.py and extract.py favor pure functions (DataFrame in,
+          DataFrame out) with no base classes or inheritance. Flag new class
+          hierarchies or stateful objects introduced where a pure function
+          would do, outside of Config's dataclass.
+
+  path_instructions:
+    - path: "src/tickerlake/load.py"
+      instructions: |
+        DuckDB I/O review:
+        - Every duckdb.connect() must be closed via con.close() in a finally
+          block, including on write/query failures.
+        - Parquet intermediaries must use NamedTemporaryFile(delete=False)
+          and unlink(missing_ok=True) in finally; never delete=True.
+        - New DuckDB tables belong in write_consumer_db() following the
+          existing _tmp_parquet context-manager pattern.
+
+    - path: "src/tickerlake/calendar.py"
+      instructions: |
+        exchange_calendars review:
+        - Never pass datetime.timezone.utc (or any tz-aware value) into the
+          XNYS calendar; use tz-naive pd.Timestamp only.
+        - pandas usage here is limited to pd.Timestamp construction, not
+          DataFrame operations.
+
+    - path: "src/tickerlake/extract.py"
+      instructions: |
+        Extraction review:
+        - New API sources should define a schema dict and a
+          _*_to_row()/extract_*() pair, matching existing sources.
+        - Confirm Float32 is used for price/volume columns and Float64 is
+          reserved for adjustment-factor-style fields.
+        - No pandas DataFrames; Polars only.
+
+    - path: "src/tickerlake/transform.py"
+      instructions: |
+        Transform review:
+        - Keep transformations as pure functions: pl.DataFrame in,
+          pl.DataFrame out, no shared mutable state or classes.
+        - Split-adjustment, ticker-filtering, and SMA/ATR/ADR% logic should
+          stay independently testable and composable.
+        - No pandas DataFrames; Polars only.
+
+    - path: "src/tickerlake/config.py"
+      instructions: |
+        Config review:
+        - Keep Config as a @dataclass with __post_init__ validation; do not
+          introduce Pydantic or other validation frameworks.
+        - MASSIVE_API_KEY and other required env vars must raise ValueError
+          (not silently default) when missing.
+
+    - path: "src/tickerlake/pipeline.py"
+      instructions: |
+        Pipeline orchestration review:
+        - Preserve the Extract -> Transform -> Load ordering and the
+          incremental/revision-aware update flow (trailing revision window,
+          fetch-then-swap on already-cached dates).
+        - Use the module-level `logger = logging.getLogger(__name__)`
+          pattern for new log statements; no print().
+
+    - path: "tests/**/*.py"
+      instructions: |
+        tickerlake test review:
+        - All external deps (Massive API, DuckDB, filesystem) must be mocked;
+          prefer patch.multiple() for pipeline-level tests.
+        - Reuse shared fixtures from tests/conftest.py (sample_bars_df,
+          sample_splits_df, sample_tickers_df) instead of redefining
+          equivalent data inline.
+        - New tests must not regress the 95% coverage gate or the
+          xenon A/B complexity gate enforced in CI.
+
+    - path: "pyproject.toml"
+      instructions: |
+        Flag ruff ignore-list or per-file-ignore additions that aren't
+        justified by a comment, and any relaxation of the xenon
+        (--max-absolute B --max-modules B --max-average A) or
+        pytest-cov (--cov-fail-under=95) gates without discussion.
