@@ -99,23 +99,23 @@ def sample_metrics():
         {
             "date": [datetime.date(2024, 1, 2), datetime.date(2024, 1, 2)],
             "ticker": ["AAPL", "MSFT"],
+            "sma_20": [None, None],
             "sma_50": [None, None],
             "sma_200": [None, None],
             "atr_14": [None, None],
             "atr_pct": [None, None],
             "adr_pct": [None, None],
-            "sma50_atr_distance": [None, None],
             "volume_sma_20": [None, None],
         }
     ).cast(
         {
             "date": pl.Date,
+            "sma_20": pl.Float32,
             "sma_50": pl.Float32,
             "sma_200": pl.Float32,
             "atr_14": pl.Float32,
             "atr_pct": pl.Float32,
             "adr_pct": pl.Float32,
-            "sma50_atr_distance": pl.Float32,
             "volume_sma_20": pl.Float32,
         }
     )
