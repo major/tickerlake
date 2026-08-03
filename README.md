@@ -2,6 +2,45 @@
 
 ETL pipeline for US equity market data. Fetches daily OHLCV bars, stock splits, and ticker metadata from the [Massive API](https://github.com/Massive-Algo/massive), adjusts prices for splits, computes technical indicators, and stores everything in DuckDB.
 
+## Pipeline
+
+```mermaid
+flowchart LR
+    API["Massive API<br/>(Polygon-compatible)"]
+    Calendar["NYSE trading days<br/>(exchange_calendars)"]
+
+    subgraph EX["Extract (extract.py + client.py)"]
+        Client["client.py<br/>MassiveClient"]
+        Bars["OHLCV bars"]
+        Splits["stock splits"]
+        Tickers["ticker metadata"]
+    end
+
+    subgraph TR["Transform (transform.py)"]
+        Adjust["adjust_splits<br/>(split-adjust bars)"]
+        Metrics["compute_metrics<br/>SMA-20 / 50 / 200<br/>ATR-14, ATR%, ADR%<br/>volume_sma_20"]
+    end
+
+    subgraph LD["Load (load.py)"]
+        Raw[("raw.duckdb<br/>raw_daily_bars")]
+        Consumer[("tickerlake.duckdb<br/>daily_bars, daily_metrics,<br/>tickers + weekly/monthly")]
+    end
+
+    API --> Client
+    Calendar -.-> Client
+    Client --> Bars
+    Client --> Splits
+    Client --> Tickers
+
+    Bars --> Raw
+    Bars --> Adjust
+    Splits --> Adjust
+    Adjust --> Metrics
+    Adjust --> Consumer
+    Metrics --> Consumer
+    Tickers --> Consumer
+```
+
 ## Setup
 
 Requires Python 3.14 and a `MASSIVE_API_KEY` environment variable.
