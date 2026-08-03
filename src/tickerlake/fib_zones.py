@@ -216,8 +216,8 @@ def _find_most_recent_unswept_leg(
     if pivots.is_empty():
         return None
 
-    low_pivots = (
-        pivots.filter(pl.col("pivot_type") == "low").sort("date", descending=True)
+    low_pivots = pivots.filter(pl.col("pivot_type") == "low").sort(
+        "date", descending=True
     )
     if low_pivots.is_empty():
         return None
