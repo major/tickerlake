@@ -473,6 +473,19 @@ def test_aggregate_to_monthly_values_and_last_trading_day():
     assert january["transactions"] == 21
 
 
+def test_aggregate_to_period_empty_input_weekly_and_monthly():
+    """Empty bars short-circuit to DAILY_AGGS_SCHEMA for both weekly and monthly."""
+    empty_bars = pl.DataFrame(schema=BARS_SCHEMA)
+
+    weekly = aggregate_to_weekly(empty_bars)
+    monthly = aggregate_to_monthly(empty_bars)
+
+    for result in (weekly, monthly):
+        assert result.is_empty()
+        assert result.columns == list(DAILY_AGGS_SCHEMA.keys())
+        assert result.dtypes == list(DAILY_AGGS_SCHEMA.values())
+
+
 def test_bars_for_timeframe_daily_weekly_monthly():
     bars = make_metric_bars(
         {"AAPL": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]},
