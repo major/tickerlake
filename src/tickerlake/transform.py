@@ -2,7 +2,6 @@ import polars as pl
 
 from tickerlake.extract import DAILY_AGGS_SCHEMA
 
-
 PRICE_COLUMNS = ("open", "high", "low", "close", "vwap")
 
 

@@ -51,7 +51,7 @@ TICKERS_SCHEMA = {
 def _agg_to_row(agg) -> dict:
     return {
         "date": datetime.datetime.fromtimestamp(
-            agg.timestamp / 1000, tz=datetime.timezone.utc
+            agg.timestamp / 1000, tz=datetime.UTC
         ).date(),
         "ticker": agg.ticker,
         "open": agg.open,
@@ -112,8 +112,8 @@ def extract_daily_aggs(
         for date in dates:
             try:
                 aggs = client.fetch_daily_aggs(date)
-            except Exception:
-                logger.warning("Skipping %s (API error)", date)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Skipping %s (API error: %s)", date, e)
                 progress.update(task, description=f"Skipping {date}...", advance=1)
                 continue
             logger.debug("Fetching %s... %d tickers", date, len(aggs))

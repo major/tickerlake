@@ -7,7 +7,6 @@ import polars as pl
 
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
 
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 

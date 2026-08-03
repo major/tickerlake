@@ -21,11 +21,10 @@ class TestApiKey:
 
     def test_missing_api_key_raises(self) -> None:
         """Config() without env var raises ValueError with clear message."""
-        with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(
-                ValueError, match="MASSIVE_API_KEY environment variable is required"
-            ):
-                Config()
+        with patch.dict(os.environ, {}, clear=True), pytest.raises(
+            ValueError, match="MASSIVE_API_KEY environment variable is required"
+        ):
+            Config()
 
 
 class TestDates:
@@ -35,7 +34,7 @@ class TestDates:
         """start_date defaults to 5 years ago from today."""
         with patch.dict(os.environ, {"MASSIVE_API_KEY": "test"}):
             config = Config()
-            today = datetime.date.today()
+            today = datetime.datetime.now(tz=datetime.UTC).date()
             expected = today.replace(year=today.year - 5)
             assert config.start_date == expected
             assert isinstance(config.start_date, datetime.date)
@@ -44,7 +43,7 @@ class TestDates:
         """end_date defaults to today."""
         with patch.dict(os.environ, {"MASSIVE_API_KEY": "test"}):
             config = Config()
-            today = datetime.date.today()
+            today = datetime.datetime.now(tz=datetime.UTC).date()
             assert config.end_date == today
             assert isinstance(config.end_date, datetime.date)
 

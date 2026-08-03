@@ -4,6 +4,8 @@ import datetime
 import logging
 from pathlib import Path
 
+import polars as pl
+
 from tickerlake.calendar import get_trading_days
 from tickerlake.client import MassiveClient
 from tickerlake.config import Config
@@ -20,15 +22,13 @@ from tickerlake.load import (
     write_splits,
 )
 from tickerlake.transform import (
-    aggregate_to_weekly,
     adjust_splits,
+    aggregate_to_weekly,
     compute_hvc_vwap_anchors,
     compute_metrics,
     detect_hvcs,
     filter_tickers,
 )
-
-import polars as pl
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +210,9 @@ def update(config: Config) -> None:
         return
 
     existing_bars = read_raw_db(raw_path)
-    max_date: datetime.date = existing_bars["date"].max()  # type: ignore[assignment]
+    max_date_val = existing_bars["date"].max()
+    assert isinstance(max_date_val, datetime.date), f"Expected date, got {type(max_date_val)}"
+    max_date: datetime.date = max_date_val
     next_day = max_date + datetime.timedelta(days=1)
 
     dates = get_trading_days(next_day, config.end_date)

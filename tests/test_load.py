@@ -9,8 +9,8 @@ import pytest
 
 from tickerlake.load import (
     append_raw_db,
-    delete_raw_dates,
     compact_raw_db,
+    delete_raw_dates,
     get_db_info,
     get_existing_dates,
     read_raw_db,

@@ -1,6 +1,7 @@
 """Thin wrapper around massive.RESTClient for the tickerlake pipeline."""
 
 import datetime
+from typing import Any, cast
 
 from massive import RESTClient
 
@@ -14,16 +15,19 @@ class MassiveClient:
         """Initialize with Config, creating the underlying RESTClient."""
         self._client = RESTClient(api_key=config.api_key)
 
-    def fetch_daily_aggs(self, date: datetime.date) -> list:
+    def fetch_daily_aggs(self, date: datetime.date) -> list[Any]:
         """Fetch grouped daily aggregates for all tickers on a given date."""
-        return self._client.get_grouped_daily_aggs(
-            date=date,
-            adjusted=False,
-            market_type="stocks",
-            include_otc=False,
+        return cast(
+            list[Any],
+            self._client.get_grouped_daily_aggs(
+                date=date,
+                adjusted=False,
+                market_type="stocks",
+                include_otc=False,
+            ),
         )
 
-    def fetch_splits(self, start_date: datetime.date, end_date: datetime.date) -> list:
+    def fetch_splits(self, start_date: datetime.date, end_date: datetime.date) -> list[Any]:
         """Fetch stock splits in the given date range."""
         return list(
             self._client.list_stocks_splits(
@@ -32,9 +36,9 @@ class MassiveClient:
             )
         )
 
-    def fetch_tickers(self, types: list[str]) -> list:
+    def fetch_tickers(self, types: list[str]) -> list[Any]:
         """Fetch ticker reference data for the given ticker types (e.g. CS, ETF)."""
-        result = []
+        result: list[Any] = []
         for ticker_type in types:
             result.extend(
                 self._client.list_tickers(

@@ -24,16 +24,14 @@ def get_trading_days(
         List of datetime.date objects representing trading days.
     """
     if end_date is None:
-        end_date = datetime.datetime.now(tz=datetime.timezone.utc).date()
+        end_date = datetime.datetime.now(tz=datetime.UTC).date()
 
     cal = ec.get_calendar("XNYS")
 
-    # CRITICAL: use tz-naive Timestamps — stdlib datetime.timezone.utc
+    # CRITICAL: use string dates — stdlib datetime.timezone.utc
     # causes AttributeError: 'datetime.timezone' object has no attribute 'key'
-    start_ts = pd.Timestamp(start_date)
-    end_ts = pd.Timestamp(end_date)
-
-    sessions = cal.sessions_in_range(start_ts, end_ts)
+    # and pd.Timestamp can return NaTType which exchange_calendars doesn't accept
+    sessions = cal.sessions_in_range(str(start_date), str(end_date))
 
     # Current time as tz-aware for comparison with session_close (which is tz-aware UTC)
     now = pd.Timestamp.now(tz="UTC")

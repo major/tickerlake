@@ -21,11 +21,13 @@ class Config:
     api_key: str = field(default="")
     output_dir: Path = field(default_factory=Path.cwd)
     start_date: datetime.date = field(
-        default_factory=lambda: datetime.date.today().replace(
-            year=datetime.date.today().year - 5
+        default_factory=lambda: datetime.datetime.now(tz=datetime.UTC).date().replace(
+            year=datetime.datetime.now(tz=datetime.UTC).date().year - 5
         )
     )
-    end_date: datetime.date = field(default_factory=datetime.date.today)
+    end_date: datetime.date = field(
+        default_factory=lambda: datetime.datetime.now(tz=datetime.UTC).date()
+    )
     ticker_types: list[str] = field(
         default_factory=lambda: ["CS", "ETF", "ETV", "ETN", "ADRC"]
     )

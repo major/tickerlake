@@ -13,8 +13,8 @@ from rich.logging import RichHandler
 # partially-initialised package (circular import).
 console = Console(stderr=True)
 
-from tickerlake.config import Config  # noqa: E402
-from tickerlake import pipeline  # noqa: E402
+from tickerlake import pipeline
+from tickerlake.config import Config
 
 
 def _parse_date(s: str) -> datetime.date:

@@ -2,7 +2,6 @@
 
 import datetime
 
-
 from tickerlake.calendar import get_trading_days
 
 
@@ -55,7 +54,7 @@ class TestGetTradingDays:
 
     def test_end_date_none(self) -> None:
         """When end_date=None, returns days up to today."""
-        today = datetime.datetime.now(tz=datetime.timezone.utc).date()
+        today = datetime.datetime.now(tz=datetime.UTC).date()
         result = get_trading_days(
             datetime.date(2024, 1, 2),
             end_date=None,

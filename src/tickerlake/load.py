@@ -1,12 +1,15 @@
 """Write polars DataFrames to DuckDB files with correct schema types."""
 
 import datetime
+import logging
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
 import duckdb
 import polars as pl
+
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -66,8 +69,8 @@ def delete_raw_dates(path: Path, dates: set[datetime.date]) -> None:
         if con is not None:
             try:
                 con.close()
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Failed to close connection: %s", e)
 
 
 def read_raw_db(path: Path) -> pl.DataFrame:
@@ -99,8 +102,8 @@ def get_existing_dates(path: Path) -> set[datetime.date]:
         if con is not None:
             try:
                 con.close()
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Failed to close connection: %s", e)
         return set()
 
 
