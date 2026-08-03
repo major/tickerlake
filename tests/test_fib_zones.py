@@ -472,10 +472,40 @@ def test_compute_weekly_fib_zones_all_eligible_ticker_missing_from_bars() -> Non
 
 def test_compute_weekly_fib_zones_all_successful_path() -> None:
     """Eligible ticker with a valid V-shape produces a row in the result."""
-    highs = [20.0, 18.0, 15.0, 12.0, 11.0, 10.0, 10.0, 14.0, 20.0,
-             25.0, 30.0, 28.0, 24.0, 20.0, 14.0]
-    lows = [18.0, 15.0, 12.0, 10.0, 9.0, 8.0, 8.0, 12.0, 18.0,
-            22.0, 28.0, 25.0, 21.0, 18.0, 12.0]
+    highs = [
+        20.0,
+        18.0,
+        15.0,
+        12.0,
+        11.0,
+        10.0,
+        10.0,
+        14.0,
+        20.0,
+        25.0,
+        30.0,
+        28.0,
+        24.0,
+        20.0,
+        14.0,
+    ]
+    lows = [
+        18.0,
+        15.0,
+        12.0,
+        10.0,
+        9.0,
+        8.0,
+        8.0,
+        12.0,
+        18.0,
+        22.0,
+        28.0,
+        25.0,
+        21.0,
+        18.0,
+        12.0,
+    ]
     dates = [datetime.date(2024, 1, 1) + datetime.timedelta(weeks=i) for i in range(15)]
     closes = [(h + lo) / 2 for h, lo in zip(highs, lows, strict=True)]
     bars = pl.DataFrame(
