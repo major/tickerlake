@@ -8,8 +8,52 @@ from typing import TYPE_CHECKING
 import duckdb
 import polars as pl
 
+from tickerlake.extract import DAILY_AGGS_SCHEMA, TICKERS_SCHEMA
+
 if TYPE_CHECKING:
     import datetime
+
+
+_METRICS_SCHEMA = {
+    "date": pl.Date,
+    "ticker": pl.Utf8,
+    "sma_20": pl.Float32,
+    "sma_50": pl.Float32,
+    "sma_200": pl.Float32,
+    "atr_14": pl.Float32,
+    "atr_pct": pl.Float32,
+    "adr_pct": pl.Float32,
+    "volume_sma_20": pl.Float32,
+}
+
+
+def _validate_schema(
+    table: str, df: pl.DataFrame, expected: dict[str, pl.DataType]
+) -> None:
+    """Validate a DataFrame schema before writing a DuckDB table."""
+    mismatches = _schema_mismatches(dict(df.schema), expected)
+
+    if mismatches:
+        msg = f"{table} schema mismatch: {'; '.join(mismatches)}"
+        raise ValueError(msg)
+
+
+def _schema_mismatches(
+    actual: dict[str, pl.DataType], expected: dict[str, pl.DataType]
+) -> list[str]:
+    missing = [col for col in expected if col not in actual]
+    extra = [col for col in actual if col not in expected]
+    wrong_dtype = [
+        f"{col}: expected {dtype}, got {actual[col]}"
+        for col, dtype in expected.items()
+        if col in actual and actual[col] != dtype
+    ]
+
+    return [
+        *([f"missing columns: {', '.join(missing)}"] if missing else []),
+        *([f"unexpected columns: {', '.join(extra)}"] if extra else []),
+        *wrong_dtype,
+    ]
 
 
 @contextmanager
@@ -115,6 +159,18 @@ def write_consumer_db(
     monthly_metrics: pl.DataFrame | None = None,
 ) -> None:
     """Write bars, metrics, tickers, and optional period DataFrames to consumer DuckDB file."""  # noqa: E501
+    _validate_schema("daily_bars", bars, DAILY_AGGS_SCHEMA)
+    _validate_schema("daily_metrics", metrics, _METRICS_SCHEMA)
+    _validate_schema("tickers", tickers, TICKERS_SCHEMA)
+    if weekly_bars is not None:
+        _validate_schema("weekly_bars", weekly_bars, DAILY_AGGS_SCHEMA)
+    if weekly_metrics is not None:
+        _validate_schema("weekly_metrics", weekly_metrics, _METRICS_SCHEMA)
+    if monthly_bars is not None:
+        _validate_schema("monthly_bars", monthly_bars, DAILY_AGGS_SCHEMA)
+    if monthly_metrics is not None:
+        _validate_schema("monthly_metrics", monthly_metrics, _METRICS_SCHEMA)
+
     with (
         _tmp_parquet(bars) as bars_tmp,
         _tmp_parquet(metrics) as metrics_tmp,
