@@ -10,6 +10,7 @@ PIVOTS_SCHEMA = {
     "price": pl.Float32,
     "confirmed_at": pl.Date,
 }
+VALID_TIMEFRAMES = frozenset({"daily", "weekly", "monthly"})
 
 
 def adjust_splits(bars: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
@@ -242,7 +243,7 @@ def bars_for_timeframe(bars: pl.DataFrame, timeframe: str) -> pl.DataFrame:
         return aggregate_to_weekly(bars)
     if timeframe == "monthly":
         return aggregate_to_monthly(bars)
-    msg = "timeframe must be one of: daily, weekly, monthly"
+    msg = f"timeframe must be one of: {', '.join(sorted(VALID_TIMEFRAMES))}"
     raise ValueError(msg)
 
 
@@ -307,6 +308,10 @@ def find_pivots(bars: pl.DataFrame, *, k: int = 4) -> pl.DataFrame:
     if bars.is_empty():
         return pl.DataFrame(schema=PIVOTS_SCHEMA)
 
+    return _find_pivots_non_empty(bars, k)
+
+
+def _find_pivots_non_empty(bars: pl.DataFrame, k: int) -> pl.DataFrame:
     sorted_bars = bars.sort(["ticker", "date"])
     prior_highs = _shifted_expressions("high", k)
     next_highs = _shifted_expressions("high", k, forward=True)
@@ -333,4 +338,8 @@ def find_pivots(bars: pl.DataFrame, *, k: int = 4) -> pl.DataFrame:
     high_pivots = _select_pivots(classified, "is_pivot_high", "high", "high")
     low_pivots = _select_pivots(classified, "is_pivot_low", "low", "low")
 
-    return pl.concat([high_pivots, low_pivots]).sort(["ticker", "date", "pivot_type"])
+    return (
+        pl.concat([high_pivots, low_pivots])
+        .sort(["ticker", "date", "pivot_type"])
+        .cast(PIVOTS_SCHEMA)  # ty: ignore[invalid-argument-type]
+    )

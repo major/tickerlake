@@ -23,6 +23,7 @@ from tickerlake.load import (
     write_splits,
 )
 from tickerlake.transform import (
+    VALID_TIMEFRAMES,
     adjust_splits,
     aggregate_to_monthly,
     aggregate_to_weekly,
@@ -253,8 +254,8 @@ def find_ticker_pivots(
     if k < 1:
         msg = "k must be >= 1"
         raise ValueError(msg)
-    if timeframe not in {"daily", "weekly", "monthly"}:
-        msg = "timeframe must be one of: daily, weekly, monthly"
+    if timeframe not in VALID_TIMEFRAMES:
+        msg = f"timeframe must be one of: {', '.join(sorted(VALID_TIMEFRAMES))}"
         raise ValueError(msg)
     bars = read_adjusted_daily_bars_for_ticker(
         config.output_dir / "tickerlake.duckdb", ticker
