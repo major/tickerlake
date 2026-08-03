@@ -133,6 +133,7 @@ def pipeline_mocks():
         extract_tickers=DEFAULT,
         adjust_splits=DEFAULT,
         filter_tickers=DEFAULT,
+        aggregate_to_monthly=DEFAULT,
         aggregate_to_weekly=DEFAULT,
         compute_metrics=DEFAULT,
         delete_raw_dates=DEFAULT,
@@ -155,6 +156,7 @@ def _wire_defaults(mocks, sample_bars, sample_splits, sample_tickers, sample_met
     mocks["extract_tickers"].return_value = sample_tickers
     mocks["adjust_splits"].return_value = sample_bars
     mocks["filter_tickers"].return_value = sample_bars
+    mocks["aggregate_to_monthly"].return_value = sample_bars
     mocks["aggregate_to_weekly"].return_value = sample_bars
     mocks["compute_metrics"].return_value = sample_metrics
     mocks["delete_raw_dates"].return_value = None
@@ -201,7 +203,7 @@ def test_backfill_calls_transform_in_order(
     pipeline_mocks["filter_tickers"].assert_called_once()
     assert pipeline_mocks["filter_tickers"].call_args[0][1] is sample_tickers
 
-    assert pipeline_mocks["compute_metrics"].call_count == 2
+    assert pipeline_mocks["compute_metrics"].call_count == 3
 
 
 def test_backfill_calls_write_raw_db(
@@ -1018,10 +1020,10 @@ def test_backfill_calls_aggregate_to_weekly(
     assert call_args[0][0] is sample_bars
 
 
-def test_backfill_computes_weekly_metrics(
+def test_backfill_calls_aggregate_to_monthly(
     pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
 ):
-    """Backfill computes metrics for daily and weekly bars."""
+    """Backfill calls aggregate_to_monthly with the filtered bars."""
     from tickerlake.pipeline import backfill
 
     _wire_defaults(
@@ -1029,7 +1031,24 @@ def test_backfill_computes_weekly_metrics(
     )
     backfill(_make_config(tmp_path))
 
-    assert pipeline_mocks["compute_metrics"].call_count == 2
+    pipeline_mocks["aggregate_to_monthly"].assert_called_once()
+    call_args = pipeline_mocks["aggregate_to_monthly"].call_args
+    assert call_args is not None
+    assert call_args[0][0] is sample_bars
+
+
+def test_backfill_computes_weekly_metrics(
+    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
+):
+    """Backfill computes metrics for daily, weekly, and monthly bars."""
+    from tickerlake.pipeline import backfill
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    backfill(_make_config(tmp_path))
+
+    assert pipeline_mocks["compute_metrics"].call_count == 3
 
 
 def test_backfill_passes_weekly_to_consumer_db(
@@ -1055,6 +1074,8 @@ def test_backfill_passes_weekly_to_consumer_db(
     call_kwargs = pipeline_mocks["write_consumer_db"].call_args.kwargs
     assert "weekly_bars" in call_kwargs
     assert "weekly_metrics" in call_kwargs
+    assert "monthly_bars" in call_kwargs
+    assert "monthly_metrics" in call_kwargs
 
 
 def test_update_calls_aggregate_to_weekly(
@@ -1070,6 +1091,7 @@ def test_update_calls_aggregate_to_weekly(
     update(_make_config(tmp_path))
 
     pipeline_mocks["aggregate_to_weekly"].assert_called_once()
+    pipeline_mocks["aggregate_to_monthly"].assert_called_once()
 
 
 def test_update_passes_weekly_to_consumer_db(
@@ -1096,6 +1118,8 @@ def test_update_passes_weekly_to_consumer_db(
     call_kwargs = pipeline_mocks["write_consumer_db"].call_args.kwargs
     assert "weekly_bars" in call_kwargs
     assert "weekly_metrics" in call_kwargs
+    assert "monthly_bars" in call_kwargs
+    assert "monthly_metrics" in call_kwargs
 
 
 def test_backfill_persists_splits(

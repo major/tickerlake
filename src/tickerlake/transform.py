@@ -171,24 +171,20 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def aggregate_to_weekly(bars: pl.DataFrame) -> pl.DataFrame:
-    """Aggregate daily OHLCV bars into weekly bars per ticker.
-
-    Weekly grouping is based on each row's calendar Friday for the ISO week.
-    The output date is the actual last trading day present in that ticker-week.
-    """
+def _aggregate_to_period(bars: pl.DataFrame, every: str) -> pl.DataFrame:
+    """Aggregate daily OHLCV bars into calendar periods per ticker."""
     if bars.is_empty():
         return pl.DataFrame(schema=DAILY_AGGS_SCHEMA)
 
-    sorted_bars = bars.sort(["ticker", "date"])
-    bars_with_week_end = sorted_bars.with_columns(
-        (pl.col("date") + pl.duration(days=(4 - pl.col("date").dt.weekday()))).alias(
-            "week_end"
-        )
-    )
-
     return (
-        bars_with_week_end.group_by(["ticker", "week_end"])
+        bars.sort(["ticker", "date"])
+        .group_by_dynamic(
+            "date",
+            every=every,
+            period=every,
+            group_by="ticker",
+            start_by="monday" if every == "1w" else "window",
+        )
         .agg(
             [
                 pl.col("open").sort_by("date").first().cast(pl.Float32).alias("open"),
@@ -196,12 +192,37 @@ def aggregate_to_weekly(bars: pl.DataFrame) -> pl.DataFrame:
                 pl.col("low").min().cast(pl.Float32).alias("low"),
                 pl.col("close").sort_by("date").last().cast(pl.Float32).alias("close"),
                 pl.col("volume").sum().cast(pl.Float32).alias("volume"),
-                pl.col("vwap").sort_by("date").last().cast(pl.Float32).alias("vwap"),
+                pl.when(pl.col("volume").sum() == 0)
+                .then(None)
+                .otherwise(
+                    (pl.col("vwap") * pl.col("volume")).sum() / pl.col("volume").sum()
+                )
+                .cast(pl.Float32)
+                .alias("vwap"),
                 pl.col("transactions").sum().cast(pl.UInt32).alias("transactions"),
-                pl.col("date").max().alias("date"),
+                pl.col("date").max().alias("period_date"),
             ]
         )
-        .drop("week_end")
+        .drop("date")
+        .rename({"period_date": "date"})
         .sort(["ticker", "date"])
         .select(list(DAILY_AGGS_SCHEMA.keys()))
     )
+
+
+def aggregate_to_weekly(bars: pl.DataFrame) -> pl.DataFrame:
+    """Aggregate daily OHLCV bars into weekly bars per ticker.
+
+    Weekly grouping is by calendar week. The output date is the actual last
+    trading day present in that ticker-week.
+    """
+    return _aggregate_to_period(bars, "1w")
+
+
+def aggregate_to_monthly(bars: pl.DataFrame) -> pl.DataFrame:
+    """Aggregate daily OHLCV bars into monthly bars per ticker.
+
+    Monthly grouping is by calendar month. The output date is the actual last
+    trading day present in that ticker-month.
+    """
+    return _aggregate_to_period(bars, "1mo")

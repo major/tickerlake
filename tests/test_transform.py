@@ -13,6 +13,7 @@ filter_tickers = transform.filter_tickers
 _compute_atr = transform._compute_atr
 _compute_adr_pct = transform._compute_adr_pct
 aggregate_to_weekly = transform.aggregate_to_weekly
+aggregate_to_monthly = transform.aggregate_to_monthly
 DAILY_AGGS_SCHEMA = extract.DAILY_AGGS_SCHEMA
 
 
@@ -184,7 +185,14 @@ class TestAggregateToWeekly:
         assert row["low"] == pytest.approx(97.0)
         assert row["close"] == pytest.approx(103.0)
         assert row["volume"] == pytest.approx(6000.0)
-        assert row["vwap"] == pytest.approx(102.8)
+        expected_vwap = (
+            (100.7 * 1000.0)
+            + (103.1 * 1100.0)
+            + (100.2 * 1200.0)
+            + (101.5 * 1300.0)
+            + (102.8 * 1400.0)
+        ) / 6000.0
+        assert row["vwap"] == pytest.approx(expected_vwap)
         assert row["transactions"] == 60
         assert row["date"] == datetime.date(2024, 1, 12)
 
@@ -412,6 +420,66 @@ class TestAggregateToWeekly:
         empty_bars = pl.DataFrame(schema=BARS_SCHEMA)
 
         result = aggregate_to_weekly(empty_bars)
+
+        assert result.is_empty()
+        assert result.columns == list(DAILY_AGGS_SCHEMA.keys())
+        assert result.dtypes == list(DAILY_AGGS_SCHEMA.values())
+
+
+class TestAggregateToMonthly:
+    def test_groups_by_calendar_month_with_actual_last_trading_day(self):
+        bars = make_bars(
+            [
+                {
+                    "date": datetime.date(2024, 1, 30),
+                    "ticker": "AAPL",
+                    "open": 100.0,
+                    "high": 102.0,
+                    "low": 99.0,
+                    "close": 101.0,
+                    "volume": 1000.0,
+                    "vwap": 100.7,
+                    "transactions": 10,
+                },
+                {
+                    "date": datetime.date(2024, 1, 31),
+                    "ticker": "AAPL",
+                    "open": 101.0,
+                    "high": 105.0,
+                    "low": 100.0,
+                    "close": 104.0,
+                    "volume": 1100.0,
+                    "vwap": 103.1,
+                    "transactions": 11,
+                },
+                {
+                    "date": datetime.date(2024, 2, 1),
+                    "ticker": "AAPL",
+                    "open": 104.0,
+                    "high": 106.0,
+                    "low": 98.0,
+                    "close": 99.0,
+                    "volume": 1200.0,
+                    "vwap": 100.2,
+                    "transactions": 12,
+                },
+            ]
+        )
+
+        result = aggregate_to_monthly(bars)
+
+        assert result["date"].to_list() == [
+            datetime.date(2024, 1, 31),
+            datetime.date(2024, 2, 1),
+        ]
+        assert result["volume"].to_list() == pytest.approx([2100.0, 1200.0])
+        expected_january_vwap = ((100.7 * 1000.0) + (103.1 * 1100.0)) / 2100.0
+        assert result["vwap"].to_list() == pytest.approx([expected_january_vwap, 100.2])
+        assert result.columns == list(DAILY_AGGS_SCHEMA.keys())
+        assert result.dtypes == list(DAILY_AGGS_SCHEMA.values())
+
+    def test_empty_input(self):
+        result = aggregate_to_monthly(pl.DataFrame(schema=BARS_SCHEMA))
 
         assert result.is_empty()
         assert result.columns == list(DAILY_AGGS_SCHEMA.keys())

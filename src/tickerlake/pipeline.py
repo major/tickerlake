@@ -23,6 +23,7 @@ from tickerlake.load import (
 )
 from tickerlake.transform import (
     adjust_splits,
+    aggregate_to_monthly,
     aggregate_to_weekly,
     compute_metrics,
     filter_tickers,
@@ -183,6 +184,10 @@ def _run_backfill(config: Config, *, bars_start: datetime.date | None = None) ->
     weekly_bars = aggregate_to_weekly(bars)
     logger.info("Computing weekly metrics...")
     weekly_metrics = compute_metrics(weekly_bars)
+    logger.info("Aggregating monthly bars...")
+    monthly_bars = aggregate_to_monthly(bars)
+    logger.info("Computing monthly metrics...")
+    monthly_metrics = compute_metrics(monthly_bars)
 
     logger.info("Writing consumer DB to %s...", consumer_path)
     write_consumer_db(
@@ -192,6 +197,8 @@ def _run_backfill(config: Config, *, bars_start: datetime.date | None = None) ->
         consumer_path,
         weekly_bars=weekly_bars,
         weekly_metrics=weekly_metrics,
+        monthly_bars=monthly_bars,
+        monthly_metrics=monthly_metrics,
     )
 
     n_tickers = bars["ticker"].n_unique()
