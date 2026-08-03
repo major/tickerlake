@@ -24,9 +24,7 @@ from tickerlake.load import (
 from tickerlake.transform import (
     adjust_splits,
     aggregate_to_weekly,
-    compute_hvc_vwap_anchors,
     compute_metrics,
-    detect_hvcs,
     filter_tickers,
 )
 
@@ -179,19 +177,12 @@ def _run_backfill(config: Config, *, bars_start: datetime.date | None = None) ->
     _verify_split_adjustment(all_bars, bars, splits)
     logger.info("Filtering to known tickers...")
     bars = filter_tickers(bars, tickers)
-    logger.info("Computing metrics (SMA-50, SMA-200, ATR-14, ATR%%, RS, VARS)...")
+    logger.info("Computing metrics (SMA-50, SMA-200, ATR-14, ATR%%)...")
     metrics = compute_metrics(bars)
-    hvcs = detect_hvcs(bars, metrics)
-    logger.info("Detected %d high-volume catalyst events.", len(hvcs))
-    logger.info("Computing HVC-anchored VWAPs...")
-    hvc_vwap_anchors = compute_hvc_vwap_anchors(bars, hvcs)
-    logger.info("Computed %d HVC VWAP anchor rows.", len(hvc_vwap_anchors))
     logger.info("Aggregating weekly bars...")
     weekly_bars = aggregate_to_weekly(bars)
     logger.info("Computing weekly metrics...")
     weekly_metrics = compute_metrics(weekly_bars)
-    logger.info("Detecting weekly HVCs...")
-    weekly_hvcs = detect_hvcs(weekly_bars, weekly_metrics)
 
     logger.info("Writing consumer DB to %s...", consumer_path)
     write_consumer_db(
@@ -199,11 +190,8 @@ def _run_backfill(config: Config, *, bars_start: datetime.date | None = None) ->
         metrics,
         tickers,
         consumer_path,
-        hvcs=hvcs,
-        hvc_vwap_anchors=hvc_vwap_anchors,
         weekly_bars=weekly_bars,
         weekly_metrics=weekly_metrics,
-        weekly_hvcs=weekly_hvcs,
     )
 
     n_tickers = bars["ticker"].n_unique()
