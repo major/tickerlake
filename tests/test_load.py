@@ -759,3 +759,145 @@ def test_delete_then_append_no_duplicates(
     assert row_counts["count"].max() == 1
     # Verify the round-trip didn't silently drop rows
     assert len(result) == len(sample_bars_df)
+
+
+def test_delete_raw_dates_missing_table(tmp_path: Path) -> None:
+    """delete_raw_dates() handles CatalogException when table doesn't exist."""
+    db_path = tmp_path / "empty.duckdb"
+    # Create an empty DuckDB file with no tables
+    con = duckdb.connect(str(db_path))
+    con.close()
+
+    # Should not raise, just silently return
+    delete_raw_dates(db_path, {datetime.date(2024, 1, 2)})
+
+    # File should still exist
+    assert db_path.exists()
+
+
+def test_get_existing_dates_missing_table_returns_empty(tmp_path: Path) -> None:
+    """get_existing_dates() returns empty set when table doesn't exist."""
+    db_path = tmp_path / "empty.duckdb"
+    # Create an empty DuckDB file with an unrelated table
+    con = duckdb.connect(str(db_path))
+    con.execute("CREATE TABLE unrelated (x INT)")
+    con.close()
+
+    result = get_existing_dates(db_path)
+
+    assert result == set()
+
+
+@pytest.fixture
+def sample_hvc_vwap_anchors_df() -> pl.DataFrame:
+    """Create a sample HVC VWAP anchors DataFrame."""
+    return pl.DataFrame(
+        {
+            "ticker": ["AAPL", "MSFT"],
+            "anchor_date": [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)],
+            "date": [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)],
+            "vwap_value": [151.5, 382.5],
+        }
+    ).cast(
+        {
+            "ticker": pl.Utf8,
+            "anchor_date": pl.Date,
+            "date": pl.Date,
+            "vwap_value": pl.Float32,
+        }
+    )
+
+
+def test_write_consumer_db_hvc_vwap_anchors_table_created(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+    sample_hvc_vwap_anchors_df: pl.DataFrame,
+) -> None:
+    """write_consumer_db() with hvc_vwap_anchors kwarg creates table."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    write_consumer_db(
+        sample_bars_df,
+        sample_metrics_df,
+        sample_tickers_df,
+        db_path,
+        hvc_vwap_anchors=sample_hvc_vwap_anchors_df,
+    )
+
+    con = duckdb.connect(str(db_path), read_only=True)
+    tables = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
+    con.close()
+
+    assert "hvc_vwap_anchors" in tables
+
+
+def test_write_consumer_db_hvc_vwap_anchors_schema(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+    sample_hvc_vwap_anchors_df: pl.DataFrame,
+) -> None:
+    """hvc_vwap_anchors table has correct schema: DATE, VARCHAR, FLOAT columns."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    write_consumer_db(
+        sample_bars_df,
+        sample_metrics_df,
+        sample_tickers_df,
+        db_path,
+        hvc_vwap_anchors=sample_hvc_vwap_anchors_df,
+    )
+
+    con = duckdb.connect(str(db_path), read_only=True)
+    schema = {
+        row[0]: row[1] for row in con.execute("DESCRIBE hvc_vwap_anchors").fetchall()
+    }
+    con.close()
+
+    assert schema["ticker"] == "VARCHAR"
+    assert schema["anchor_date"] == "DATE"
+    assert schema["date"] == "DATE"
+    assert schema["vwap_value"] == "FLOAT"
+
+
+def test_write_consumer_db_hvc_vwap_anchors_row_count(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+    sample_hvc_vwap_anchors_df: pl.DataFrame,
+) -> None:
+    """hvc_vwap_anchors table has the same number of rows as input."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    write_consumer_db(
+        sample_bars_df,
+        sample_metrics_df,
+        sample_tickers_df,
+        db_path,
+        hvc_vwap_anchors=sample_hvc_vwap_anchors_df,
+    )
+
+    con = duckdb.connect(str(db_path), read_only=True)
+    row = con.execute("SELECT COUNT(*) FROM hvc_vwap_anchors").fetchone()
+    con.close()
+
+    assert row is not None
+    count = row[0]
+    assert count == len(sample_hvc_vwap_anchors_df)
+
+
+def test_get_db_info_table_without_date_column(tmp_path: Path) -> None:
+    """get_db_info() handles tables without a date column."""
+    db_path = tmp_path / "test.duckdb"
+    con = duckdb.connect(str(db_path))
+    con.execute("CREATE TABLE no_date_col (id INT, name VARCHAR)")
+    con.execute("INSERT INTO no_date_col VALUES (1, 'test')")
+    con.close()
+
+    info = get_db_info(db_path)
+
+    assert "no_date_col" in info["tables"]
+    assert info["row_counts"]["no_date_col"] == 1
+    # Table without date column should not appear in date_range
+    assert "no_date_col" not in info.get("date_range", {})

@@ -914,6 +914,208 @@ def test_verify_split_adjustment_skips_extreme_splits():
     _verify_split_adjustment(raw, raw, splits)
 
 
+def test_verify_split_adjustment_skips_duplicate_ticker():
+    """Spot check skips second split for same ticker (if ticker in seen: continue)."""
+    from tickerlake.pipeline import _verify_split_adjustment
+
+    raw = pl.DataFrame(
+        {
+            "date": [datetime.date(2024, 1, 10), datetime.date(2024, 1, 10)],
+            "ticker": ["AAPL", "AAPL"],
+            "close": [400.0, 400.0],
+        }
+    ).cast({"date": pl.Date, "close": pl.Float32})
+    adjusted = raw.with_columns(pl.col("close") * 0.25)
+    # Two splits for AAPL, both in the sample range
+    splits = pl.DataFrame(
+        {
+            "ticker": ["AAPL", "AAPL"],
+            "execution_date": [datetime.date(2024, 1, 15), datetime.date(2024, 1, 16)],
+            "adjustment_factor": [0.25, 0.30],
+        }
+    ).cast({"execution_date": pl.Date, "adjustment_factor": pl.Float64})
+
+    # Should not raise; second AAPL split is skipped due to seen check
+    _verify_split_adjustment(raw, adjusted, splits)
+
+
+def test_verify_split_adjustment_skips_no_pre_split_bars():
+    """Spot check skips split when ticker has no bars before execution_date."""
+    from tickerlake.pipeline import _verify_split_adjustment
+
+    raw = pl.DataFrame(
+        {
+            "date": [datetime.date(2024, 1, 20)],
+            "ticker": ["AAPL"],
+            "close": [400.0],
+        }
+    ).cast({"date": pl.Date, "close": pl.Float32})
+    adjusted = raw.with_columns(pl.col("close") * 0.25)
+    # Split execution is before any bars
+    splits = pl.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "execution_date": [datetime.date(2024, 1, 15)],
+            "adjustment_factor": [0.25],
+        }
+    ).cast({"execution_date": pl.Date, "adjustment_factor": pl.Float64})
+
+    # Should not raise; pre_split is empty so continue
+    _verify_split_adjustment(raw, adjusted, splits)
+
+
+def test_verify_split_adjustment_skips_missing_adjusted_row():
+    """Spot check skips when adjusted_bars missing row at check_date."""
+    from tickerlake.pipeline import _verify_split_adjustment
+
+    raw = pl.DataFrame(
+        {
+            "date": [datetime.date(2024, 1, 10)],
+            "ticker": ["AAPL"],
+            "close": [400.0],
+        }
+    ).cast({"date": pl.Date, "close": pl.Float32})
+    # Adjusted bars missing the AAPL row
+    adjusted = pl.DataFrame(
+        {
+            "date": [datetime.date(2024, 1, 10)],
+            "ticker": ["MSFT"],
+            "close": [300.0],
+        }
+    ).cast({"date": pl.Date, "close": pl.Float32})
+    splits = pl.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "execution_date": [datetime.date(2024, 1, 15)],
+            "adjustment_factor": [0.25],
+        }
+    ).cast({"execution_date": pl.Date, "adjustment_factor": pl.Float64})
+
+    # Should not raise; adj_row is empty so continue
+    _verify_split_adjustment(raw, adjusted, splits)
+
+
+def test_verify_split_adjustment_early_exit_at_sample_size():
+    """Spot check exits early after verifying _SPOT_CHECK_SAMPLE_SIZE tickers."""
+    from tickerlake.pipeline import _verify_split_adjustment
+
+    # Create 6 tickers with bars and splits (more than _SPOT_CHECK_SAMPLE_SIZE=5)
+    tickers = ["AAPL", "MSFT", "GOOG", "AMZN", "TSLA", "META"]
+    raw_rows = [
+        {"date": datetime.date(2024, 1, 10), "ticker": ticker, "close": 400.0}
+        for ticker in tickers
+    ]
+    raw = pl.DataFrame(raw_rows).cast({"date": pl.Date, "close": pl.Float32})
+
+    # Adjusted with 0.25 factor
+    adjusted = raw.with_columns(pl.col("close") * 0.25)
+
+    # Create splits for all 6 tickers
+    split_rows = [
+        {
+            "ticker": ticker,
+            "execution_date": datetime.date(2024, 1, 15),
+            "adjustment_factor": 0.25,
+        }
+        for ticker in tickers
+    ]
+    splits = pl.DataFrame(split_rows).cast(
+        {"execution_date": pl.Date, "adjustment_factor": pl.Float64}
+    )
+
+    # Should verify exactly _SPOT_CHECK_SAMPLE_SIZE tickers and exit early
+    _verify_split_adjustment(raw, adjusted, splits)
+
+
+def test_backfill_refetches_cached_date_in_revision_window(
+    pipeline_mocks,
+    tmp_path,
+    sample_bars,
+    sample_splits,
+    sample_tickers,
+    sample_metrics,
+):
+    """Backfill re-fetches a cached date that falls inside the revision window."""
+    from tickerlake.pipeline import backfill
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    # Single trading day, already cached. With only one cached date, the
+    # trailing revision window (_REVISION_WINDOW_DAYS) always includes it,
+    # so fetch_dates is non-empty even though nothing is "missing".
+    trading_day = datetime.date(2024, 1, 2)
+    pipeline_mocks["get_trading_days"].return_value = [trading_day]
+    pipeline_mocks["get_existing_dates"].return_value = {trading_day}
+    pipeline_mocks["extract_daily_aggs"].return_value = pl.DataFrame(
+        schema={
+            "date": pl.Date,
+            "ticker": pl.Utf8,
+            "open": pl.Float32,
+            "high": pl.Float32,
+            "low": pl.Float32,
+            "close": pl.Float32,
+            "volume": pl.Float32,
+            "vwap": pl.Float32,
+            "transactions": pl.UInt32,
+        }
+    )
+
+    backfill(_make_config(tmp_path))
+
+    # The revision window forces a re-fetch of the single cached date.
+    pipeline_mocks["extract_daily_aggs"].assert_called_once()
+
+
+def test_compact_logs_before_and_after_sizes(
+    pipeline_mocks,
+    tmp_path,
+    sample_bars,
+    sample_splits,
+    sample_tickers,
+    sample_metrics,
+    caplog,
+):
+    """Compact logs file size before and after compaction."""
+    import logging
+
+    from tickerlake.pipeline import compact
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    config = _make_config(tmp_path)
+    raw_path = config.output_dir / "raw.duckdb"
+
+    # Create a real temp DuckDB file with some data
+    from tickerlake.load import write_raw_db
+
+    write_raw_db(sample_bars, raw_path)
+
+    with caplog.at_level(logging.INFO):
+        compact(config)
+
+    # Should log compacting message with before size
+    assert "Compacting" in caplog.text
+    assert "raw.duckdb" in caplog.text
+    # Should log done message with after size
+    assert "Done:" in caplog.text
+
+
+def test_compact_missing_raw_db(pipeline_mocks, tmp_path, caplog):
+    """Compact logs warning and returns when raw.duckdb doesn't exist."""
+    import logging
+
+    from tickerlake.pipeline import compact
+
+    config = _make_config(tmp_path)
+
+    with caplog.at_level(logging.WARNING):
+        compact(config)
+
+    assert "No raw.duckdb found" in caplog.text
+
+
 def test_update_calls_detect_hvcs(
     pipeline_mocks,
     tmp_path,

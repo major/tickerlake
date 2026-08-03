@@ -24,8 +24,7 @@ tickerlake/
 │   └── pipeline.py     # Orchestrates E->T->L for backfill/update/info
 ├── tests/              # 1:1 test files per module + conftest fixtures
 ├── .github/workflows/
-│   ├── daily.yml       # Cron 22:00 UTC weekdays, incremental update
-│   └── backfill.yml    # Manual dispatch, full historical load
+│   └── ci.yml          # Lint, format, complexity, test-cov on push to main + PRs
 ├── pyproject.toml      # uv_build backend, deps, dev tools
 └── uv.lock
 ```
@@ -43,7 +42,7 @@ tickerlake/
 | Config defaults | `config.py` | Dataclass fields + `__post_init__` validation |
 | Pipeline flow | `pipeline.py` | `_run_backfill()` has the full E->T->L sequence |
 | Shared test data | `tests/conftest.py` | 3 fixtures: `sample_bars_df`, `sample_splits_df`, `sample_tickers_df` |
-| CI/deployment | `.github/workflows/` | DuckDB files uploaded to GitHub "latest" release |
+| CI/deployment | `.github/workflows/ci.yml` | Runs `make check` (lint, format-check, complexity+xenon, test-cov) on push to main + PRs |
 
 ## CONVENTIONS
 
@@ -57,7 +56,9 @@ tickerlake/
 - **Functional ETL** -- pure functions, no base classes or inheritance
 - **Test fixtures** -- pytest fixtures (not helper functions) for reusable test data
 - **Mock-first tests** -- all external deps mocked; `patch.multiple()` for pipeline tests
-- **Dev tools**: ruff (lint/format), ty (type check), radon (complexity), vulture (dead code), pytest-cov, pytest-randomly
+- **Dev tools**: ruff (lint/format), ty (type check), radon (complexity), vulture (dead code), pytest-cov, pytest-randomly, xenon
+- **Coverage gate**: 95% minimum enforced via `pytest-cov --cov-fail-under=95` in CI
+- **Complexity gate**: A/B-only (per-function, per-module, and average) enforced via `xenon --max-absolute B --max-modules B --max-average A` in CI. Ruff's `mccabe`/`C901` rule (part of `select = ["ALL"]`, default `max-complexity = 10`) already flags per-function complexity above B at lint time as a first signal; `xenon` remains the authoritative radon-based gate because it also covers module-level and average complexity, which ruff does not.
 
 ## ANTI-PATTERNS
 
@@ -87,6 +88,4 @@ uv run ty check src/                             # Type check
 - **HVC detection**: volume >= 3x volume_sma_20, close >= $5.00, with warmup guards
 - **HVC-anchored VWAPs**: normalized table `(ticker, date, anchor_date, vwap_value)` computing forward VWAP from each qualifying HVC (volume_sma_20 >= 1M floor). One row per active VWAP per trading day.
 - **Update is incremental and revision-aware**: delegates to the backfill sequence (`_run_backfill(config, bars_start=...)`) with the bars-fetch start narrowed to a trailing `_REVISION_WINDOW_DAYS`-day window of already-cached dates (fetch-then-swap: fetch first, then delete+replace only the dates Massive actually returned data for in that window), so revisions Massive makes to already-published bars (up to ~5 trading days back) get picked up on the next run. Splits/tickers extraction always covers the full `config.start_date`-`config.end_date` range regardless. Consumer db is always fully rebuilt from raw.duckdb.
-- **No CI test step**: GitHub Actions only runs the data pipeline, not tests/linting
-- **Downstream notifications**: daily workflow can trigger `repository_dispatch` to a downstream repo via `DOWNSTREAM_PAT` secret
 - **Python 3.14 only**: `requires-python = ">=3.14,<3.15"` -- uses modern syntax throughout

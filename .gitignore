@@ -12,8 +12,17 @@ wheels/
 # DuckDB databases
 *.duckdb
 
+# Test/coverage artifacts
+.coverage
+htmlcov/
+
 # Sisyphus workflow
 .sisyphus/
 
 # Deepwork workflow state (git-local, OpenCode-readable)
 .slim/deepwork/
+
+# BEGIN oh-my-opencode-slim worktrees
+.slim/worktrees/
+.slim/worktrees.json
+# END oh-my-opencode-slim worktrees

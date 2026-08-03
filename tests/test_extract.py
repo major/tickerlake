@@ -217,3 +217,37 @@ def test_extract_tickers_empty_response():
 
     assert df.is_empty()
     assert df.schema == EXPECTED_TICKERS_SCHEMA
+
+
+def test_extract_daily_aggs_empty_dates_list():
+    """Empty dates list returns empty DataFrame without entering Progress."""
+    client = MagicMock()
+    df = extract_daily_aggs(client, [])
+
+    assert df.is_empty()
+    assert df.schema == EXPECTED_DAILY_AGGS_SCHEMA
+    # Client should never be called
+    client.fetch_daily_aggs.assert_not_called()
+
+
+def test_extract_daily_aggs_skips_failed_date():
+    """extract_daily_aggs skips failed dates and continues with others."""
+    client = MagicMock()
+    # First date raises, second date succeeds
+    client.fetch_daily_aggs.side_effect = [
+        Exception("API error"),
+        [
+            make_mock_agg(
+                "AAPL", 1704240000000, 186.0, 187.0, 185.0, 186.5, 51e6, 186.2, 1100
+            )
+        ],
+    ]
+    dates = [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)]
+    df = extract_daily_aggs(client, dates)
+
+    # Should have data from the second date only
+    assert len(df) == 1
+    assert df["date"][0] == datetime.date(2024, 1, 3)
+    assert df["ticker"][0] == "AAPL"
+    # Both dates should have been attempted
+    assert client.fetch_daily_aggs.call_count == 2

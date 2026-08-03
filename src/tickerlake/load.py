@@ -1,6 +1,5 @@
 """Write polars DataFrames to DuckDB files with correct schema types."""
 
-import logging
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -11,8 +10,6 @@ import polars as pl
 
 if TYPE_CHECKING:
     import datetime
-
-logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -63,18 +60,14 @@ def delete_raw_dates(path: Path, dates: set[datetime.date]) -> None:
     if not dates or not path.exists():
         return
 
-    con = None
+    con = duckdb.connect(str(path))
     try:
-        con = duckdb.connect(str(path))
         con.execute("DELETE FROM raw_daily_bars WHERE date IN ?", [sorted(dates)])
         con.execute("CHECKPOINT")
-        con.close()
     except duckdb.CatalogException:
-        if con is not None:
-            try:
-                con.close()
-            except Exception as e:  # noqa: BLE001
-                logger.debug("Failed to close connection: %s", e)
+        pass
+    finally:
+        con.close()
 
 
 def read_raw_db(path: Path) -> pl.DataFrame:
@@ -100,19 +93,14 @@ def get_existing_dates(path: Path) -> set[datetime.date]:
     """
     if not path.exists():
         return set()
-    con = None
+    con = duckdb.connect(str(path), read_only=True)
     try:
-        con = duckdb.connect(str(path), read_only=True)
         rows = con.execute("SELECT DISTINCT date FROM raw_daily_bars").fetchall()
-        con.close()
         return {row[0] for row in rows}
     except duckdb.CatalogException:
-        if con is not None:
-            try:
-                con.close()
-            except Exception as e:  # noqa: BLE001
-                logger.debug("Failed to close connection: %s", e)
         return set()
+    finally:
+        con.close()
 
 
 def write_consumer_db(
