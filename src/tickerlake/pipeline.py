@@ -1,6 +1,7 @@
 """ETL pipeline orchestration: backfill, update, and info commands."""
 
-import datetime
+from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING
 
@@ -30,6 +31,7 @@ from tickerlake.transform import (
 )
 
 if TYPE_CHECKING:
+    import datetime
     from pathlib import Path
 
     from tickerlake.config import Config
@@ -38,7 +40,9 @@ logger = logging.getLogger(__name__)
 
 _SPOT_CHECK_SAMPLE_SIZE = 5
 _SPOT_CHECK_TOLERANCE = 1e-3
-_BACKFILL_REFRESH_DAYS = 5
+# Massive revises published daily bars up to this many trading days after
+# initial publication; always refresh this trailing window on every run.
+_REVISION_WINDOW_DAYS = 5
 
 
 def _verify_split_adjustment(
@@ -100,9 +104,16 @@ def _verify_split_adjustment(
         )
 
 
-def _run_backfill(config: Config) -> None:
-    """Execute the full extract-transform-load backfill sequence."""
-    dates = get_trading_days(config.start_date, config.end_date)
+def _run_backfill(config: Config, *, bars_start: datetime.date | None = None) -> None:
+    """Execute the full extract-transform-load backfill sequence.
+
+    Args:
+        config: Configuration object.
+        bars_start: Optional start date for bars extraction. If None, uses
+                   config.start_date. Splits and tickers extraction always use
+                   config.start_date/config.end_date.
+    """
+    dates = get_trading_days(bars_start or config.start_date, config.end_date)
     if not dates:
         logger.warning("No trading days in the requested date range.")
         return
@@ -113,38 +124,41 @@ def _run_backfill(config: Config) -> None:
     requested_dates = set(dates)
     existing_dates = get_existing_dates(raw_path)
     cached_dates = existing_dates & requested_dates
-    refresh_dates = set(sorted(cached_dates)[-_BACKFILL_REFRESH_DAYS:])
-
-    if refresh_dates:
-        logger.info(
-            "Dropping %d cached trading days from raw DB for refresh (%s to %s).",
-            len(refresh_dates),
-            min(refresh_dates),
-            max(refresh_dates),
-        )
-        delete_raw_dates(raw_path, refresh_dates)
-        cached_dates -= refresh_dates
-
-    missing_dates = [d for d in dates if d not in cached_dates]
+    refresh_dates = set(sorted(cached_dates)[-_REVISION_WINDOW_DAYS:])
+    fetch_dates = (requested_dates - cached_dates) | refresh_dates
 
     logger.info(
         "Backfill: %s to %s (%d trading days, %d cached, %d to fetch)",
-        config.start_date,
+        bars_start or config.start_date,
         config.end_date,
         len(dates),
         len(cached_dates),
-        len(missing_dates),
+        len(fetch_dates),
     )
     client = MassiveClient(config)
 
-    if missing_dates and not existing_dates:
+    if fetch_dates and not existing_dates:
         logger.info("Extracting daily bars...")
-        raw_bars = extract_daily_aggs(client, missing_dates)
+        raw_bars = extract_daily_aggs(client, sorted(fetch_dates))
         logger.info("Writing raw DB to %s...", raw_path)
         write_raw_db(raw_bars, raw_path)
-    elif missing_dates:
-        logger.info("Extracting %d missing dates...", len(missing_dates))
-        new_raw_bars = extract_daily_aggs(client, missing_dates)
+    elif fetch_dates:
+        logger.info(
+            "Extracting %d dates (missing + refresh window)...", len(fetch_dates)
+        )
+        new_raw_bars = extract_daily_aggs(client, sorted(fetch_dates))
+
+        # Delete only the dates that are both actually present in the newly-fetched
+        # data AND already in the table (never delete a date the table doesn't have).
+        fetched_dates = set(new_raw_bars["date"].unique().to_list())
+        dates_to_delete = fetched_dates & existing_dates
+        if dates_to_delete:
+            logger.info(
+                "Deleting %d refreshed dates from raw DB before appending.",
+                len(dates_to_delete),
+            )
+            delete_raw_dates(raw_path, dates_to_delete)
+
         logger.info("Appending to raw DB at %s...", raw_path)
         append_raw_db(new_raw_bars, raw_path)
     else:
@@ -214,82 +228,22 @@ def update(config: Config) -> None:
         _run_backfill(config)
         return
 
-    existing_bars = read_raw_db(raw_path)
-    max_date_val = existing_bars["date"].max()
-    if not isinstance(max_date_val, datetime.date):
-        msg = f"Expected date, got {type(max_date_val)}"
-        raise TypeError(msg)
-    max_date: datetime.date = max_date_val
-    next_day = max_date + datetime.timedelta(days=1)
-
-    dates = get_trading_days(next_day, config.end_date)
-    if not dates:
-        logger.warning("Already up to date.")
+    cached_dates = get_existing_dates(raw_path)
+    if not cached_dates:
+        logger.warning("raw.duckdb exists but is empty, running backfill...")
+        _run_backfill(config)
         return
 
+    # Compute the start of the revision window: the earliest date in the last
+    # _REVISION_WINDOW_DAYS cached dates. Re-fetch from there to pick up any
+    # revisions Massive made to those dates.
+    window_start = min(sorted(cached_dates)[-_REVISION_WINDOW_DAYS:])
     logger.info(
-        "Update: %s to %s (%d new trading days)",
-        next_day,
+        "Update: re-fetching revision window from %s, then new dates through %s",
+        window_start,
         config.end_date,
-        len(dates),
     )
-    client = MassiveClient(config)
-
-    logger.info("Extracting new daily bars...")
-    new_bars = extract_daily_aggs(client, dates)
-    logger.info("Appending to raw DB...")
-    append_raw_db(new_bars, raw_path)
-
-    logger.info("Rebuilding consumer DB from full raw dataset...")
-    all_bars = read_raw_db(raw_path)
-    logger.info("Extracting splits (%s to %s)...", config.start_date, config.end_date)
-    splits = extract_splits(client, config.start_date, config.end_date)
-    logger.info("Persisting %d splits to %s...", len(splits), raw_path)
-    write_splits(splits, raw_path)
-    logger.info("Extracting tickers (types: %s)...", ", ".join(config.ticker_types))
-    tickers = extract_tickers(client, config.ticker_types)
-
-    logger.info("Adjusting for %d splits...", len(splits))
-    raw_bars = all_bars
-    all_bars = adjust_splits(all_bars, splits)
-    _verify_split_adjustment(raw_bars, all_bars, splits)
-    del raw_bars
-    logger.info("Filtering to known tickers...")
-    all_bars = filter_tickers(all_bars, tickers)
-    logger.info("Computing metrics (SMA-50, SMA-200, ATR-14, ATR%%, RS, VARS)...")
-    metrics = compute_metrics(all_bars)
-    hvcs = detect_hvcs(all_bars, metrics)
-    logger.info("Detected %d high-volume catalyst events.", len(hvcs))
-    logger.info("Computing HVC-anchored VWAPs...")
-    hvc_vwap_anchors = compute_hvc_vwap_anchors(all_bars, hvcs)
-    logger.info("Computed %d HVC VWAP anchor rows.", len(hvc_vwap_anchors))
-    logger.info("Aggregating weekly bars...")
-    weekly_bars = aggregate_to_weekly(all_bars)
-    logger.info("Computing weekly metrics...")
-    weekly_metrics = compute_metrics(weekly_bars)
-    logger.info("Detecting weekly HVCs...")
-    weekly_hvcs = detect_hvcs(weekly_bars, weekly_metrics)
-
-    consumer_path = config.output_dir / "tickerlake.duckdb"
-    logger.info("Writing consumer DB to %s...", consumer_path)
-    write_consumer_db(
-        all_bars,
-        metrics,
-        tickers,
-        consumer_path,
-        hvcs=hvcs,
-        hvc_vwap_anchors=hvc_vwap_anchors,
-        weekly_bars=weekly_bars,
-        weekly_metrics=weekly_metrics,
-        weekly_hvcs=weekly_hvcs,
-    )
-
-    n_tickers = all_bars["ticker"].n_unique()
-    logger.info(
-        "Update complete: %s bars, %s tickers",
-        f"{len(all_bars):,}",
-        f"{n_tickers:,}",
-    )
+    _run_backfill(config, bars_start=window_start)
 
 
 def _log_db_info(label: str, path: Path) -> None:

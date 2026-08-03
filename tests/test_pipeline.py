@@ -326,11 +326,15 @@ def test_backfill_skips_cached_dates(
         datetime.date(2024, 1, 3),
     ]
     pipeline_mocks["get_existing_dates"].return_value = {datetime.date(2024, 1, 2)}
+    # Mock extract_daily_aggs to return bars with both dates
+    pipeline_mocks["extract_daily_aggs"].return_value = sample_bars
 
     backfill(_make_config(tmp_path))
 
     call_args = pipeline_mocks["extract_daily_aggs"].call_args
     assert call_args[0][1] == [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)]
+    # delete_raw_dates should be called with the intersection of fetched_dates
+    # and existing_dates
     pipeline_mocks["delete_raw_dates"].assert_called_once_with(
         tmp_path / "raw.duckdb", {datetime.date(2024, 1, 2)}
     )
@@ -357,11 +361,19 @@ def test_backfill_refetches_latest_five_cached_days(
     ]
     pipeline_mocks["get_trading_days"].return_value = trading_days
     pipeline_mocks["get_existing_dates"].return_value = set(trading_days)
+    # Mock extract_daily_aggs to return bars with dates in the refresh window
+    # (last 5 trading days: 2024-01-03 through 2024-01-09)
+    bars_with_refresh_dates = sample_bars.with_columns(
+        pl.lit(datetime.date(2024, 1, 3)).alias("date")
+    )
+    pipeline_mocks["extract_daily_aggs"].return_value = bars_with_refresh_dates
 
     backfill(_make_config(tmp_path))
 
+    # delete_raw_dates should be called with dates that are in both fetched_dates
+    # and existing_dates
     pipeline_mocks["delete_raw_dates"].assert_called_once_with(
-        tmp_path / "raw.duckdb", set(trading_days[-5:])
+        tmp_path / "raw.duckdb", {datetime.date(2024, 1, 3)}
     )
     pipeline_mocks["extract_daily_aggs"].assert_called_once()
     assert pipeline_mocks["extract_daily_aggs"].call_args[0][1] == trading_days[-5:]
@@ -401,8 +413,11 @@ def test_backfill_cached_count_only_uses_requested_range(
     with caplog.at_level("INFO"):
         backfill(_make_config(tmp_path))
 
+    # Cached count should be 3 (intersection of existing and requested).
+    # Fetch count should be 3 (all of them are in the refresh window since there
+    # are only 3 total).
     assert (
-        "Backfill: 2024-01-01 to 2024-01-31 (3 trading days, 0 cached, 3 to fetch)"
+        "Backfill: 2024-01-01 to 2024-01-31 (3 trading days, 3 cached, 3 to fetch)"
         in caplog.text
     )
 
@@ -429,56 +444,92 @@ def test_backfill_no_cache(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def test_update_reads_existing_raw_db(
+def test_update_delegates_to_backfill(
     pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
 ):
-    """Update calls read_raw_db to get existing data."""
+    """Update delegates to _run_backfill when raw.duckdb exists with data."""
     from tickerlake.pipeline import update
 
     _wire_defaults(
         pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
     )
-    pipeline_mocks["read_raw_db"].return_value = sample_bars
+    trading_days = [
+        datetime.date(2024, 1, 2),
+        datetime.date(2024, 1, 3),
+        datetime.date(2024, 1, 4),
+        datetime.date(2024, 1, 5),
+        datetime.date(2024, 1, 8),
+    ]
+    pipeline_mocks["get_existing_dates"].return_value = set(trading_days)
+    pipeline_mocks["get_trading_days"].return_value = trading_days
 
     (tmp_path / "raw.duckdb").touch()
     update(_make_config(tmp_path))
 
-    pipeline_mocks["read_raw_db"].assert_called()
+    # Should call extract_daily_aggs (via _run_backfill)
+    pipeline_mocks["extract_daily_aggs"].assert_called_once()
 
 
-def test_update_fetches_only_new_days(
+def test_update_refetches_revision_window(
     pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
 ):
-    """Update only fetches days after max date in existing raw.duckdb."""
+    """Update re-fetches the trailing _REVISION_WINDOW_DAYS cached dates."""
     from tickerlake.pipeline import update
 
     _wire_defaults(
         pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
     )
-    pipeline_mocks["read_raw_db"].return_value = sample_bars
+    trading_days = [
+        datetime.date(2024, 1, 2),
+        datetime.date(2024, 1, 3),
+        datetime.date(2024, 1, 4),
+        datetime.date(2024, 1, 5),
+        datetime.date(2024, 1, 8),
+        datetime.date(2024, 1, 9),
+    ]
+    pipeline_mocks["get_existing_dates"].return_value = set(trading_days)
+    pipeline_mocks["get_trading_days"].return_value = trading_days
 
     (tmp_path / "raw.duckdb").touch()
     update(_make_config(tmp_path))
 
+    # Should call get_trading_days with the start of the revision window
+    # (min of last 5 cached dates = 2024-01-03)
     call_args = pipeline_mocks["get_trading_days"].call_args
     assert call_args[0][0] == datetime.date(2024, 1, 3)
 
 
-def test_update_appends_to_raw_db(
+def test_update_deletes_and_refetches_revision_window(
     pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
 ):
-    """Update calls append_raw_db with new bars."""
+    """Update deletes and re-fetches the trailing revision window dates."""
     from tickerlake.pipeline import update
 
     _wire_defaults(
         pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
     )
-    pipeline_mocks["read_raw_db"].return_value = sample_bars
+    trading_days = [
+        datetime.date(2024, 1, 2),
+        datetime.date(2024, 1, 3),
+        datetime.date(2024, 1, 4),
+        datetime.date(2024, 1, 5),
+        datetime.date(2024, 1, 8),
+    ]
+    pipeline_mocks["get_existing_dates"].return_value = set(trading_days)
+    pipeline_mocks["get_trading_days"].return_value = trading_days
+    # Mock extract_daily_aggs to return bars with all the trading days
+    pipeline_mocks["extract_daily_aggs"].return_value = sample_bars
 
     (tmp_path / "raw.duckdb").touch()
     config = _make_config(tmp_path)
     update(config)
 
+    # Should call delete_raw_dates with the revision window dates that are in
+    # the fetched data
+    pipeline_mocks["delete_raw_dates"].assert_called_once_with(
+        config.output_dir / "raw.duckdb", {datetime.date(2024, 1, 2)}
+    )
+    # Should call append_raw_db
     pipeline_mocks["append_raw_db"].assert_called_once()
     assert (
         pipeline_mocks["append_raw_db"].call_args[0][1]
@@ -486,17 +537,22 @@ def test_update_appends_to_raw_db(
     )
 
 
-def test_update_no_new_days(pipeline_mocks, tmp_path, sample_bars):
-    """If no new trading days, logs warning and skips fetching."""
+def test_update_empty_raw_db_falls_back_to_backfill(
+    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
+):
+    """If raw.duckdb exists but is empty, update falls back to backfill."""
     from tickerlake.pipeline import update
 
-    pipeline_mocks["read_raw_db"].return_value = sample_bars
-    pipeline_mocks["get_trading_days"].return_value = []
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    pipeline_mocks["get_existing_dates"].return_value = set()
 
     (tmp_path / "raw.duckdb").touch()
     update(_make_config(tmp_path))
 
-    pipeline_mocks["extract_daily_aggs"].assert_not_called()
+    # Should call write_raw_db (backfill path)
+    pipeline_mocks["write_raw_db"].assert_called_once()
 
 
 def test_update_falls_back_to_backfill(
@@ -516,6 +572,141 @@ def test_update_falls_back_to_backfill(
     update(_make_config(tmp_path))
 
     pipeline_mocks["write_raw_db"].assert_called_once()
+
+
+def test_update_fewer_than_window_refetches_all(
+    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
+):
+    """Update with fewer than _REVISION_WINDOW_DAYS cached dates refetches all."""
+    from tickerlake.pipeline import update
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    # Only 2 cached dates (less than 5)
+    cached_dates = {datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)}
+    pipeline_mocks["get_existing_dates"].return_value = cached_dates
+    pipeline_mocks["get_trading_days"].return_value = list(cached_dates)
+    pipeline_mocks["extract_daily_aggs"].return_value = sample_bars
+
+    (tmp_path / "raw.duckdb").touch()
+    update(_make_config(tmp_path))
+
+    # Should call get_trading_days with the min of all cached dates
+    call_args = pipeline_mocks["get_trading_days"].call_args
+    assert call_args[0][0] == datetime.date(2024, 1, 2)
+
+
+def test_update_api_failure_does_not_delete(
+    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
+):
+    """Update does NOT delete dates if API fails to return them."""
+    from tickerlake.pipeline import update
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    trading_days = [
+        datetime.date(2024, 1, 2),
+        datetime.date(2024, 1, 3),
+        datetime.date(2024, 1, 4),
+        datetime.date(2024, 1, 5),
+        datetime.date(2024, 1, 8),
+    ]
+    pipeline_mocks["get_existing_dates"].return_value = set(trading_days)
+    pipeline_mocks["get_trading_days"].return_value = trading_days
+
+    # Build a bars DataFrame spanning the revision window dates, but deliberately
+    # omit 2024-01-05 to simulate API failure for that date
+    partial_bars = pl.DataFrame(
+        {
+            "date": [
+                datetime.date(2024, 1, 2),
+                datetime.date(2024, 1, 2),
+                datetime.date(2024, 1, 3),
+                datetime.date(2024, 1, 3),
+                datetime.date(2024, 1, 4),
+                datetime.date(2024, 1, 4),
+                datetime.date(2024, 1, 8),
+                datetime.date(2024, 1, 8),
+            ],
+            "ticker": ["AAPL", "MSFT", "AAPL", "MSFT", "AAPL", "MSFT", "AAPL", "MSFT"],
+            "open": [150.0, 380.0, 151.0, 381.0, 152.0, 382.0, 155.0, 385.0],
+            "high": [152.0, 382.0, 153.0, 383.0, 154.0, 384.0, 157.0, 387.0],
+            "low": [149.0, 379.0, 150.0, 380.0, 151.0, 381.0, 154.0, 384.0],
+            "close": [151.5, 381.5, 152.5, 382.5, 153.5, 383.5, 156.5, 386.5],
+            "volume": [
+                1_000_000.0,
+                1_200_000.0,
+                1_100_000.0,
+                1_300_000.0,
+                1_050_000.0,
+                1_250_000.0,
+                1_075_000.0,
+                1_275_000.0,
+            ],
+            "vwap": [151.2, 381.2, 152.2, 382.2, 153.2, 383.2, 156.2, 386.2],
+            "transactions": [5000, 6000, 5500, 6500, 5250, 6250, 5375, 6375],
+        }
+    ).cast(
+        {
+            "date": pl.Date,
+            "open": pl.Float32,
+            "high": pl.Float32,
+            "low": pl.Float32,
+            "close": pl.Float32,
+            "volume": pl.Float32,
+            "vwap": pl.Float32,
+            "transactions": pl.UInt32,
+        }
+    )
+    pipeline_mocks["extract_daily_aggs"].return_value = partial_bars
+
+    (tmp_path / "raw.duckdb").touch()
+    update(_make_config(tmp_path))
+
+    # delete_raw_dates should be called with only the dates that are both in the
+    # fetched data AND already cached (i.e., all dates except 2024-01-05)
+    pipeline_mocks["delete_raw_dates"].assert_called_once_with(
+        tmp_path / "raw.duckdb",
+        {
+            datetime.date(2024, 1, 2),
+            datetime.date(2024, 1, 3),
+            datetime.date(2024, 1, 4),
+            datetime.date(2024, 1, 8),
+        },
+    )
+
+
+def test_update_calls_extract_splits_with_config_dates(
+    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
+):
+    """Update calls extract_splits with config dates, not narrowed bars_start."""
+    from tickerlake.pipeline import update
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    trading_days = [
+        datetime.date(2024, 1, 2),
+        datetime.date(2024, 1, 3),
+        datetime.date(2024, 1, 4),
+        datetime.date(2024, 1, 5),
+        datetime.date(2024, 1, 8),
+    ]
+    pipeline_mocks["get_existing_dates"].return_value = set(trading_days)
+    pipeline_mocks["get_trading_days"].return_value = trading_days
+    pipeline_mocks["extract_daily_aggs"].return_value = sample_bars
+
+    (tmp_path / "raw.duckdb").touch()
+    config = _make_config(tmp_path)
+    update(config)
+
+    # extract_splits should be called with config.start_date and config.end_date
+    # (signature: extract_splits(client, start_date, end_date))
+    call_args = pipeline_mocks["extract_splits"].call_args
+    assert call_args[0][1] == config.start_date
+    assert call_args[0][2] == config.end_date
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

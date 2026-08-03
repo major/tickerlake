@@ -86,7 +86,7 @@ uv run ty check src/                             # Type check
 - **Consumer DB tables**: `daily_bars`, `daily_metrics`, `tickers`, `daily_hvcs`, `hvc_vwap_anchors`, `weekly_bars`, `weekly_metrics`, `weekly_hvcs`
 - **HVC detection**: volume >= 3x volume_sma_20, close >= $5.00, with warmup guards
 - **HVC-anchored VWAPs**: normalized table `(ticker, date, anchor_date, vwap_value)` computing forward VWAP from each qualifying HVC (volume_sma_20 >= 1M floor). One row per active VWAP per trading day.
-- **Update is incremental**: reads max date from `raw.duckdb`, fetches only newer trading days, appends, then rebuilds consumer DB from scratch
+- **Update is incremental and revision-aware**: delegates to the backfill sequence (`_run_backfill(config, bars_start=...)`) with the bars-fetch start narrowed to a trailing `_REVISION_WINDOW_DAYS`-day window of already-cached dates (fetch-then-swap: fetch first, then delete+replace only the dates Massive actually returned data for in that window), so revisions Massive makes to already-published bars (up to ~5 trading days back) get picked up on the next run. Splits/tickers extraction always covers the full `config.start_date`-`config.end_date` range regardless. Consumer db is always fully rebuilt from raw.duckdb.
 - **No CI test step**: GitHub Actions only runs the data pipeline, not tests/linting
 - **Downstream notifications**: daily workflow can trigger `repository_dispatch` to a downstream repo via `DOWNSTREAM_PAT` secret
 - **Python 3.14 only**: `requires-python = ">=3.14,<3.15"` -- uses modern syntax throughout

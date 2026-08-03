@@ -730,3 +730,32 @@ def test_read_splits_round_trip(tmp_path: Path, sample_splits_df: pl.DataFrame) 
     assert isinstance(result, pl.DataFrame)
     assert len(result) == len(sample_splits_df)
     assert set(result.columns) == set(sample_splits_df.columns)
+
+
+def test_delete_then_append_no_duplicates(
+    tmp_path: Path, sample_bars_df: pl.DataFrame
+) -> None:
+    """Delete-then-append for a date yields no duplicate (ticker, date) rows."""
+    db_path = tmp_path / "raw.duckdb"
+    write_raw_db(sample_bars_df, db_path)
+
+    # Get the first date from the sample
+    first_date = sample_bars_df["date"][0]
+
+    # Delete that date
+    delete_raw_dates(db_path, {first_date})
+
+    # Append only the rows for the first date (simulating a re-fetch of that date)
+    rows_to_append = sample_bars_df.filter(pl.col("date") == first_date)
+    append_raw_db(rows_to_append, db_path)
+
+    # Read back and verify no duplicates
+    result = read_raw_db(db_path)
+
+    # Count rows per (ticker, date) pair
+    row_counts = result.group_by(["ticker", "date"]).agg(pl.len().alias("count"))
+
+    # All counts should be 1 (no duplicates)
+    assert row_counts["count"].max() == 1
+    # Verify the round-trip didn't silently drop rows
+    assert len(result) == len(sample_bars_df)
