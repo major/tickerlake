@@ -4,7 +4,7 @@ test:
 	uv run pytest tests/ -x --tb=short
 
 test-cov:
-	uv run pytest tests/ --cov=src/tickerlake --cov-report=html --cov-fail-under=95 --cov-report=term-missing -x
+	uv run pytest tests/ --cov=src/tickerlake --cov-report=html --cov-report=xml --cov-fail-under=95 --cov-report=term-missing -x
 
 lint:
 	uv run ruff check src/ tests/
