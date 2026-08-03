@@ -109,11 +109,9 @@ def _compute_adr_pct(bars: pl.DataFrame, period: int = 20) -> pl.DataFrame:
 def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
     """Compute per-ticker technical metrics.
 
-    Computes: SMA-50, SMA-200, ATR-14, ATR%, ADR%, SMA50_ATR_Distance, volume_sma_20.
+    Computes: SMA-20, SMA-50, SMA-200, ATR-14, ATR%, ADR%, volume_sma_20.
 
     ATR% (atr_pct) = ATR-14 / close price (ATR as fraction of closing price).
-    SMA50_ATR_Distance (sma50_atr_distance) = ((close - SMA-50) / SMA-50) / ATR%
-    (ATR% multiple from 50-MA).
     """
     sorted_bars = bars.sort(["ticker", "date"])
 
@@ -130,26 +128,16 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
         how="left",
     )
 
-    # Compute derived metrics: sma_50, atr_pct, sma50_atr_distance
+    # Compute derived metrics: sma_20, atr_pct
     df = df.with_columns(
         [
             pl.col("close")
             .cast(pl.Float64)
-            .rolling_mean(window_size=50)
+            .rolling_mean(window_size=20)
             .over("ticker")
             .cast(pl.Float32)
-            .alias("sma_50"),
+            .alias("sma_20"),
             (pl.col("atr_14") / pl.col("close")).cast(pl.Float32).alias("atr_pct"),
-        ]
-    ).with_columns(
-        [
-            (
-                ((pl.col("close") - pl.col("sma_50")) / pl.col("sma_50"))
-                / (pl.col("atr_14") / pl.col("close"))
-            )
-            .fill_nan(None)
-            .cast(pl.Float32)
-            .alias("sma50_atr_distance"),
         ]
     )
 
@@ -157,7 +145,13 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
         [
             pl.col("date"),
             pl.col("ticker"),
-            pl.col("sma_50"),
+            pl.col("sma_20"),
+            pl.col("close")
+            .cast(pl.Float64)
+            .rolling_mean(window_size=50)
+            .over("ticker")
+            .cast(pl.Float32)
+            .alias("sma_50"),
             pl.col("close")
             .cast(pl.Float64)
             .rolling_mean(window_size=200)
@@ -167,7 +161,6 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
             pl.col("atr_14"),
             pl.col("atr_pct"),
             pl.col("adr_pct"),
-            pl.col("sma50_atr_distance"),
             pl.col("volume")
             .cast(pl.Float64)
             .rolling_mean(window_size=20)
