@@ -8,12 +8,14 @@ and Smart Money Zone (SMZ, 0.786-0.826 retracement) for that leg.
 Algorithm:
     1. Detect k-bar fractal pivots on weekly bars (a bar is a pivot high
        if it's higher than k bars on each side; similarly for pivot low).
-    2. Take the most recent pivot high (latest date).
-    3. Take the most recent pivot low before that pivot high.
-    4. Verify the pivot low hasn't been swept — no bar after the pivot
-       high has traded below the pivot low.
-    5. Verify the leg is "major" — range >= min_leg_pct of the swing high.
-    6. Compute the IBZ/SMZ bands and classify the current price.
+    2. Walk pivot lows from most recent to oldest.
+    3. For each pivot low, find the HIGHEST pivot high that came at
+       least min_bars_between_pivots bars later.
+    4. Verify the leg is "major" — range >= min_leg_pct of the swing high.
+    5. Verify the swing low hasn't been swept — no bar after the swing
+       high has traded below the swing low.
+    6. Return the first valid (most recent) leg found.
+    7. Compute the IBZ/SMZ bands and classify the current price.
 
 Public API:
     WEEKLY_FIB_ZONES_SCHEMA: schema dict for the persisted table.
@@ -214,8 +216,8 @@ def _find_most_recent_unswept_leg(
     if pivots.is_empty():
         return None
 
-    low_pivots = (
-        pivots.filter(pl.col("pivot_type") == "low").sort("date", descending=True)
+    low_pivots = pivots.filter(pl.col("pivot_type") == "low").sort(
+        "date", descending=True
     )
     if low_pivots.is_empty():
         return None
