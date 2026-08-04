@@ -1635,7 +1635,28 @@ def test_screen_fib_zones_limit_caps_displayed(tmp_path: Path, caplog) -> None:
     text = recording.export_text()
     assert "AAPL" in text
     assert "MSFT" not in text
-    assert "Screen: 2 total matches, 1 displayed (zone=all, limit=1)" in caplog.text
+    assert "Screen: 2 total matches, 1 displayed (zone=all, limit=1," in caplog.text
+    assert "min_swing_low=5.0" in caplog.text
+
+
+def test_screen_fib_zones_min_swing_low_filters(tmp_path: Path, caplog) -> None:
+    """min_swing_low excludes rows whose swing low is below the cutoff."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _write_fib_zones_table(tmp_path / "tickerlake.duckdb", _zones_df())
+    recording = Console(record=True)
+
+    with (
+        patch(f"{_PIPELINE}.console", recording),
+        caplog.at_level("INFO"),
+    ):
+        pipeline.screen_fib_zones(config, zone="all", min_swing_low=90.0)
+
+    text = recording.export_text()
+    assert "MSFT" in text  # swing_low 150 >= 90
+    assert "AAPL" not in text  # swing_low 80 < 90
+    assert "Screen: 1 total matches, 1 displayed" in caplog.text
 
 
 def test_screen_fib_zones_sorted_by_ticker(tmp_path: Path) -> None:

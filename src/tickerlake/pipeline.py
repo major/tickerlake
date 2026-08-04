@@ -416,9 +416,10 @@ def compute_weekly_fib_zones(config: Config) -> None:
     """Compute weekly fib zones for all eligible tickers and persist them.
 
     Eligible tickers are those whose latest weekly_metrics row has
-    volume_sma_20 >= _LIQUIDITY_VOLUME_THRESHOLD. The lookback is the full
-    weekly_bars window (no truncation). Logs the number of eligible tickers,
-    per-zone counts, void count, and rows written.
+    volume_sma_20 >= _LIQUIDITY_VOLUME_THRESHOLD. The lookback is capped at
+    the most recent 2 years of weekly bars (see fib_zones.DEFAULT_MAX_LOOKBACK_YEARS).
+    Logs the number of eligible tickers, per-zone counts, void count, and
+    rows written.
     """
     consumer_path = config.output_dir / "tickerlake.duckdb"
     if not consumer_path.exists():
@@ -460,12 +461,14 @@ def screen_fib_zones(
     *,
     zone: str = "all",
     limit: int | None = None,
+    min_swing_low: float = 5.0,
 ) -> None:
     """Print a screen of persisted weekly fib zones to the console.
 
     zone="all" restricts to the actionable zones (in_ibz, in_smz, below_smz)
     with primary_status != 'void'. Any other zone value filters to that single
-    zone regardless of status. Results are sorted by ticker and optionally
+    zone regardless of status. Rows whose swing_low is below min_swing_low are
+    excluded (default $5 minimum). Results are sorted by ticker and optionally
     capped at `limit` rows.
     """
     consumer_path = config.output_dir / "tickerlake.duckdb"
@@ -478,6 +481,7 @@ def screen_fib_zones(
         result = result.filter(pl.col("primary_status") != "void")
     else:
         result = read_weekly_fib_zones(consumer_path, zone=zone)
+    result = result.filter(pl.col("swing_low") >= min_swing_low)
     result = result.sort("ticker")
 
     total = result.height
@@ -508,9 +512,10 @@ def screen_fib_zones(
 
     limit_label = str(limit) if limit is not None else "unlimited"
     logger.info(
-        "Screen: %d total matches, %d displayed (zone=%s, limit=%s).",
+        "Screen: %d total matches, %d displayed (zone=%s, limit=%s, min_swing_low=%s).",
         total,
         displayed.height,
         zone,
         limit_label,
+        min_swing_low,
     )
