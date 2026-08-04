@@ -180,18 +180,24 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
 
 
 def _aggregate_to_period(bars: pl.DataFrame, every: str) -> pl.DataFrame:
-    """Aggregate daily OHLCV bars into calendar periods per ticker."""
+    """Aggregate daily OHLCV bars into calendar periods per ticker.
+
+    Weekly bars are labeled with the Monday that starts their week (the
+    week-start convention used by most charting platforms); monthly bars
+    with the last trading day of the month.
+    """
     if bars.is_empty():
         return pl.DataFrame(schema=DAILY_AGGS_SCHEMA)
 
-    return (
+    is_weekly = every == "1w"
+    aggregated = (
         bars.sort(["ticker", "date"])
         .group_by_dynamic(
             "date",
             every=every,
             period=every,
             group_by="ticker",
-            start_by="monday" if every == "1w" else "window",
+            start_by="monday" if is_weekly else "window",
         )
         .agg(
             [
@@ -211,7 +217,15 @@ def _aggregate_to_period(bars: pl.DataFrame, every: str) -> pl.DataFrame:
                 pl.col("date").max().alias("period_date"),
             ]
         )
-        .drop("date")
+    )
+    if is_weekly:
+        return (
+            aggregated.drop("period_date")
+            .sort(["ticker", "date"])
+            .select(list(DAILY_AGGS_SCHEMA.keys()))
+        )
+    return (
+        aggregated.drop("date")
         .rename({"period_date": "date"})
         .sort(["ticker", "date"])
         .select(list(DAILY_AGGS_SCHEMA.keys()))
@@ -221,8 +235,8 @@ def _aggregate_to_period(bars: pl.DataFrame, every: str) -> pl.DataFrame:
 def aggregate_to_weekly(bars: pl.DataFrame) -> pl.DataFrame:
     """Aggregate daily OHLCV bars into weekly bars per ticker.
 
-    Weekly grouping is by calendar week. The output date is the actual last
-    trading day present in that ticker-week.
+    Weekly grouping is by calendar week (Monday-start). The output date is
+    the Monday that starts the ticker-week.
     """
     return _aggregate_to_period(bars, "1w")
 

@@ -196,9 +196,9 @@ class TestAggregateToWeekly:
         ) / 6000.0
         assert row["vwap"] == pytest.approx(expected_vwap)
         assert row["transactions"] == 60
-        assert row["date"] == datetime.date(2024, 1, 12)
+        assert row["date"] == datetime.date(2024, 1, 8)
 
-    def test_date_is_last_trading_day(self):
+    def test_date_is_week_start_monday(self):
         bars = make_bars(
             [
                 {
@@ -250,13 +250,13 @@ class TestAggregateToWeekly:
 
         row = aggregate_to_weekly(bars).row(0, named=True)
 
-        assert row["date"] == datetime.date(2024, 1, 11)
+        assert row["date"] == datetime.date(2024, 1, 8)
 
-    def test_partial_week_included(self):
+    def test_partial_midweek_start_labeled_monday(self):
         bars = make_bars(
             [
                 {
-                    "date": datetime.date(2024, 1, 8),
+                    "date": datetime.date(2024, 1, 16),
                     "ticker": "AAPL",
                     "open": 100.0,
                     "high": 101.0,
@@ -267,7 +267,7 @@ class TestAggregateToWeekly:
                     "transactions": 10,
                 },
                 {
-                    "date": datetime.date(2024, 1, 9),
+                    "date": datetime.date(2024, 1, 17),
                     "ticker": "AAPL",
                     "open": 101.0,
                     "high": 102.0,
@@ -278,7 +278,7 @@ class TestAggregateToWeekly:
                     "transactions": 11,
                 },
                 {
-                    "date": datetime.date(2024, 1, 10),
+                    "date": datetime.date(2024, 1, 18),
                     "ticker": "AAPL",
                     "open": 102.0,
                     "high": 103.0,
@@ -293,7 +293,7 @@ class TestAggregateToWeekly:
 
         row = aggregate_to_weekly(bars).row(0, named=True)
 
-        assert row["date"] == datetime.date(2024, 1, 10)
+        assert row["date"] == datetime.date(2024, 1, 15)
         assert row["volume"] == pytest.approx(3300.0)
 
     def test_single_day_week(self):
@@ -497,7 +497,7 @@ def test_bars_for_timeframe_daily_weekly_monthly():
     monthly = bars_for_timeframe(bars, "monthly")
 
     assert daily["date"].to_list() == sorted(bars["date"].to_list())
-    assert weekly["date"].to_list() == [datetime.date(2024, 2, 3)]
+    assert weekly["date"].to_list() == [datetime.date(2024, 1, 29)]
     assert monthly["date"].to_list() == [
         datetime.date(2024, 1, 31),
         datetime.date(2024, 2, 3),
