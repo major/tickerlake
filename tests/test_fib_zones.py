@@ -122,6 +122,111 @@ def test_compute_fib_zones_v_shape() -> None:
     assert result["swing_high"] == 30.0
 
 
+def test_compute_fib_zones_lookback_drops_old_leg() -> None:
+    """A valid leg whose swing low is older than the 2-year lookback is
+    ignored; disabling the lookback finds it."""
+    v_highs = [
+        20.0,
+        18.0,
+        15.0,
+        12.0,
+        11.0,
+        10.0,
+        10.0,
+        14.0,
+        20.0,
+        25.0,
+        30.0,
+        28.0,
+        24.0,
+        20.0,
+        14.0,
+    ]
+    v_lows = [
+        18.0,
+        15.0,
+        12.0,
+        10.0,
+        9.0,
+        8.0,
+        8.0,
+        12.0,
+        18.0,
+        22.0,
+        28.0,
+        25.0,
+        21.0,
+        18.0,
+        12.0,
+    ]
+    tail_highs = [14.0 - 0.035 * i for i in range(100)]
+    tail_lows = [13.0 - 0.035 * i for i in range(100)]
+    bars = _make_bars(
+        v_highs + tail_highs, v_lows + tail_lows, datetime.date(2023, 1, 1)
+    )
+    assert (
+        compute_fib_zones_for_ticker(
+            bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=2
+        )
+        is None
+    )
+    result = compute_fib_zones_for_ticker(
+        bars,
+        k=3,
+        min_leg_pct=0.20,
+        min_bars_between_pivots=2,
+        max_lookback_years=None,
+    )
+    assert result is not None
+    assert result["swing_low"] == 8.0
+    assert result["swing_high"] == 30.0
+
+
+def test_compute_fib_zones_lookback_keeps_recent_leg() -> None:
+    """A leg whose swing low is within the lookback window is still found."""
+    highs = [
+        20.0,
+        18.0,
+        15.0,
+        12.0,
+        11.0,
+        10.0,
+        10.0,
+        14.0,
+        20.0,
+        25.0,
+        30.0,
+        28.0,
+        24.0,
+        20.0,
+        14.0,
+    ]
+    lows = [
+        18.0,
+        15.0,
+        12.0,
+        10.0,
+        9.0,
+        8.0,
+        8.0,
+        12.0,
+        18.0,
+        22.0,
+        28.0,
+        25.0,
+        21.0,
+        18.0,
+        12.0,
+    ]
+    bars = _make_bars(highs, lows, datetime.date(2025, 1, 1))
+    result = compute_fib_zones_for_ticker(
+        bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=2
+    )
+    assert result is not None
+    assert result["swing_low"] == 8.0
+    assert result["swing_high"] == 30.0
+
+
 def test_compute_fib_zones_min_leg_pct_too_strict() -> None:
     """With min_leg_pct=0.99, no leg passes and the algorithm returns None."""
     highs = [

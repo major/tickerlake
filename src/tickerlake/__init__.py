@@ -106,6 +106,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Zone to filter on (default: all actionable zones)",
     )
     fib_zones_screen_parser.add_argument(
+        "--min-swing-low",
+        type=float,
+        default=5.0,
+        metavar="DOLLARS",
+        help="Minimum swing low price to include (default: 5.0; use 0 to disable)",
+    )
+    fib_zones_screen_parser.add_argument(
         "--limit",
         type=_parse_positive_int,
         default=None,
@@ -139,7 +146,12 @@ def _dispatch_fib_zones(
             parser.error(str(err))
     elif args.fib_zones_command == "screen":
         try:
-            pipeline.screen_fib_zones(config, zone=args.zone, limit=args.limit)
+            pipeline.screen_fib_zones(
+                config,
+                zone=args.zone,
+                limit=args.limit,
+                min_swing_low=args.min_swing_low,
+            )
         except ValueError as err:
             parser.error(str(err))
 
