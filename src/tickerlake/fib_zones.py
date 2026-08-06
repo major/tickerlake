@@ -6,8 +6,6 @@ then computes the Institutional Buying Zone (IBZ, 0.618-0.786 retracement)
 and Smart Money Zone (SMZ, 0.786-0.826 retracement) for that leg.
 
 Algorithm:
-    0. Restrict bars to the most recent max_lookback_years (default 2
-       years) — legs anchored on older pivot lows are ignored.
     1. Detect k-bar fractal pivots on weekly bars (a bar is a pivot high
        if it's higher than k bars on each side; similarly for pivot low).
     2. Walk pivot lows from most recent to oldest.
@@ -29,13 +27,9 @@ Public API:
 
 from __future__ import annotations
 
-import datetime
-
 import polars as pl
 
 from tickerlake.transform import find_pivots
-
-DEFAULT_MAX_LOOKBACK_YEARS: int = 2
 
 # Public schema — used by load.py.
 WEEKLY_FIB_ZONES_SCHEMA: dict = {
@@ -244,7 +238,6 @@ def compute_fib_zones_for_ticker(
     k: int = 4,
     min_leg_pct: float = 0.20,
     min_bars_between_pivots: int = 5,
-    max_lookback_years: int | None = DEFAULT_MAX_LOOKBACK_YEARS,
 ) -> dict | None:
     """Compute fib zones for the most recent unswept major leg on weekly bars.
 
@@ -252,9 +245,9 @@ def compute_fib_zones_for_ticker(
     on the most recent pivot low and pairs it with the highest pivot high
     that came at least `min_bars_between_pivots` weeks later.
 
-    Bars are first restricted to the most recent `max_lookback_years` (default
-    2 years; pass None to disable the cap), so the leg's swing low cannot be
-    older than that window.
+    All available weekly bars are considered — there is no lookback cap, so
+    the leg's swing low can be any age as long as the swing structure is
+    valid and unswept.
 
     Returns a flat dict matching WEEKLY_FIB_ZONES_SCHEMA keys, or None
     when no valid unswept leg exists.
@@ -269,16 +262,11 @@ def compute_fib_zones_for_ticker(
         min_bars_between_pivots: minimum number of weekly bars between
             the swing low and the swing high. Default 5 — filters out
             legs where the pivots are too close together in time.
-        max_lookback_years: maximum age of bars considered, capped at this
-            many years before the last bar. Default 2.
     """
     if bars is None or bars.is_empty():
         return None
 
     sorted_df = bars.sort("date")
-    if max_lookback_years is not None:
-        cutoff = datetime.timedelta(days=365 * max_lookback_years)
-        sorted_df = sorted_df.filter(pl.col("date") >= pl.col("date").max() - cutoff)
     bar_dicts = sorted_df.select(["date", "high", "low", "close"]).to_dicts()
     if not bar_dicts:
         return None
