@@ -430,8 +430,8 @@ def compute_weekly_fib_zones(config: Config) -> None:
     """Compute weekly fib zones for all eligible tickers and persist them.
 
     Eligible tickers are those whose latest weekly_metrics row has
-    volume_sma_20 >= _LIQUIDITY_VOLUME_THRESHOLD. The lookback is capped at
-    the most recent 2 years of weekly bars (see fib_zones.DEFAULT_MAX_LOOKBACK_YEARS).
+    volume_sma_20 >= _LIQUIDITY_VOLUME_THRESHOLD. All available weekly bars
+    are considered (no lookback cap).
     Logs the number of eligible tickers, per-zone counts, void count, and
     rows written.
     """
