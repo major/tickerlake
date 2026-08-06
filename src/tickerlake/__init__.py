@@ -120,6 +120,70 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     fib_zones_screen_parser.add_argument("--output-dir", type=Path, metavar="DIR")
 
+    fair_value_bands_parser = subparsers.add_parser(
+        "fair-value-bands",
+        help=(
+            "Compute and screen Fair Value Bands (33 SMA of OHLC4 + "
+            "median-deviation threshold bands)"
+        ),
+    )
+    fair_value_bands_subparsers = fair_value_bands_parser.add_subparsers(
+        dest="fair_value_bands_command", metavar="COMMAND"
+    )
+    fair_value_bands_subparsers.required = True
+
+    fair_value_bands_compute_parser = fair_value_bands_subparsers.add_parser(
+        "compute",
+        help="Compute and persist fair value bands for the selected timeframe",
+    )
+    fair_value_bands_compute_parser.add_argument(
+        "--timeframe",
+        choices=["daily", "weekly", "monthly"],
+        default="monthly",
+        help=(
+            "Display timeframe; daily overlays weekly and weekly overlays "
+            "monthly bands (default: monthly)"
+        ),
+    )
+    fair_value_bands_compute_parser.add_argument(
+        "--output-dir", type=Path, metavar="DIR"
+    )
+
+    fair_value_bands_screen_parser = fair_value_bands_subparsers.add_parser(
+        "screen", help="Screen persisted fair value bands for the selected timeframe"
+    )
+    fair_value_bands_screen_parser.add_argument(
+        "--timeframe",
+        choices=["daily", "weekly", "monthly"],
+        default="monthly",
+        help=(
+            "Display timeframe; daily overlays weekly and weekly overlays "
+            "monthly bands (default: monthly)"
+        ),
+    )
+    fair_value_bands_screen_parser.add_argument(
+        "--zone",
+        choices=["below_lower", "above_upper", "in_band", "all"],
+        default="all",
+        help="Zone to filter on (default: all actionable zones)",
+    )
+    fair_value_bands_screen_parser.add_argument(
+        "--min-close",
+        type=float,
+        default=5.0,
+        metavar="DOLLARS",
+        help="Minimum current close price to include (default: 5.0; use 0 to disable)",
+    )
+    fair_value_bands_screen_parser.add_argument(
+        "--limit",
+        type=_parse_positive_int,
+        default=None,
+        help="Cap the number of rows displayed",
+    )
+    fair_value_bands_screen_parser.add_argument(
+        "--output-dir", type=Path, metavar="DIR"
+    )
+
     return parser
 
 
@@ -156,6 +220,28 @@ def _dispatch_fib_zones(
             parser.error(str(err))
 
 
+def _dispatch_fair_value_bands(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: Config
+) -> None:
+    """Dispatch fair-value-bands compute/screen subcommands, wrapping ValueErrors."""
+    if args.fair_value_bands_command == "compute":
+        try:
+            pipeline.compute_fair_value_bands(config, args.timeframe)
+        except ValueError as err:
+            parser.error(str(err))
+    elif args.fair_value_bands_command == "screen":
+        try:
+            pipeline.screen_fair_value_bands(
+                config,
+                args.timeframe,
+                zone=args.zone,
+                limit=args.limit,
+                min_close=args.min_close,
+            )
+        except ValueError as err:
+            parser.error(str(err))
+
+
 def main() -> None:
     """Parse CLI arguments and dispatch to appropriate pipeline function."""
     parser = _build_parser()
@@ -168,14 +254,11 @@ def main() -> None:
     )
     config = _make_config(args)
 
-    if args.command == "backfill":
+    if args.command in {"backfill", "update"}:
         try:
-            pipeline.backfill(config)
-        except ValueError as err:
-            parser.error(str(err))
-    elif args.command == "update":
-        try:
-            pipeline.update(config)
+            {"backfill": pipeline.backfill, "update": pipeline.update}[args.command](
+                config
+            )
         except ValueError as err:
             parser.error(str(err))
     elif args.command == "info":
@@ -189,3 +272,5 @@ def main() -> None:
             parser.error(str(err))
     elif args.command == "fib-zones":
         _dispatch_fib_zones(parser, args, config)
+    elif args.command == "fair-value-bands":
+        _dispatch_fair_value_bands(parser, args, config)

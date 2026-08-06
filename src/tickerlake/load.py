@@ -9,6 +9,8 @@ import duckdb
 import polars as pl
 
 from tickerlake.extract import DAILY_AGGS_SCHEMA, TICKERS_SCHEMA
+from tickerlake.fair_value_bands import FAIR_VALUE_BANDS_SCHEMA
+from tickerlake.transform import VALID_TIMEFRAMES
 
 if TYPE_CHECKING:
     import datetime
@@ -27,9 +29,7 @@ _METRICS_SCHEMA = {
 }
 
 
-def _validate_schema(
-    table: str, df: pl.DataFrame, expected: dict[str, pl.DataType]
-) -> None:
+def _validate_schema(table: str, df: pl.DataFrame, expected: dict) -> None:
     """Validate a DataFrame schema before writing a DuckDB table."""
     mismatches = _schema_mismatches(dict(df.schema), expected)
 
@@ -38,9 +38,7 @@ def _validate_schema(
         raise ValueError(msg)
 
 
-def _schema_mismatches(
-    actual: dict[str, pl.DataType], expected: dict[str, pl.DataType]
-) -> list[str]:
+def _schema_mismatches(actual: dict, expected: dict) -> list[str]:
     missing = [col for col in expected if col not in actual]
     extra = [col for col in actual if col not in expected]
     wrong_dtype = [
@@ -335,6 +333,71 @@ def read_weekly_fib_zones(
             con.execute(sql, params)
         except duckdb.CatalogException as err:
             msg = f"weekly_fib_zones table not found in consumer DB: {path}"
+            raise ValueError(msg) from err
+        finally:
+            con.close()
+        return pl.read_parquet(tmp)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _fair_value_bands_table(timeframe: str) -> str:
+    """Return the persisted Fair Value Bands table for a valid timeframe."""
+    if timeframe not in VALID_TIMEFRAMES:
+        msg = f"timeframe must be one of: {', '.join(sorted(VALID_TIMEFRAMES))}"
+        raise ValueError(msg)
+    return f"{timeframe}_fair_value_bands"
+
+
+def write_fair_value_bands(
+    df: pl.DataFrame, path: Path, timeframe: str = "monthly"
+) -> None:
+    """Write Fair Value Bands to the selected timeframe table."""
+    table = _fair_value_bands_table(timeframe)
+    _validate_schema(table, df, FAIR_VALUE_BANDS_SCHEMA)
+    with _tmp_parquet(df) as tmp:
+        con = duckdb.connect(str(path))
+        try:
+            con.execute(
+                f"CREATE OR REPLACE TABLE {table} AS "
+                f"{_read_parquet_sql(tmp, 'ticker, as_of_date')}"
+            )
+            con.execute("CHECKPOINT")
+        finally:
+            con.close()
+
+
+def read_fair_value_bands(
+    path: Path,
+    timeframe: str = "monthly",
+    *,
+    zone: str | list[str] | None = None,
+) -> pl.DataFrame:
+    """Read Fair Value Bands for a timeframe, optionally filtering by zone.
+
+    Returns rows sorted by ticker and observation date.
+    """
+    table = _fair_value_bands_table(timeframe)
+    if not path.exists():
+        msg = f"Consumer DB not found: {path}"
+        raise ValueError(msg)
+
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+        tmp = Path(f.name)
+    try:
+        con = duckdb.connect(str(path), read_only=True)
+        try:
+            sql = f"COPY (SELECT * FROM {table}"
+            params: list[str] = []
+            if zone is not None:
+                zones = [zone] if isinstance(zone, str) else list(zone)
+                placeholders = ", ".join(["?"] * len(zones))
+                sql += f" WHERE zone IN ({placeholders})"
+                params = zones
+            sql += f" ORDER BY ticker, as_of_date) TO '{tmp}' (FORMAT PARQUET)"
+            con.execute(sql, params)
+        except duckdb.CatalogException as err:
+            msg = f"{table} table not found in consumer DB: {path}"
             raise ValueError(msg) from err
         finally:
             con.close()
