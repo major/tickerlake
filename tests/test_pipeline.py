@@ -1695,3 +1695,474 @@ def test_screen_fib_zones_missing_db(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Consumer DB not found"):
         pipeline.screen_fib_zones(config, zone="all")
+
+
+# ---------------------------------------------------------------------------
+# Fair Value Bands
+# ---------------------------------------------------------------------------
+
+
+def _build_consumer_db_with_bars(
+    tmp_path: Path, bars: pl.DataFrame, timeframe: str
+) -> Path:
+    """Create a consumer DuckDB with bars at one selected timeframe."""
+    from tickerlake.load import write_consumer_db
+
+    daily_bars = pl.DataFrame(
+        schema={
+            "date": pl.Date,
+            "ticker": pl.Utf8,
+            "open": pl.Float32,
+            "high": pl.Float32,
+            "low": pl.Float32,
+            "close": pl.Float32,
+            "volume": pl.Float32,
+            "vwap": pl.Float32,
+            "transactions": pl.UInt32,
+        }
+    )
+    if timeframe == "daily":
+        daily_bars = bars
+    daily_metrics = pl.DataFrame(
+        schema={
+            "date": pl.Date,
+            "ticker": pl.Utf8,
+            "sma_20": pl.Float32,
+            "sma_50": pl.Float32,
+            "sma_200": pl.Float32,
+            "atr_14": pl.Float32,
+            "atr_pct": pl.Float32,
+            "adr_pct": pl.Float32,
+            "volume_sma_20": pl.Float32,
+        }
+    )
+    tickers = pl.DataFrame(
+        {
+            "ticker": ["AAPL", "MSFT"],
+            "name": ["Apple Inc.", "Microsoft Corp."],
+            "type": ["CS", "CS"],
+            "primary_exchange": ["XNAS", "XNAS"],
+            "cik": ["", ""],
+            "active": [True, True],
+        }
+    )
+    db = tmp_path / "tickerlake.duckdb"
+    if timeframe == "daily":
+        timeframe_bars = {"weekly_bars": bars}
+    elif timeframe == "weekly":
+        timeframe_bars = {"weekly_bars": bars, "monthly_bars": bars}
+    else:
+        timeframe_bars = {"monthly_bars": bars}
+    write_consumer_db(daily_bars, daily_metrics, tickers, db, **timeframe_bars)
+    return db
+
+
+def _bars_df(ticker: str = "AAPL", n: int = 40) -> pl.DataFrame:
+    """Build simple bars for Fair Value Bands pipeline tests."""
+    dates = [
+        datetime.date(2020, 1, 1) + datetime.timedelta(days=30 * i) for i in range(n)
+    ]
+    return pl.DataFrame(
+        {
+            "date": dates,
+            "ticker": [ticker] * n,
+            "open": [100.0] * n,
+            "high": [105.0] * n,
+            "low": [95.0] * n,
+            "close": [100.0] * n,
+            "volume": [1_000_000.0] * n,
+            "vwap": [100.0] * n,
+            "transactions": [100] * n,
+        }
+    ).with_columns(
+        pl.col("date").cast(pl.Date),
+        pl.col("ticker").cast(pl.Utf8),
+        pl.col("open").cast(pl.Float32),
+        pl.col("high").cast(pl.Float32),
+        pl.col("low").cast(pl.Float32),
+        pl.col("close").cast(pl.Float32),
+        pl.col("volume").cast(pl.Float32),
+        pl.col("vwap").cast(pl.Float32),
+        pl.col("transactions").cast(pl.UInt32),
+    )
+
+
+def test_compute_fair_value_bands_writes_rows(tmp_path: Path, caplog) -> None:
+    """compute_fair_value_bands persists computed bands to the selected table."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _build_consumer_db_with_bars(tmp_path, _bars_df(), "monthly")
+
+    with caplog.at_level("INFO"):
+        pipeline.compute_fair_value_bands(config, "monthly")
+
+    db = tmp_path / "tickerlake.duckdb"
+    con = duckdb.connect(str(db), read_only=True)
+    try:
+        rows = con.execute(
+            "SELECT ticker, as_of_date, zone FROM monthly_fair_value_bands"
+        ).fetchall()
+    finally:
+        con.close()
+
+    assert len(rows) == 8
+    assert {row[0] for row in rows} == {"AAPL"}
+    assert [row[1] for row in rows] == sorted(row[1] for row in rows)
+    assert "n_written=8" in caplog.text
+    assert "n_below_lower=0" in caplog.text
+    assert "n_excluded=0" in caplog.text
+
+
+def test_compute_fair_value_bands_missing_db(tmp_path: Path) -> None:
+    """compute raises ValueError when the consumer DB is absent."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+
+    with pytest.raises(ValueError, match="Consumer DB not found"):
+        pipeline.compute_fair_value_bands(config, "monthly")
+
+
+@pytest.mark.parametrize("timeframe", ["daily", "weekly", "monthly"])
+def test_compute_fair_value_bands_uses_matching_bars_table(
+    tmp_path: Path, timeframe: str
+) -> None:
+    """compute reads source bars and writes the selected display table."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    bars = _bars_df()
+    _build_consumer_db_with_bars(tmp_path, bars, timeframe)
+    from tickerlake.fair_value_bands import compute_fair_value_bands as algorithm
+
+    with (
+        patch(
+            f"{_PIPELINE}._compute_native_fair_value_bands", wraps=algorithm
+        ) as compute,
+        patch(
+            f"{_PIPELINE}._read_fair_value_bands_bars",
+            wraps=pipeline._read_fair_value_bands_bars,
+        ) as read_bars,
+        patch(
+            f"{_PIPELINE}._align_fair_value_bands",
+            wraps=pipeline._align_fair_value_bands,
+        ) as align,
+    ):
+        pipeline.compute_fair_value_bands(config, timeframe)
+
+    compute.assert_called_once()
+    source_timeframe = "weekly" if timeframe == "daily" else "monthly"
+    assert compute.call_args.args[0].equals(bars)
+    expected_reads = (
+        [timeframe]
+        if timeframe == "monthly"
+        else [
+            timeframe,
+            source_timeframe,
+        ]
+    )
+    assert [call.args[1] for call in read_bars.call_args_list] == expected_reads
+    if timeframe == "monthly":
+        align.assert_not_called()
+    else:
+        assert align.call_args.args[2] == source_timeframe
+    con = duckdb.connect(str(tmp_path / "tickerlake.duckdb"), read_only=True)
+    try:
+        tables = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
+    finally:
+        con.close()
+    assert f"{timeframe}_fair_value_bands" in tables
+
+
+@pytest.mark.parametrize("timeframe", ["daily", "weekly", "monthly"])
+def test_compute_fair_value_bands_missing_matching_table(
+    tmp_path: Path, timeframe: str
+) -> None:
+    """compute raises ValueError when the selected bars table is absent."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    db = tmp_path / "tickerlake.duckdb"
+    con = duckdb.connect(str(db))
+    con.execute("CREATE TABLE unrelated (x INT)")
+    con.close()
+
+    with pytest.raises(ValueError, match=f"{timeframe}_bars"):
+        pipeline.compute_fair_value_bands(config, timeframe)
+
+
+def test_compute_fair_value_bands_rejects_invalid_timeframe(tmp_path: Path) -> None:
+    """compute rejects invalid timeframes before opening the consumer DB."""
+    from tickerlake import pipeline
+
+    with pytest.raises(ValueError, match="timeframe must be one of"):
+        pipeline.compute_fair_value_bands(_make_config(tmp_path), "yearly")
+
+
+def test_compute_fair_value_bands_rejects_bad_schema(tmp_path: Path) -> None:
+    """compute rejects a malformed compute result."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _build_consumer_db_with_bars(tmp_path, _bars_df(), "monthly")
+
+    def _bad_compute_result(*args, **kwargs) -> pl.DataFrame:
+        # Simulate compute returning a DataFrame missing a required column.
+        return pl.DataFrame(
+            {"ticker": ["AAPL"], "as_of_date": [datetime.date(2024, 1, 1)]}
+        )
+
+    with (
+        patch(
+            f"{_PIPELINE}._compute_native_fair_value_bands",
+            side_effect=_bad_compute_result,
+        ),
+        pytest.raises(ValueError, match="monthly_fair_value_bands schema mismatch"),
+    ):
+        pipeline.compute_fair_value_bands(config, "monthly")
+
+
+def _write_fair_value_bands_table(
+    db_path: Path, df: pl.DataFrame, timeframe: str = "monthly"
+) -> None:
+    """Create/replace one timeframe Fair Value Bands table from a DataFrame."""
+    table = {
+        "daily": "daily_fair_value_bands",
+        "weekly": "weekly_fair_value_bands",
+        "monthly": "monthly_fair_value_bands",
+    }[timeframe]
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+        tmp = Path(f.name)
+    try:
+        df.write_parquet(tmp)
+        con = duckdb.connect(str(db_path))
+        try:
+            con.execute(
+                f"CREATE OR REPLACE TABLE {table} AS "  # noqa: S608
+                "SELECT * FROM read_parquet(?)",
+                [str(tmp)],
+            )
+        finally:
+            con.close()
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _fvb_df() -> pl.DataFrame:
+    """Monthly fair value bands rows in deliberately non-sorted ticker order."""
+    from tickerlake.fair_value_bands import FAIR_VALUE_BANDS_SCHEMA
+
+    def row(
+        ticker: str, close: float, fv: float, zone: str, n_straddling: int = 33
+    ) -> dict:
+        return {
+            "ticker": ticker,
+            "as_of_date": datetime.date(2024, 1, 1),
+            "fair_value": fv,
+            "upper_band": fv * 1.10,
+            "lower_band": fv * 0.90,
+            "current_close": close,
+            "upper_dev": 0.10,
+            "lower_dev": 0.10,
+            "n_straddling_bars": n_straddling,
+            "zone": zone,
+            "bar_count": 66,
+        }
+
+    return pl.DataFrame(
+        [
+            row("NVDA", 50.0, 100.0, "below_lower"),
+            row("SPY", 150.0, 100.0, "above_upper"),
+            row("AAPL", 80.0, 100.0, "below_lower"),
+            row("TSLA", 200.0, 100.0, "above_upper"),
+            row("MSFT", 100.0, 100.0, "in_band"),
+        ],
+        schema=FAIR_VALUE_BANDS_SCHEMA,
+    )
+
+
+def test_screen_monthly_fair_value_bands_all_default(tmp_path: Path, caplog) -> None:
+    """zone=all shows actionable zones and hides in_band rows."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _write_fair_value_bands_table(tmp_path / "tickerlake.duckdb", _fvb_df())
+    recording = Console(record=True)
+
+    with (
+        patch(f"{_PIPELINE}.console", recording),
+        caplog.at_level("INFO"),
+    ):
+        pipeline.screen_fair_value_bands(config, "monthly", zone="all")
+
+    text = recording.export_text()
+    assert "as_of_date" in text
+    assert "2024-01-01" in text
+    assert "AAPL" in text
+    assert "NVDA" in text
+    assert "SPY" in text
+    assert "TSLA" in text
+    assert "MSFT" not in text  # in_band is not actionable
+    assert "4 total matches" in caplog.text
+
+
+@pytest.mark.parametrize("timeframe", ["daily", "weekly", "monthly"])
+def test_screen_fair_value_bands_title_uses_timeframe(
+    tmp_path: Path, timeframe: str
+) -> None:
+    """Screen title identifies the selected timeframe."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _write_fair_value_bands_table(tmp_path / "tickerlake.duckdb", _fvb_df(), timeframe)
+    recording = Console(record=True)
+
+    with patch(f"{_PIPELINE}.console", recording):
+        pipeline.screen_fair_value_bands(config, timeframe, zone="below_lower")
+
+    assert (
+        f"{timeframe.capitalize()} fair value bands screen" in recording.export_text()
+    )
+
+
+def test_screen_monthly_fair_value_bands_zone_filter(tmp_path: Path) -> None:
+    """Explicit --zone filters to a single zone."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _write_fair_value_bands_table(tmp_path / "tickerlake.duckdb", _fvb_df())
+    recording = Console(record=True)
+
+    with patch(f"{_PIPELINE}.console", recording):
+        pipeline.screen_fair_value_bands(config, "monthly", zone="below_lower")
+
+    text = recording.export_text()
+    assert "AAPL" in text
+    assert "NVDA" in text
+    assert "SPY" not in text
+    assert "TSLA" not in text
+
+
+def test_screen_monthly_fair_value_bands_zone_in_band(tmp_path: Path) -> None:
+    """zone="in_band" filters to the neutral zone (excluded from zone='all')."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _write_fair_value_bands_table(tmp_path / "tickerlake.duckdb", _fvb_df())
+    recording = Console(record=True)
+
+    with patch(f"{_PIPELINE}.console", recording):
+        pipeline.screen_fair_value_bands(config, "monthly", zone="in_band")
+
+    text = recording.export_text()
+    # Only MSFT is in_band; all other tickers are excluded.
+    assert "MSFT" in text
+    assert "AAPL" not in text
+    assert "NVDA" not in text
+    assert "SPY" not in text
+    assert "TSLA" not in text
+
+
+def test_screen_monthly_fair_value_bands_min_close_filter(tmp_path: Path) -> None:
+    """--min-close excludes rows below the threshold."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _write_fair_value_bands_table(tmp_path / "tickerlake.duckdb", _fvb_df())
+    recording = Console(record=True)
+
+    with patch(f"{_PIPELINE}.console", recording):
+        pipeline.screen_fair_value_bands(config, "monthly", zone="all", min_close=100.0)
+
+    text = recording.export_text()
+    # AAPL close=80, NVDA close=50 → excluded by min_close=100.
+    assert "AAPL" not in text
+    assert "NVDA" not in text
+    assert "SPY" in text
+    assert "TSLA" in text
+
+
+def test_screen_monthly_fair_value_bands_min_close_excludes_all(
+    tmp_path: Path, caplog
+) -> None:
+    """--min-close above all rows produces an empty screen."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _write_fair_value_bands_table(tmp_path / "tickerlake.duckdb", _fvb_df())
+    recording = Console(record=True)
+
+    with (
+        patch(f"{_PIPELINE}.console", recording),
+        caplog.at_level("INFO"),
+    ):
+        pipeline.screen_fair_value_bands(config, "monthly", zone="all", min_close=300.0)
+
+    text = recording.export_text()
+    # No ticker rows should appear in the table.
+    for ticker in ("AAPL", "MSFT", "NVDA", "SPY", "TSLA"):
+        assert ticker not in text
+    assert "0 total matches" in caplog.text
+    assert "0 displayed" in caplog.text
+
+
+def test_screen_monthly_fair_value_bands_limit(tmp_path: Path, caplog) -> None:
+    """--limit caps the number of rows displayed."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _write_fair_value_bands_table(tmp_path / "tickerlake.duckdb", _fvb_df())
+    recording = Console(record=True)
+
+    with (
+        patch(f"{_PIPELINE}.console", recording),
+        caplog.at_level("INFO"),
+    ):
+        pipeline.screen_fair_value_bands(config, "monthly", zone="all", limit=2)
+
+    text = recording.export_text()
+    assert "2 displayed" in caplog.text
+    assert "4 total matches" in caplog.text
+    # Two ticker rows should appear in the table (cap at 2 of 4).
+    # Count by ticker symbol rather than zone (which may be truncated).
+    ticker_rows = sum(1 for t in ("AAPL", "MSFT", "NVDA", "SPY", "TSLA") if t in text)
+    assert ticker_rows == 2
+
+
+def test_screen_monthly_fair_value_bands_sorted_by_ticker(tmp_path: Path) -> None:
+    """Screen output is sorted by ticker even when the table is unsorted."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    _write_fair_value_bands_table(tmp_path / "tickerlake.duckdb", _fvb_df())
+    recording = Console(record=True)
+
+    with patch(f"{_PIPELINE}.console", recording):
+        pipeline.screen_fair_value_bands(config, "monthly", zone="below_lower")
+
+    text = recording.export_text()
+    assert text.index("AAPL") < text.index("NVDA")
+
+
+def test_screen_monthly_fair_value_bands_missing_table(tmp_path: Path) -> None:
+    """screen_monthly_fair_value_bands raises ValueError when the table is absent."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+    db = tmp_path / "tickerlake.duckdb"
+    con = duckdb.connect(str(db))
+    con.close()
+
+    with pytest.raises(ValueError, match="monthly_fair_value_bands"):
+        pipeline.screen_fair_value_bands(config, "monthly", zone="all")
+
+
+def test_screen_monthly_fair_value_bands_missing_db(tmp_path: Path) -> None:
+    """screen raises ValueError when the consumer DB is absent."""
+    from tickerlake import pipeline
+
+    config = _make_config(tmp_path)
+
+    with pytest.raises(ValueError, match="Consumer DB not found"):
+        pipeline.screen_fair_value_bands(config, "monthly", zone="all")

@@ -14,12 +14,13 @@ US equity market ETL pipeline. Pulls OHLCV bars, splits, and ticker metadata fro
 ```
 tickerlake/
 ├── src/tickerlake/
-│   ├── __init__.py     # CLI entry point (argparse, 3 subcommands)
+│   ├── __init__.py     # CLI entry point (argparse subcommands)
 │   ├── config.py       # Config dataclass, env var validation
 │   ├── client.py       # Thin wrapper around massive.RESTClient
 │   ├── calendar.py     # NYSE trading day calendar via exchange_calendars
 │   ├── extract.py      # API objects -> polars DataFrames (schema-driven)
 │   ├── transform.py    # Split adjustment, ticker filtering, SMA/ATR metrics
+│   ├── fair_value_bands.py # Daily/weekly/monthly Fair Value Bands transform
 │   ├── load.py         # DuckDB I/O via temporary parquet intermediaries
 │   └── pipeline.py     # Orchestrates E->T->L for backfill/update/info
 ├── tests/              # 1:1 test files per module + conftest fixtures
@@ -84,6 +85,8 @@ uv run ty check src/                             # Type check
 
 - **MASSIVE_API_KEY** env var is required for Massive-backed commands (`backfill`, `update`, `compact`). `Config.__post_init__` is permissive (may be empty for read-only commands like `pivots` and `info`); enforcement happens at the command boundary via `pipeline._require_api_key` (raises `ValueError("MASSIVE_API_KEY environment variable is required")` on empty key) and in `MassiveClient.__init__` as defense in depth.
 - **Two DuckDB files**: `raw.duckdb` (raw bars) and `tickerlake.duckdb` (adjusted bars + metrics + tickers)
-- **Consumer DB tables**: `daily_bars`, `daily_metrics`, `tickers`, `weekly_bars`, `weekly_metrics`, `monthly_bars`, `monthly_metrics`
+- **Consumer DB tables**: `daily_bars`, `daily_metrics`, `tickers`, `weekly_bars`, `weekly_metrics`, `monthly_bars`, `monthly_metrics`, `daily_fair_value_bands`, `weekly_fair_value_bands`, `monthly_fair_value_bands`
+- **Fair Value Bands tables**: `monthly_fair_value_bands` stores native monthly bands, `weekly_fair_value_bands` stores confirmed monthly bands overlaid on weekly bars, and `daily_fair_value_bands` stores confirmed weekly bands overlaid on daily bars.
 - **Update is incremental and revision-aware**: delegates to the backfill sequence (`_run_backfill(config, bars_start=...)`) with the bars-fetch start narrowed to a trailing `_REVISION_WINDOW_DAYS`-day window of already-cached dates (fetch-then-swap: fetch first, then delete+replace only the dates Massive actually returned data for in that window), so revisions Massive makes to already-published bars (up to ~5 trading days back) get picked up on the next run. Splits/tickers extraction always covers the full `config.start_date`-`config.end_date` range regardless. Consumer db is always fully rebuilt from raw.duckdb.
+- **Fair Value Bands**: the overlay chain is daily <- weekly <- monthly, with weekly values available the next Monday, monthly values available the first day of the next calendar month, and backward as-of matching with no future source values; `tickerlake fair-value-bands compute --timeframe {daily,weekly,monthly}` and `tickerlake fair-value-bands screen --timeframe {daily,weekly,monthly}` select the display timeframe and default to monthly.
 - **Python 3.14 only**: `requires-python = ">=3.14,<3.15"` -- uses modern syntax throughout

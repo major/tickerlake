@@ -506,3 +506,178 @@ class TestFibZonesSubcommand:
         assert exc_info.value.code != 0
         assert "missing db" in captured.err
         assert "Traceback" not in captured.err
+
+
+class TestFairValueBandsSubcommand:
+    """Test Fair Value Bands timeframe forwarding and screen options."""
+
+    def test_fair_value_bands_compute_calls_pipeline(self, monkeypatch, tmp_path):
+        """Verify compute forwards the selected timeframe."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.compute_fair_value_bands") as mock_compute:
+            monkeypatch.setattr(
+                "sys.argv",
+                [
+                    "tickerlake",
+                    "fair-value-bands",
+                    "compute",
+                    "--timeframe",
+                    "daily",
+                    "--output-dir",
+                    str(tmp_path),
+                ],
+            )
+            main()
+            mock_compute.assert_called_once()
+            config = mock_compute.call_args[0][0]
+            assert isinstance(config, Config)
+            assert config.output_dir == tmp_path
+            assert mock_compute.call_args[0][1] == "daily"
+
+    def test_fair_value_bands_compute_defaults_to_monthly(self, monkeypatch):
+        """Verify compute defaults to the monthly timeframe."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.compute_fair_value_bands") as mock_compute:
+            monkeypatch.setattr(
+                "sys.argv", ["tickerlake", "fair-value-bands", "compute"]
+            )
+            main()
+            assert mock_compute.call_args[0][1] == "monthly"
+
+    def test_fair_value_bands_screen_calls_pipeline(self, monkeypatch, tmp_path):
+        """Verify screen forwards timeframe, zone, min-close, and output-dir."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.screen_fair_value_bands") as mock_screen:
+            monkeypatch.setattr(
+                "sys.argv",
+                [
+                    "tickerlake",
+                    "fair-value-bands",
+                    "screen",
+                    "--timeframe",
+                    "weekly",
+                    "--zone",
+                    "below_lower",
+                    "--min-close",
+                    "10",
+                    "--output-dir",
+                    str(tmp_path),
+                ],
+            )
+            main()
+            mock_screen.assert_called_once()
+            config = mock_screen.call_args[0][0]
+            assert isinstance(config, Config)
+            assert config.output_dir == tmp_path
+            assert mock_screen.call_args[0][1] == "weekly"
+            assert mock_screen.call_args.kwargs["zone"] == "below_lower"
+            assert mock_screen.call_args.kwargs["min_close"] == 10.0
+
+    def test_fair_value_bands_screen_defaults(self, monkeypatch, tmp_path):
+        """Verify fair-value-bands screen defaults to zone=all, min_close=5.0."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.screen_fair_value_bands") as mock_screen:
+            monkeypatch.setattr(
+                "sys.argv",
+                [
+                    "tickerlake",
+                    "fair-value-bands",
+                    "screen",
+                    "--output-dir",
+                    str(tmp_path),
+                ],
+            )
+            main()
+            assert mock_screen.call_args[0][1] == "monthly"
+            assert mock_screen.call_args.kwargs["zone"] == "all"
+            assert mock_screen.call_args.kwargs["limit"] is None
+            assert mock_screen.call_args.kwargs["min_close"] == 5.0
+
+    def test_fair_value_bands_screen_limit(self, monkeypatch, tmp_path):
+        """Verify fair-value-bands screen --limit caps the number of rows displayed."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.screen_fair_value_bands") as mock_screen:
+            monkeypatch.setattr(
+                "sys.argv",
+                [
+                    "tickerlake",
+                    "fair-value-bands",
+                    "screen",
+                    "--limit",
+                    "5",
+                    "--output-dir",
+                    str(tmp_path),
+                ],
+            )
+            main()
+            assert mock_screen.call_args.kwargs["limit"] == 5
+
+    def test_fair_value_bands_screen_invalid_zone(self, monkeypatch):
+        """Verify an unknown --zone value exits with an argparse error."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        monkeypatch.setattr(
+            "sys.argv",
+            ["tickerlake", "fair-value-bands", "screen", "--zone", "bogus"],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code != 0
+
+    def test_fair_value_bands_screen_invalid_limit(self, monkeypatch):
+        """Verify --limit must be a positive integer."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        monkeypatch.setattr(
+            "sys.argv",
+            ["tickerlake", "fair-value-bands", "screen", "--limit", "0"],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code != 0
+
+    def test_fair_value_bands_no_subcommand(self, monkeypatch):
+        """Verify fair-value-bands without a subcommand exits with an error."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        monkeypatch.setattr("sys.argv", ["tickerlake", "fair-value-bands"])
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code != 0
+
+    def test_fair_value_bands_compute_value_error_becomes_cli_error(
+        self, monkeypatch, capsys
+    ):
+        """Verify a compute ValueError exits cleanly without a traceback."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch(
+            "tickerlake.pipeline.compute_fair_value_bands",
+            side_effect=ValueError("missing db"),
+        ):
+            monkeypatch.setattr(
+                "sys.argv", ["tickerlake", "fair-value-bands", "compute"]
+            )
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        captured = capsys.readouterr()
+        assert exc_info.value.code != 0
+        assert "missing db" in captured.err
+        assert "Traceback" not in captured.err
+
+    def test_fair_value_bands_screen_value_error_becomes_cli_error(
+        self, monkeypatch, capsys
+    ):
+        """Verify a screen ValueError exits cleanly without a traceback."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch(
+            "tickerlake.pipeline.screen_fair_value_bands",
+            side_effect=ValueError("missing db"),
+        ):
+            monkeypatch.setattr(
+                "sys.argv", ["tickerlake", "fair-value-bands", "screen"]
+            )
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        captured = capsys.readouterr()
+        assert exc_info.value.code != 0
+        assert "missing db" in captured.err
+        assert "Traceback" not in captured.err
