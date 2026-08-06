@@ -15,15 +15,6 @@ from tickerlake import console
 from tickerlake.calendar import get_trading_days
 from tickerlake.client import MassiveClient
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
-from tickerlake.fair_value_bands import (
-    FAIR_VALUE_BANDS_SCHEMA,
-)
-from tickerlake.fair_value_bands import (
-    align_fair_value_bands as _align_fair_value_bands,
-)
-from tickerlake.fair_value_bands import (
-    compute_native_fair_value_bands as _compute_native_fair_value_bands,
-)
 from tickerlake.fib_zones import WEEKLY_FIB_ZONES_SCHEMA, compute_weekly_fib_zones_all
 from tickerlake.load import (
     append_raw_db,
@@ -32,11 +23,9 @@ from tickerlake.load import (
     get_db_info,
     get_existing_dates,
     read_adjusted_daily_bars_for_ticker,
-    read_fair_value_bands,
     read_raw_db,
     read_weekly_fib_zones,
     write_consumer_db,
-    write_fair_value_bands,
     write_raw_db,
     write_splits,
     write_weekly_fib_zones,
@@ -71,9 +60,6 @@ _LIQUIDITY_VOLUME_THRESHOLD = 1_000_000.0
 # degree is void are additionally excluded because their swing-low setup has
 # already broken.
 _ACTIONABLE_ZONES = ["in_ibz", "in_smz", "below_smz"]
-# Actionable Fair Value Band zones: below the lower band (discount) or above
-# the upper band (premium). Rows in the neutral in_band zone are excluded.
-_ACTIONABLE_FVB_ZONES = ["below_lower", "above_upper"]
 
 
 def _verify_split_adjustment(
@@ -532,194 +518,4 @@ def screen_fib_zones(
         zone,
         limit_label,
         min_swing_low,
-    )
-
-
-def _fair_value_bands_table(timeframe: str) -> str:
-    """Return the Fair Value Bands table for a valid timeframe."""
-    if timeframe not in VALID_TIMEFRAMES:
-        msg = f"timeframe must be one of: {', '.join(sorted(VALID_TIMEFRAMES))}"
-        raise ValueError(msg)
-    return f"{timeframe}_fair_value_bands"
-
-
-def _fair_value_bands_source_timeframe(display_timeframe: str) -> str:
-    """Return the native band timeframe used for a display timeframe."""
-    if display_timeframe == "daily":
-        return "weekly"
-    return "monthly"
-
-
-def _read_fair_value_bands_bars(consumer_path: Path, timeframe: str) -> pl.DataFrame:
-    """Read the persisted bars table matching ``timeframe`` via parquet."""
-    _fair_value_bands_table(timeframe)
-    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as bars_file:
-        bars_tmp = Path(bars_file.name)
-    try:
-        con = duckdb.connect(str(consumer_path), read_only=True)
-        try:
-            con.execute(
-                f"COPY (SELECT * FROM {timeframe}_bars ORDER BY ticker, date) "
-                f"TO '{bars_tmp}' (FORMAT PARQUET)"
-            )
-        except duckdb.CatalogException as err:
-            msg = (
-                f"{timeframe}_bars table not found in consumer DB: "
-                f"{consumer_path}. Run backfill first."
-            )
-            raise ValueError(msg) from err
-        finally:
-            con.close()
-        return pl.read_parquet(bars_tmp)
-    finally:
-        bars_tmp.unlink(missing_ok=True)
-
-
-def _validate_fair_value_bands_schema(df: pl.DataFrame, timeframe: str) -> None:
-    """Raise ValueError when a result does not match the shared schema."""
-    table = _fair_value_bands_table(timeframe)
-    actual = dict(df.schema)
-    mismatches = [
-        f"{col}: expected {dtype}, got {actual[col]}"
-        for col, dtype in FAIR_VALUE_BANDS_SCHEMA.items()
-        if col in actual and actual[col] != dtype
-    ]
-    missing = sorted(set(FAIR_VALUE_BANDS_SCHEMA) - set(actual))
-    extra = sorted(set(actual) - set(FAIR_VALUE_BANDS_SCHEMA))
-    problems = [
-        *([f"missing columns: {', '.join(missing)}"] if missing else []),
-        *([f"unexpected columns: {', '.join(extra)}"] if extra else []),
-        *mismatches,
-    ]
-    if problems:
-        msg = f"{table} schema mismatch: " + "; ".join(problems)
-        raise ValueError(msg)
-
-
-def compute_fair_value_bands(config: Config, timeframe: str = "monthly") -> None:
-    """Compute and persist Fair Value Bands for the selected timeframe.
-
-    Monthly uses native monthly bands, weekly overlays native monthly bands on
-    weekly bars, and daily overlays native weekly bands on daily bars.
-    """
-    table = _fair_value_bands_table(timeframe)
-    consumer_path = config.output_dir / "tickerlake.duckdb"
-    if not consumer_path.exists():
-        msg = f"Consumer DB not found: {consumer_path}. Run backfill first."
-        raise ValueError(msg)
-
-    display_bars = _read_fair_value_bands_bars(consumer_path, timeframe)
-    source_timeframe = _fair_value_bands_source_timeframe(timeframe)
-    source_bars = (
-        display_bars
-        if source_timeframe == timeframe
-        else _read_fair_value_bands_bars(consumer_path, source_timeframe)
-    )
-    logger.info(
-        "Computing %s fair value bands for %d source bars displayed on %d %s bars.",
-        source_timeframe,
-        len(source_bars),
-        len(display_bars),
-        timeframe,
-    )
-
-    native_bands = _compute_native_fair_value_bands(source_bars)
-    bands = (
-        native_bands
-        if source_timeframe == timeframe
-        else _align_fair_value_bands(native_bands, display_bars, source_timeframe)
-    )
-    _validate_fair_value_bands_schema(bands, timeframe)
-
-    n_below_lower = int(bands.filter(pl.col("zone") == "below_lower").height)
-    n_above_upper = int(bands.filter(pl.col("zone") == "above_upper").height)
-    n_in_band = int(bands.filter(pl.col("zone") == "in_band").height)
-    write_fair_value_bands(bands, consumer_path, timeframe)
-
-    n_total_tickers = (
-        display_bars["ticker"].n_unique() if not display_bars.is_empty() else 0
-    )
-    n_written_tickers = bands["ticker"].n_unique() if not bands.is_empty() else 0
-    n_excluded = n_total_tickers - n_written_tickers
-    logger.info(
-        "%s fair value bands written: n_below_lower=%d, n_above_upper=%d, "
-        "n_in_band=%d, n_written=%d, n_excluded=%d (warmup/no-straddles/zero-fv).",
-        timeframe.capitalize(),
-        n_below_lower,
-        n_above_upper,
-        n_in_band,
-        len(bands),
-        n_excluded,
-    )
-    logger.debug("Fair Value Bands output table: %s", table)
-
-
-def screen_fair_value_bands(
-    config: Config,
-    timeframe: str = "monthly",
-    *,
-    zone: str = "all",
-    limit: int | None = None,
-    min_close: float = 5.0,
-) -> None:
-    """Print persisted Fair Value Bands for the selected timeframe.
-
-    ``zone="all"`` restricts results to the actionable below-lower and
-    above-upper zones.
-    """
-    _fair_value_bands_table(timeframe)
-    consumer_path = config.output_dir / "tickerlake.duckdb"
-    if not consumer_path.exists():
-        msg = (
-            f"Consumer DB not found: {consumer_path}. "
-            "Run fair-value-bands compute first."
-        )
-        raise ValueError(msg)
-
-    if zone == "all":
-        result = read_fair_value_bands(
-            consumer_path, timeframe, zone=_ACTIONABLE_FVB_ZONES
-        )
-    else:
-        result = read_fair_value_bands(consumer_path, timeframe, zone=zone)
-    result = result.filter(pl.col("current_close") >= min_close)
-    result = result.sort(["ticker", "as_of_date"])
-
-    total = result.height
-    displayed = result.head(limit) if limit is not None else result
-
-    title = f"{timeframe.capitalize()} fair value bands screen"
-    table = Table(title=title, header_style="bold")
-    table.add_column("ticker", style="bold")
-    table.add_column("as_of_date", no_wrap=True)
-    table.add_column("current_close", justify="right")
-    table.add_column("fair_value", justify="right")
-    table.add_column("upper_band", justify="right")
-    table.add_column("lower_band", justify="right")
-    table.add_column("zone")
-    table.add_column("n_straddling_bars", justify="right")
-
-    for row in displayed.iter_rows(named=True):
-        table.add_row(
-            row["ticker"],
-            row["as_of_date"].isoformat(),
-            f"{row['current_close']:.2f}",
-            f"{row['fair_value']:.2f}",
-            f"{row['upper_band']:.2f}",
-            f"{row['lower_band']:.2f}",
-            row["zone"],
-            str(row["n_straddling_bars"]),
-        )
-    console.print(table)
-
-    limit_label = str(limit) if limit is not None else "unlimited"
-    logger.info(
-        "Screen: %d total matches, %d displayed (timeframe=%s, zone=%s, "
-        "limit=%s, min_close=%s).",
-        total,
-        displayed.height,
-        timeframe,
-        zone,
-        limit_label,
-        min_close,
     )

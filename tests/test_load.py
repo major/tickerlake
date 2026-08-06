@@ -14,12 +14,10 @@ from tickerlake.load import (
     get_db_info,
     get_existing_dates,
     read_adjusted_daily_bars_for_ticker,
-    read_fair_value_bands,
     read_raw_db,
     read_splits,
     read_weekly_fib_zones,
     write_consumer_db,
-    write_fair_value_bands,
     write_raw_db,
     write_splits,
     write_weekly_fib_zones,
@@ -893,115 +891,3 @@ def test_read_weekly_fib_zones_missing_table(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="weekly_fib_zones table not found"):
         read_weekly_fib_zones(db_path)
-
-
-def _sample_fair_value_bands_df() -> pl.DataFrame:
-    """Build a small fair_value_bands DataFrame for load tests."""
-    from tickerlake.fair_value_bands import FAIR_VALUE_BANDS_SCHEMA
-
-    return pl.DataFrame(
-        {
-            "ticker": ["AAPL", "MSFT"],
-            "as_of_date": [datetime.date(2026, 8, 1), datetime.date(2026, 8, 1)],
-            "fair_value": [230.0, 410.0],
-            "upper_band": [270.0, 470.0],
-            "lower_band": [200.0, 360.0],
-            "current_close": [180.0, 500.0],
-            "upper_dev": [0.17, 0.15],
-            "lower_dev": [0.13, 0.12],
-            "n_straddling_bars": [33, 33],
-            "zone": ["below_lower", "above_upper"],
-            "bar_count": [66, 66],
-        },
-        schema=FAIR_VALUE_BANDS_SCHEMA,
-    )
-
-
-def test_write_fair_value_bands_creates_each_timeframe_table(tmp_path: Path) -> None:
-    """The generic writer creates the selected timeframe table."""
-    db_path = tmp_path / "test.duckdb"
-    for timeframe in ("daily", "weekly", "monthly"):
-        write_fair_value_bands(_sample_fair_value_bands_df(), db_path, timeframe)
-
-    con = duckdb.connect(str(db_path), read_only=True)
-    tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
-    con.close()
-    assert {
-        "daily_fair_value_bands",
-        "weekly_fair_value_bands",
-        "monthly_fair_value_bands",
-    } <= tables
-
-
-def test_write_fair_value_bands_roundtrip(tmp_path: Path) -> None:
-    """The generic writer and reader round-trip each timeframe."""
-    db_path = tmp_path / "test.duckdb"
-    df = _sample_fair_value_bands_df()
-
-    for timeframe in ("daily", "weekly", "monthly"):
-        write_fair_value_bands(df, db_path, timeframe)
-        result = read_fair_value_bands(db_path, timeframe)
-        assert result.height == df.height
-        assert result["ticker"].to_list() == ["AAPL", "MSFT"]
-
-
-def test_read_fair_value_bands_sorts_history_by_ticker_and_date(
-    tmp_path: Path,
-) -> None:
-    """Historical rows are read in ticker/date order, not insertion order."""
-    df = _sample_fair_value_bands_df()
-    later = df.with_columns(
-        (pl.col("as_of_date") + pl.duration(days=31)).alias("as_of_date")
-    )
-    unsorted = pl.concat([later, df]).reverse()
-    db_path = tmp_path / "test.duckdb"
-
-    write_fair_value_bands(unsorted, db_path, "weekly")
-    result = read_fair_value_bands(db_path, "weekly")
-
-    pairs = list(
-        zip(result["ticker"].to_list(), result["as_of_date"].to_list(), strict=True)
-    )
-    assert pairs == sorted(pairs)
-
-
-def test_read_fair_value_bands_zone_filter(tmp_path: Path) -> None:
-    """The generic reader filters by zone (single string and list)."""
-    db_path = tmp_path / "test.duckdb"
-    write_fair_value_bands(_sample_fair_value_bands_df(), db_path, "daily")
-
-    below_lower = read_fair_value_bands(db_path, "daily", zone="below_lower")
-    assert below_lower.height == 1
-    assert below_lower["ticker"][0] == "AAPL"
-
-    both_extreme = read_fair_value_bands(
-        db_path, "daily", zone=["below_lower", "above_upper"]
-    )
-    assert both_extreme.height == 2
-
-
-def test_read_fair_value_bands_missing_file(tmp_path: Path) -> None:
-    """The generic reader rejects a missing consumer DB."""
-    db_path = tmp_path / "nonexistent.duckdb"
-    with pytest.raises(ValueError, match="Consumer DB not found"):
-        read_fair_value_bands(db_path, "monthly")
-
-
-def test_read_fair_value_bands_missing_table(tmp_path: Path) -> None:
-    """The generic reader identifies a missing selected timeframe table."""
-    db_path = tmp_path / "test.duckdb"
-    con = duckdb.connect(str(db_path))
-    con.execute("CREATE TABLE other_table (id INT)")
-    con.close()
-
-    with pytest.raises(ValueError, match="weekly_fair_value_bands table not found"):
-        read_fair_value_bands(db_path, "weekly")
-
-
-def test_fair_value_bands_rejects_invalid_timeframe(tmp_path: Path) -> None:
-    """Generic Fair Value Bands storage rejects invalid timeframes."""
-    db_path = tmp_path / "test.duckdb"
-    with pytest.raises(ValueError, match="timeframe must be one of"):
-        write_fair_value_bands(_sample_fair_value_bands_df(), db_path, "yearly")
-    with pytest.raises(ValueError, match="timeframe must be one of"):
-        read_fair_value_bands(db_path, "yearly")
