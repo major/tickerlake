@@ -504,14 +504,13 @@ def etf_race(  # noqa: PLR0913 -- public API, args are all user-tunable
     config: Config,
     *,
     tickers: Sequence[str] | None = None,
-    timeframe: str = "weekly",
-    lookback_days: int = 365,
+    lookback_days: int = 400,
     min_volume_sma_20: float = 250_000.0,
     max_etfs: int | None = 50,
     benchmark: str = "SPY",
     momentum_short_window: int = 4,
-    momentum_medium_window: int = 13,
-    momentum_long_window: int = 26,
+    momentum_medium_window: int = 12,
+    momentum_long_window: int = 52,
 ) -> None:
     """Run the etf-race report and print to the console.
 
@@ -523,10 +522,12 @@ def etf_race(  # noqa: PLR0913 -- public API, args are all user-tunable
     to the rendered leaderboard, not a coverage limit on the analysis: all
     qualifying ETFs are fetched and analyzed; only the top ``max_etfs`` (by
     ``race_score``) are shown. Shows the single horse-race table comparing
-    each ticker's relative strength vs ``benchmark`` (default: SPY) across
-    three windows: ``momentum_short_window`` (default: 4 bars, ~1 month for
-    weekly), ``momentum_medium_window`` (default: 13 bars, ~1 quarter), and
-    ``momentum_long_window`` (default: 26 bars, ~6 months).
+    each ticker's relative strength vs ``benchmark`` (default: SPY) using
+    weekly bars across three windows: ``momentum_short_window`` (default:
+    4 bars, ~1 month), ``momentum_medium_window`` (default: 12 bars,
+    ~3 months), and ``momentum_long_window`` (default: 52 bars, ~1 year).
+    The default ``lookback_days`` of 400 (~13 months) gives enough weekly
+    bars to satisfy the ``> momentum_long_window`` history filter.
     """
     # Validate momentum windows early, before any output
     if not (momentum_short_window < momentum_medium_window < momentum_long_window):
@@ -553,7 +554,7 @@ def etf_race(  # noqa: PLR0913 -- public API, args are all user-tunable
     read_list = list(dict.fromkeys([*race_tickers, benchmark]))
     relative_bars = read_race_bars(
         consumer_path,
-        timeframe=timeframe,
+        timeframe="weekly",
         tickers=read_list,
         lookback_days=lookback_days,
     )
@@ -563,7 +564,7 @@ def etf_race(  # noqa: PLR0913 -- public API, args are all user-tunable
 
     if bars.is_empty():
         msg = (
-            f"No {timeframe} bars found for tickers {race_tickers!r} in the "
+            f"No weekly bars found for tickers {race_tickers!r} in the "
             f"last {lookback_days} days. Run backfill or pick different tickers."
         )
         raise ValueError(msg)
@@ -572,7 +573,7 @@ def etf_race(  # noqa: PLR0913 -- public API, args are all user-tunable
     # and "in race_tickers but no DB rows" cases)
     if benchmark not in relative_bars["ticker"].unique().to_list():
         msg = (
-            f"No {timeframe} bars found for benchmark {benchmark!r} in the "
+            f"No weekly bars found for benchmark {benchmark!r} in the "
             f"last {lookback_days} days."
         )
         raise ValueError(msg)

@@ -523,8 +523,6 @@ class TestEtfRaceSubcommand:
                     "CIBR",
                     "IGV",
                     "XLK",
-                    "--timeframe",
-                    "weekly",
                     "--lookback-days",
                     "180",
                     "--output-dir",
@@ -538,28 +536,18 @@ class TestEtfRaceSubcommand:
             assert isinstance(config, Config)
             assert config.output_dir == tmp_path
             assert kwargs["tickers"] == ["CIBR", "IGV", "XLK"]
-            assert kwargs["timeframe"] == "weekly"
+            assert "timeframe" not in kwargs
             assert kwargs["lookback_days"] == 180
 
-    def test_etf_race_defaults_to_weekly_365d(self, monkeypatch):
-        """Verify etf-race defaults to weekly bars and 365-day lookback."""
+    def test_etf_race_defaults_to_400d_lookback(self, monkeypatch):
+        """Verify etf-race defaults to a 400-day lookback (weekly is hardcoded)."""
         monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
         with patch("tickerlake.pipeline.etf_race") as mock_etf_race:
             monkeypatch.setattr("sys.argv", ["tickerlake", "etf-race", "AAPL", "MSFT"])
             main()
             _, kwargs = mock_etf_race.call_args
-            assert kwargs["timeframe"] == "weekly"
-            assert kwargs["lookback_days"] == 365
-
-    def test_etf_race_invalid_timeframe_exits(self, monkeypatch):
-        """Verify an invalid --timeframe exits with a non-zero code."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        monkeypatch.setattr(
-            "sys.argv", ["tickerlake", "etf-race", "AAPL", "--timeframe", "yearly"]
-        )
-        with pytest.raises(SystemExit) as exc_info:
-            main()
-        assert exc_info.value.code != 0
+            assert "timeframe" not in kwargs
+            assert kwargs["lookback_days"] == 400
 
     def test_etf_race_invalid_lookback_exits(self, monkeypatch):
         """Verify --lookback-days must be a positive integer."""

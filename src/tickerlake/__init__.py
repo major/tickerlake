@@ -137,16 +137,10 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     etf_race_parser.add_argument(
-        "--timeframe",
-        choices=["daily", "weekly", "monthly"],
-        default="weekly",
-        help="Bar timeframe (default: weekly)",
-    )
-    etf_race_parser.add_argument(
         "--lookback-days",
         type=_parse_positive_int,
-        default=365,
-        help="Lookback window in days (default: 365)",
+        default=400,
+        help="Lookback window in days (default: 400)",
     )
     etf_race_parser.add_argument(
         "--min-vol-sma-20",
@@ -227,7 +221,6 @@ def _dispatch_etf_race(
         pipeline.etf_race(
             config,
             tickers=args.tickers or None,
-            timeframe=args.timeframe,
             lookback_days=args.lookback_days,
             min_volume_sma_20=args.min_vol_sma_20,
             max_etfs=max_etfs,

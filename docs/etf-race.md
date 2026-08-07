@@ -1,8 +1,8 @@
 # ETF Race Report
 
 The `etf-race` command compares ETFs by their relative strength vs a
-benchmark (default: SPY), showing which are outperforming and which are
-lagging across multiple timeframes.
+benchmark (default: SPY) on **weekly bars**, showing which are outperforming
+and which are lagging across three momentum windows (short / medium / long).
 
 ## Usage
 
@@ -15,9 +15,6 @@ uv run tickerlake etf-race CIBR IGV XLK
 
 # vs-benchmark momentum table with custom benchmark (default: SPY)
 uv run tickerlake etf-race CIBR IGV XLK --benchmark QQQ
-
-# Custom time window
-uv run tickerlake etf-race CIBR IGV --timeframe daily --lookback-days 90
 ```
 
 When called with no arguments, `etf-race` builds its ticker list
@@ -53,7 +50,7 @@ filtered out to avoid degenerate values:
 - **Places** — places gained or lost over the medium window. Positive values
   mean the horse is moving toward the front.
 - **Pace Short/Medium/Long** — percentage performance of the ETF/benchmark
-  ratio over the short (4 bars), medium (13 bars), and long (26 bars) windows.
+  ratio over the short (4 bars), medium (12 bars), and long (52 bars) windows.
   These are comparable across ETFs and are the primary pace measurements.
 - **Race** — a 0–100 score combining current momentum, places gained, and
   staying power. Higher is better.
@@ -101,8 +98,8 @@ each window (gracefully clamped to available history for recently-listed
 tickers):
 
 - `momentum_short = rs_ratio_current − rs_ratio_4_bars_ago` (default 4-bar window)
-- `momentum_medium = rs_ratio_current − rs_ratio_13_bars_ago` (default 13-bar window)
-- `momentum_long = rs_ratio_current − rs_ratio_26_bars_ago` (default 26-bar window)
+- `momentum_medium = rs_ratio_current − rs_ratio_12_bars_ago` (default 12-bar window)
+- `momentum_long = rs_ratio_current − rs_ratio_52_bars_ago` (default 52-bar window)
 
 The horse-table pace columns use directly comparable relative returns instead:
 
@@ -134,7 +131,7 @@ positivity gate:
 ### Caveats
 
 - **Short-history tickers in vs-benchmark momentum**: tickers with at most
-  the long momentum window bars (default 26) are filtered out of the
+  the long momentum window bars (default 52) are filtered out of the
   vs-benchmark table entirely to avoid degenerate/misleading momentum values.
   Such tickers still appear in the main leaderboard.
 - **Daily bars**: the median-gap date projection underestimates
