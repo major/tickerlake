@@ -30,6 +30,15 @@ from tickerlake.load import (
     write_splits,
     write_weekly_fib_zones,
 )
+from tickerlake.race import (
+    classify_relative_trend,
+    compute_relative_momentum,
+    compute_relative_ratio,
+    read_qualifying_etfs,
+    read_race_bars,
+    rebase_to_100,
+    render_relative_leaderboard,
+)
 from tickerlake.transform import (
     VALID_TIMEFRAMES,
     adjust_splits,
@@ -43,6 +52,7 @@ from tickerlake.transform import (
 
 if TYPE_CHECKING:
     import datetime
+    from collections.abc import Sequence
 
     from tickerlake.config import Config
 
@@ -218,6 +228,8 @@ def _run_backfill(config: Config, *, bars_start: datetime.date | None = None) ->
         monthly_bars=monthly_bars,
         monthly_metrics=monthly_metrics,
     )
+    logger.info("Refreshing weekly fib zones...")
+    compute_weekly_fib_zones(config)
 
     n_tickers = bars["ticker"].n_unique()
     logger.info(
@@ -454,6 +466,162 @@ def compute_weekly_fib_zones(config: Config) -> None:
         n_void,
         len(zones),
     )
+
+
+def _resolve_race_tickers(
+    consumer_path: Path,
+    *,
+    tickers: Sequence[str] | None,
+    min_volume_sma_20: float,
+    max_etfs: int | None,
+) -> list[str]:
+    """Resolve tickers from a dynamic list or explicit list.
+
+    If tickers is None, returns the dynamic ETF list from the consumer DB.
+    Otherwise returns the provided tickers list. Raises ValueError if tickers
+    is empty or if the dynamic list is empty.
+    """
+    if tickers is None:
+        resolved_tickers = read_qualifying_etfs(
+            consumer_path,
+            min_volume_sma_20=min_volume_sma_20,
+            limit=max_etfs,
+        )
+        if not resolved_tickers:
+            msg = (
+                f"No qualifying ETFs found in consumer DB "
+                f"(type='ETF', active, volume_sma_20 >= {min_volume_sma_20:,.0f})."
+            )
+            raise ValueError(msg)
+        return resolved_tickers
+    if not tickers:
+        msg = "tickers must not be empty"
+        raise ValueError(msg)
+    return list(tickers)
+
+
+def etf_race(  # noqa: PLR0913 -- public API, args are all user-tunable
+    config: Config,
+    *,
+    tickers: Sequence[str] | None = None,
+    timeframe: str = "weekly",
+    lookback_days: int = 365,
+    min_volume_sma_20: float = 250_000.0,
+    max_etfs: int | None = 50,
+    benchmark: str = "SPY",
+    momentum_short_window: int = 4,
+    momentum_medium_window: int = 13,
+    momentum_long_window: int = 26,
+) -> None:
+    """Run the etf-race report and print to the console.
+
+    Resolves tickers from either a positional list or a dynamic ETF list
+    pulled from the consumer DB. The dynamic list is used when ``tickers``
+    is not supplied; it contains every active ETF whose latest
+    ``daily_metrics`` row has ``volume_sma_20 >= min_volume_sma_20``,
+    ranked by volume_sma_20 descending and capped at ``max_etfs`` (pass
+    ``None`` for no cap). Shows the vs-benchmark momentum table comparing
+    each ticker's relative strength vs ``benchmark`` (default: SPY) across
+    three windows: ``momentum_short_window`` (default: 4 bars, ~1 month for
+    weekly), ``momentum_medium_window`` (default: 13 bars, ~1 quarter), and
+    ``momentum_long_window`` (default: 26 bars, ~6 months).
+    """
+    # Validate momentum windows early, before any output
+    if not (momentum_short_window < momentum_medium_window < momentum_long_window):
+        msg = (
+            f"Momentum windows must be strictly increasing: "
+            f"short ({momentum_short_window}) < medium ({momentum_medium_window}) < "
+            f"long ({momentum_long_window})"
+        )
+        raise ValueError(msg)
+
+    consumer_path = config.output_dir / "tickerlake.duckdb"
+
+    race_tickers = _resolve_race_tickers(
+        consumer_path,
+        tickers=tickers,
+        min_volume_sma_20=min_volume_sma_20,
+        max_etfs=max_etfs,
+    )
+
+    # Normalize tickers and benchmark to uppercase for DB consistency
+    race_tickers = [t.strip().upper() for t in race_tickers]
+    benchmark = benchmark.strip().upper()
+
+    label = " / ".join(race_tickers)
+    console.print(f"\n[bold]🏇 ETF Horserace: {label} 🏇[/bold]")
+    console.print(
+        f"{timeframe} bars, {lookback_days}-day lookback "
+        f"({len(race_tickers)} ETF{'s' if len(race_tickers) != 1 else ''})"
+    )
+
+    # Multi-asset view: fetch race tickers + benchmark in one deduped query
+    read_list = list(dict.fromkeys([*race_tickers, benchmark]))
+    relative_bars = read_race_bars(
+        consumer_path,
+        timeframe=timeframe,
+        tickers=read_list,
+        lookback_days=lookback_days,
+    )
+
+    # Filter to just the race tickers to validate they have data
+    bars = relative_bars.filter(pl.col("ticker").is_in(race_tickers))
+
+    if bars.is_empty():
+        msg = (
+            f"No {timeframe} bars found for tickers {race_tickers!r} in the "
+            f"last {lookback_days} days. Run backfill or pick different tickers."
+        )
+        raise ValueError(msg)
+
+    # Check that benchmark has bars (covers both "not in race_tickers but in DB"
+    # and "in race_tickers but no DB rows" cases)
+    if benchmark not in relative_bars["ticker"].unique().to_list():
+        msg = (
+            f"No {timeframe} bars found for benchmark {benchmark!r} in the "
+            f"last {lookback_days} days."
+        )
+        raise ValueError(msg)
+
+    _render_relative_view(
+        relative_bars,
+        benchmark=benchmark,
+        momentum_short_window=momentum_short_window,
+        momentum_medium_window=momentum_medium_window,
+        momentum_long_window=momentum_long_window,
+    )
+
+
+def _render_relative_view(
+    relative_bars: pl.DataFrame,
+    *,
+    benchmark: str,
+    momentum_short_window: int,
+    momentum_medium_window: int,
+    momentum_long_window: int,
+) -> None:
+    """Render the vs-benchmark momentum table for the multi-asset view."""
+    ratio_bars = compute_relative_ratio(relative_bars, benchmark=benchmark)
+    # Filter out tickers with insufficient history (≤ long_window bars)
+    # to avoid degenerate/misleading momentum values
+    ratio_bars = ratio_bars.filter(
+        pl.col("date").count().over("ticker") > momentum_long_window
+    )
+    if not ratio_bars.is_empty():
+        rebased_ratio = rebase_to_100(ratio_bars)
+        relative_momentum = compute_relative_momentum(
+            rebased_ratio,
+            short_window=momentum_short_window,
+            medium_window=momentum_medium_window,
+            long_window=momentum_long_window,
+        )
+        relative_trend = classify_relative_trend(relative_momentum)
+        console.print(render_relative_leaderboard(relative_trend, benchmark=benchmark))
+    else:
+        console.print(
+            f"[dim]No tickers with sufficient history (>{momentum_long_window} bars) "
+            f"to compare vs {benchmark}[/dim]"
+        )
 
 
 def screen_fib_zones(

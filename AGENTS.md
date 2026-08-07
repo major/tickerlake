@@ -7,7 +7,7 @@
 
 ## OVERVIEW
 
-US equity market ETL pipeline. Pulls OHLCV bars, splits, and ticker metadata from Massive API (Polygon.io-compatible), adjusts for splits, computes technical indicators (SMA-50/200, ATR, ADR%), and stores in DuckDB. Python 3.14 + Polars + DuckDB.
+US equity market ETL pipeline. Pulls OHLCV bars, splits, and ticker metadata from Massive API (Polygon.io-compatible), adjusts for splits, computes technical indicators (SMA-50/200, ATR, ADR%), stores in DuckDB, and powers the `etf-race` horserace report (multi-asset leaderboard). Python 3.14 + Polars + DuckDB.
 
 ## STRUCTURE
 
@@ -21,10 +21,15 @@ tickerlake/
 │   ├── extract.py      # API objects -> polars DataFrames (schema-driven)
 │   ├── transform.py    # Split adjustment, ticker filtering, SMA/ATR metrics
 │   ├── load.py         # DuckDB I/O via temporary parquet intermediaries
+│   ├── fib_zones.py    # Weekly Fibonacci-retracement IBZ/SMZ zone math
+│   ├── race.py         # Pure polars data layer for the etf-race report
 │   └── pipeline.py     # Orchestrates E->T->L for backfill/update/info
 ├── tests/              # 1:1 test files per module + conftest fixtures
 ├── .github/workflows/
 │   └── ci.yml          # Lint, format, complexity, test-cov on push to main + PRs
+├── docs/
+│   ├── fibonacci-retracements.md # Weekly Fibonacci strategy and DuckDB queries
+│   └── etf-race.md     # ETF horserace report usage, output, methodology
 ├── pyproject.toml      # uv_build backend, deps, dev tools
 └── uv.lock
 ```
@@ -41,6 +46,8 @@ tickerlake/
 | Trading day logic | `calendar.py` | Uses `exchange_calendars` XNYS calendar |
 | Config defaults | `config.py` | Dataclass fields + `__post_init__` validation |
 | Pipeline flow | `pipeline.py` | `_run_backfill()` has the full E->T->L sequence |
+| Fibonacci retracement strategy and queries | `docs/fibonacci-retracements.md` | Weekly leg calculation, zones, screening, and DuckDB examples |
+| ETF horserace report | `race.py`, `pipeline.etf_race` | `race.py` is pure data + rendering helpers; `pipeline.etf_race` is the orchestrator. Usage and methodology in `docs/etf-race.md` |
 | Shared test data | `tests/conftest.py` | 3 fixtures: `sample_bars_df`, `sample_splits_df`, `sample_tickers_df` |
 | CI/deployment | `.github/workflows/ci.yml` | Runs `make check` (lint, format-check, complexity+xenon, test-cov) on push to main + PRs |
 
@@ -76,6 +83,8 @@ uv run tickerlake backfill                       # Full 5-year backfill
 uv run tickerlake backfill --start-date 2023-01-01  # Custom start
 uv run tickerlake update                         # Incremental (appends new days)
 uv run tickerlake info                           # Show DB metadata
+uv run tickerlake etf-race CIBR IGV XLK          # vs-benchmark momentum leaderboard
+uv run tickerlake etf-race                       # Default: dynamic liquid-ETF list (top 50 by 20-day volume, min 250k shares/day)
 uv run ruff check src/ tests/                    # Lint
 uv run ty check src/                             # Type check
 ```
@@ -84,6 +93,7 @@ uv run ty check src/                             # Type check
 
 - **MASSIVE_API_KEY** env var is required for Massive-backed commands (`backfill`, `update`, `compact`). `Config.__post_init__` is permissive (may be empty for read-only commands like `pivots` and `info`); enforcement happens at the command boundary via `pipeline._require_api_key` (raises `ValueError("MASSIVE_API_KEY environment variable is required")` on empty key) and in `MassiveClient.__init__` as defense in depth.
 - **Two DuckDB files**: `raw.duckdb` (raw bars) and `tickerlake.duckdb` (adjusted bars + metrics + tickers)
-- **Consumer DB tables**: `daily_bars`, `daily_metrics`, `tickers`, `weekly_bars`, `weekly_metrics`, `monthly_bars`, `monthly_metrics`
+- **Consumer DB tables**: `daily_bars`, `daily_metrics`, `tickers`, `weekly_bars`, `weekly_metrics`, `weekly_fib_zones`, `monthly_bars`, `monthly_metrics`
+- **etf-race report** is read-only and works against any consumer DB that has the daily/weekly/monthly bars tables populated; it does not write to the DB and does not require `MASSIVE_API_KEY` at the CLI level (it will surface a clean `ValueError` if the consumer DB is missing or the table is absent). When called with no arguments it builds a dynamic ticker list from the consumer DB (`read_qualifying_etfs` in `race.py`): every active ETF whose latest `daily_metrics` row has `volume_sma_20 >= 250,000` qualifies, ranked by `volume_sma_20` descending and capped at the top 50 (`--max-etfs`, `--min-vol-sma-20` to tune, `0` for unlimited). See `docs/etf-race.md` for usage, output, and methodology.
 - **Update is incremental and revision-aware**: delegates to the backfill sequence (`_run_backfill(config, bars_start=...)`) with the bars-fetch start narrowed to a trailing `_REVISION_WINDOW_DAYS`-day window of already-cached dates (fetch-then-swap: fetch first, then delete+replace only the dates Massive actually returned data for in that window), so revisions Massive makes to already-published bars (up to ~5 trading days back) get picked up on the next run. Splits/tickers extraction always covers the full `config.start_date`-`config.end_date` range regardless. Consumer db is always fully rebuilt from raw.duckdb.
 - **Python 3.14 only**: `requires-python = ">=3.14,<3.15"` -- uses modern syntax throughout

@@ -268,6 +268,7 @@ def pipeline_mocks():
         read_raw_db=DEFAULT,
         write_splits=DEFAULT,
         write_consumer_db=DEFAULT,
+        compute_weekly_fib_zones=DEFAULT,
         get_db_info=DEFAULT,
         get_existing_dates=DEFAULT,
     ) as mocks:
@@ -368,6 +369,30 @@ def test_backfill_calls_write_consumer_db(
         pipeline_mocks["write_consumer_db"].call_args[0][3]
         == config.output_dir / "tickerlake.duckdb"
     )
+
+
+def test_backfill_refreshes_weekly_fib_zones_after_consumer_db(
+    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
+):
+    """Backfill refreshes weekly fib zones after writing the consumer DB."""
+    from tickerlake.pipeline import backfill
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    events = []
+    pipeline_mocks["write_consumer_db"].side_effect = lambda *args, **kwargs: (
+        events.append("consumer_db")
+    )
+    pipeline_mocks["compute_weekly_fib_zones"].side_effect = lambda config: (
+        events.append("weekly_fib_zones")
+    )
+    config = _make_config(tmp_path)
+
+    backfill(config)
+
+    assert events == ["consumer_db", "weekly_fib_zones"]
+    pipeline_mocks["compute_weekly_fib_zones"].assert_called_once_with(config)
 
 
 def test_backfill_no_trading_days(pipeline_mocks, tmp_path):
@@ -1248,6 +1273,32 @@ def test_update_passes_weekly_to_consumer_db(
     assert "monthly_metrics" in call_kwargs
 
 
+def test_update_refreshes_weekly_fib_zones_after_consumer_db(
+    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
+):
+    """Update refreshes weekly fib zones after writing the consumer DB."""
+    from tickerlake.pipeline import update
+
+    _wire_defaults(
+        pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics
+    )
+    pipeline_mocks["get_existing_dates"].return_value = {datetime.date(2024, 1, 2)}
+    events = []
+    pipeline_mocks["write_consumer_db"].side_effect = lambda *args, **kwargs: (
+        events.append("consumer_db")
+    )
+    pipeline_mocks["compute_weekly_fib_zones"].side_effect = lambda config: (
+        events.append("weekly_fib_zones")
+    )
+    (tmp_path / "raw.duckdb").touch()
+    config = _make_config(tmp_path)
+
+    update(config)
+
+    assert events == ["consumer_db", "weekly_fib_zones"]
+    pipeline_mocks["compute_weekly_fib_zones"].assert_called_once_with(config)
+
+
 def test_backfill_persists_splits(
     pipeline_mocks,
     tmp_path,
@@ -1695,3 +1746,244 @@ def test_screen_fib_zones_missing_db(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Consumer DB not found"):
         pipeline.screen_fib_zones(config, zone="all")
+
+
+# ---- Phase 2: vs-benchmark momentum tests (B1+B2+B3) ----
+
+
+def test_etf_race_momentum_windows_validation() -> None:
+    """etf_race validates momentum windows early, before any output."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config()
+    with pytest.raises(
+        ValueError, match="Momentum windows must be strictly increasing"
+    ):
+        pipeline.etf_race(
+            config,
+            tickers=["SPY", "QQQ"],
+            momentum_short_window=13,
+            momentum_medium_window=4,  # Invalid: not increasing
+            momentum_long_window=26,
+        )
+
+
+def test_etf_race_benchmark_in_race_tickers_single_read(tmp_path: Path) -> None:
+    """When benchmark is in race_tickers, only ONE read_race_bars call (B3.1)."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+
+    with patch.multiple(
+        _PIPELINE,
+        read_qualifying_etfs=DEFAULT,
+        _resolve_race_tickers=lambda consumer_path, **kw: ["SPY", "QQQ"],
+        read_race_bars=DEFAULT,
+        _render_relative_view=DEFAULT,
+    ) as mocks:
+        mocks["read_race_bars"].return_value = pl.DataFrame(
+            {
+                "date": [datetime.date(2024, 1, 1), datetime.date(2024, 1, 1)],
+                "ticker": ["SPY", "QQQ"],
+                "close": [400.0, 300.0],
+            }
+        )
+
+        pipeline.etf_race(
+            config,
+            tickers=["SPY", "QQQ"],
+            benchmark="SPY",  # In race_tickers
+        )
+
+        # Should call read_race_bars exactly once
+        assert mocks["read_race_bars"].call_count == 1
+        call_args = mocks["read_race_bars"].call_args
+        # The read_list should contain both SPY and QQQ (deduped)
+        assert set(call_args.kwargs["tickers"]) == {"SPY", "QQQ"}
+
+
+def test_etf_race_benchmark_not_in_race_tickers_single_read(tmp_path: Path) -> None:
+    """When benchmark not in race_tickers, still only ONE read_race_bars call (B3.2)."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+
+    with patch.multiple(
+        _PIPELINE,
+        read_qualifying_etfs=DEFAULT,
+        _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
+        read_race_bars=DEFAULT,
+        _render_relative_view=DEFAULT,
+    ) as mocks:
+        mocks["read_race_bars"].return_value = pl.DataFrame(
+            {
+                "date": [
+                    datetime.date(2024, 1, 1),
+                    datetime.date(2024, 1, 1),
+                    datetime.date(2024, 1, 1),
+                ],
+                "ticker": ["AAPL", "MSFT", "SPY"],
+                "close": [150.0, 300.0, 400.0],
+            }
+        )
+
+        pipeline.etf_race(
+            config,
+            tickers=["AAPL", "MSFT"],
+            benchmark="SPY",  # Not in race_tickers
+        )
+
+        # Should call read_race_bars exactly once
+        assert mocks["read_race_bars"].call_count == 1
+        call_args = mocks["read_race_bars"].call_args
+        # The read_list should contain AAPL, MSFT, and SPY (deduped)
+        assert set(call_args.kwargs["tickers"]) == {"AAPL", "MSFT", "SPY"}
+
+
+def test_etf_race_benchmark_missing_from_db_raises_error(tmp_path: Path) -> None:
+    """When benchmark has no rows in DB, ValueError is raised (B3.3)."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+
+    with patch.multiple(
+        _PIPELINE,
+        read_qualifying_etfs=DEFAULT,
+        _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
+        read_race_bars=DEFAULT,
+    ) as mocks:
+        # Simulate: race tickers have bars, but benchmark doesn't
+        mocks["read_race_bars"].return_value = pl.DataFrame(
+            {
+                "date": [datetime.date(2024, 1, 1), datetime.date(2024, 1, 1)],
+                "ticker": ["AAPL", "MSFT"],
+                "close": [150.0, 300.0],
+            }
+        )
+
+        with pytest.raises(ValueError, match=r"No.*bars found for benchmark"):
+            pipeline.etf_race(
+                config,
+                tickers=["AAPL", "MSFT"],
+                benchmark="QQQ",  # Not in the returned bars
+            )
+
+
+def test_etf_race_lowercase_tickers_normalized_no_duplicates(tmp_path: Path) -> None:
+    """Lowercase tickers and benchmark are normalized; no duplicate rows (B3.4)."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+
+    with patch.multiple(
+        _PIPELINE,
+        read_qualifying_etfs=DEFAULT,
+        _resolve_race_tickers=lambda consumer_path, **kw: ["spy", "xlk", "xlf"],
+        read_race_bars=DEFAULT,
+        _render_relative_view=DEFAULT,
+    ) as mocks:
+        # Return bars with uppercase tickers (as DB would)
+        mocks["read_race_bars"].return_value = pl.DataFrame(
+            {
+                "date": [
+                    datetime.date(2024, 1, 1),
+                    datetime.date(2024, 1, 1),
+                    datetime.date(2024, 1, 1),
+                ],
+                "ticker": ["SPY", "XLK", "XLF"],
+                "close": [400.0, 80.0, 30.0],
+            }
+        )
+
+        pipeline.etf_race(
+            config,
+            tickers=["spy", "xlk", "xlf"],
+            benchmark="spy",  # Lowercase, same as first ticker
+        )
+
+        # Verify _render_relative_view was called with correct bars (no duplicates)
+        render_call = mocks["_render_relative_view"].call_args
+        bars = render_call.args[0]  # bars is the first positional argument
+        # bars should have 3 rows (one per unique ticker), not 4 (no SPY duplication)
+        assert bars.height == 3
+        assert set(bars["ticker"].unique().to_list()) == {"SPY", "XLK", "XLF"}
+
+
+def test_etf_race_short_history_filter_excludes_tickers(tmp_path: Path) -> None:
+    """Tickers with ≤ long_window bars are filtered from vs-benchmark table (M2)."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+
+    with patch.multiple(
+        _PIPELINE,
+        read_qualifying_etfs=DEFAULT,
+        _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "NEWCO"],
+        read_race_bars=DEFAULT,
+        compute_relative_ratio=DEFAULT,
+        rebase_to_100=DEFAULT,
+        compute_relative_momentum=DEFAULT,
+        classify_relative_trend=DEFAULT,
+        render_relative_leaderboard=DEFAULT,
+        console=DEFAULT,
+    ) as mocks:
+        # AAPL has 30 bars (> long_window=26), NEWCO has 20 bars (≤ long_window),
+        # SPY has 30 bars. Only AAPL should reach the relative-momentum table.
+        bars_df = pl.DataFrame(
+            {
+                "date": (
+                    [datetime.date(2024, 1, i) for i in range(1, 31)]
+                    + [datetime.date(2024, 1, i) for i in range(1, 21)]
+                    + [datetime.date(2024, 1, i) for i in range(1, 31)]
+                ),
+                "ticker": ["AAPL"] * 30 + ["NEWCO"] * 20 + ["SPY"] * 30,
+                "close": (
+                    [100.0 + i for i in range(30)]
+                    + [50.0 + i for i in range(20)]
+                    + [400.0 + i for i in range(30)]
+                ),
+            }
+        )
+        mocks["read_race_bars"].return_value = bars_df
+
+        # compute_relative_ratio returns only AAPL and NEWCO (excludes benchmark SPY)
+        ratio_df = pl.DataFrame(
+            {
+                "date": (
+                    [datetime.date(2024, 1, i) for i in range(1, 31)]
+                    + [datetime.date(2024, 1, i) for i in range(1, 21)]
+                ),
+                "ticker": ["AAPL"] * 30 + ["NEWCO"] * 20,
+                "close": (
+                    [100.0 + i for i in range(30)] + [50.0 + i for i in range(20)]
+                ),
+            }
+        )
+        mocks["compute_relative_ratio"].return_value = ratio_df
+        mocks["rebase_to_100"].side_effect = lambda df: df  # Identity for testing
+
+        pipeline.etf_race(
+            config,
+            tickers=["AAPL", "NEWCO"],
+            benchmark="SPY",
+            momentum_long_window=26,
+        )
+
+        # Verify rebase_to_100 was called once for ratio_bars (vs-benchmark).
+        # The call should have NEWCO filtered out (only AAPL with > 26 bars).
+        assert mocks["rebase_to_100"].call_count == 1
+        ratio_arg = mocks["rebase_to_100"].call_args.args[0]
+        # After the filter, only AAPL should remain (30 bars > 26)
+        assert "AAPL" in ratio_arg["ticker"].to_list()
+        assert "NEWCO" not in ratio_arg["ticker"].to_list()

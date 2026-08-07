@@ -506,3 +506,129 @@ class TestFibZonesSubcommand:
         assert exc_info.value.code != 0
         assert "missing db" in captured.err
         assert "Traceback" not in captured.err
+
+
+class TestEtfRaceSubcommand:
+    """Test etf-race subcommand and its options."""
+
+    def test_etf_race_with_tickers_calls_pipeline(self, monkeypatch, tmp_path):
+        """Verify etf-race with positional tickers invokes pipeline.etf_race."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.etf_race") as mock_etf_race:
+            monkeypatch.setattr(
+                "sys.argv",
+                [
+                    "tickerlake",
+                    "etf-race",
+                    "CIBR",
+                    "IGV",
+                    "XLK",
+                    "--timeframe",
+                    "weekly",
+                    "--lookback-days",
+                    "180",
+                    "--output-dir",
+                    str(tmp_path),
+                ],
+            )
+            main()
+            mock_etf_race.assert_called_once()
+            args, kwargs = mock_etf_race.call_args
+            config = args[0]
+            assert isinstance(config, Config)
+            assert config.output_dir == tmp_path
+            assert kwargs["tickers"] == ["CIBR", "IGV", "XLK"]
+            assert kwargs["timeframe"] == "weekly"
+            assert kwargs["lookback_days"] == 180
+
+    def test_etf_race_defaults_to_weekly_365d(self, monkeypatch):
+        """Verify etf-race defaults to weekly bars and 365-day lookback."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.etf_race") as mock_etf_race:
+            monkeypatch.setattr("sys.argv", ["tickerlake", "etf-race", "AAPL", "MSFT"])
+            main()
+            _, kwargs = mock_etf_race.call_args
+            assert kwargs["timeframe"] == "weekly"
+            assert kwargs["lookback_days"] == 365
+
+    def test_etf_race_invalid_timeframe_exits(self, monkeypatch):
+        """Verify an invalid --timeframe exits with a non-zero code."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        monkeypatch.setattr(
+            "sys.argv", ["tickerlake", "etf-race", "AAPL", "--timeframe", "yearly"]
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code != 0
+
+    def test_etf_race_invalid_lookback_exits(self, monkeypatch):
+        """Verify --lookback-days must be a positive integer."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        monkeypatch.setattr(
+            "sys.argv", ["tickerlake", "etf-race", "AAPL", "--lookback-days", "0"]
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code != 0
+
+    def test_etf_race_value_error_becomes_cli_error(self, monkeypatch, capsys):
+        """Verify ValueError from pipeline exits cleanly without a traceback."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch(
+            "tickerlake.pipeline.etf_race",
+            side_effect=ValueError("consumer DB not found"),
+        ):
+            monkeypatch.setattr("sys.argv", ["tickerlake", "etf-race", "AAPL"])
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        captured = capsys.readouterr()
+        assert exc_info.value.code != 0
+        assert "consumer DB not found" in captured.err
+        assert "Traceback" not in captured.err
+
+    def test_etf_race_no_args_uses_dynamic_etf_list(self, monkeypatch):
+        """Verify etf-race with no args passes through to the pipeline with
+        no tickers, so the pipeline can build the dynamic liquid-ETF list
+        from the consumer DB."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.etf_race") as mock_etf_race:
+            monkeypatch.setattr("sys.argv", ["tickerlake", "etf-race"])
+            main()
+            mock_etf_race.assert_called_once()
+            _, kwargs = mock_etf_race.call_args
+            assert kwargs["tickers"] is None
+            assert kwargs["min_volume_sma_20"] == 250_000.0
+
+    def test_etf_race_custom_min_vol_sma_20_passes_through(self, monkeypatch):
+        """Verify --min-vol-sma-20 is forwarded to pipeline.etf_race."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.etf_race") as mock_etf_race:
+            monkeypatch.setattr(
+                "sys.argv",
+                ["tickerlake", "etf-race", "--min-vol-sma-20", "500000"],
+            )
+            main()
+            mock_etf_race.assert_called_once()
+            _, kwargs = mock_etf_race.call_args
+            assert kwargs["min_volume_sma_20"] == 500_000.0
+
+    def test_etf_race_benchmark_default_is_spy(self, monkeypatch):
+        """Verify --benchmark defaults to SPY."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.etf_race") as mock_etf_race:
+            monkeypatch.setattr("sys.argv", ["tickerlake", "etf-race", "AAPL"])
+            main()
+            _, kwargs = mock_etf_race.call_args
+            assert kwargs["benchmark"] == "SPY"
+
+    def test_etf_race_benchmark_custom_passes_through(self, monkeypatch):
+        """Verify --benchmark custom value is forwarded to pipeline.etf_race."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.etf_race") as mock_etf_race:
+            monkeypatch.setattr(
+                "sys.argv", ["tickerlake", "etf-race", "AAPL", "--benchmark", "QQQ"]
+            )
+            main()
+            _, kwargs = mock_etf_race.call_args
+            assert kwargs["benchmark"] == "QQQ"

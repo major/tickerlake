@@ -39,6 +39,7 @@ def _parse_positive_int(s: str) -> int:
     return value
 
 
+# Map CLI-friendly sort aliases onto the race.py column names.
 def _build_parser() -> argparse.ArgumentParser:
     """Build and return the argument parser with all subcommands."""
     parser = argparse.ArgumentParser(
@@ -120,6 +121,66 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     fib_zones_screen_parser.add_argument("--output-dir", type=Path, metavar="DIR")
 
+    etf_race_parser = subparsers.add_parser(
+        "etf-race",
+        help=(
+            "Compare ETFs: a default dynamic liquid-ETF list or a positional "
+            "ticker list"
+        ),
+    )
+    etf_race_parser.add_argument(
+        "tickers",
+        nargs="*",
+        help=(
+            "Tickers to compare, e.g. CIBR IGV XLK. Omit to use the dynamic "
+            "liquid-ETF list."
+        ),
+    )
+    etf_race_parser.add_argument(
+        "--timeframe",
+        choices=["daily", "weekly", "monthly"],
+        default="weekly",
+        help="Bar timeframe (default: weekly)",
+    )
+    etf_race_parser.add_argument(
+        "--lookback-days",
+        type=_parse_positive_int,
+        default=365,
+        help="Lookback window in days (default: 365)",
+    )
+    etf_race_parser.add_argument(
+        "--min-vol-sma-20",
+        type=float,
+        default=250_000.0,
+        metavar="SHARES",
+        help=(
+            "Minimum 20-day volume SMA for the default dynamic ETF list "
+            "(default: 250000)"
+        ),
+    )
+    etf_race_parser.add_argument(
+        "--max-etfs",
+        type=int,
+        default=50,
+        metavar="N",
+        help=(
+            "Cap the dynamic ETF list at the top N most-liquid tickers "
+            "(default: 50, use 0 for unlimited)"
+        ),
+    )
+    etf_race_parser.add_argument(
+        "--benchmark",
+        type=str,
+        default="SPY",
+        metavar="TICKER",
+        help=("Benchmark for the vs-benchmark momentum table (default: SPY)"),
+    )
+    etf_race_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        metavar="DIR",
+    )
+
     return parser
 
 
@@ -156,6 +217,25 @@ def _dispatch_fib_zones(
             parser.error(str(err))
 
 
+def _dispatch_etf_race(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: Config
+) -> None:
+    """Dispatch the etf-race subcommand, wrapping ValueErrors."""
+    try:
+        max_etfs = None if args.max_etfs == 0 else args.max_etfs
+        pipeline.etf_race(
+            config,
+            tickers=args.tickers or None,
+            timeframe=args.timeframe,
+            lookback_days=args.lookback_days,
+            min_volume_sma_20=args.min_vol_sma_20,
+            max_etfs=max_etfs,
+            benchmark=args.benchmark,
+        )
+    except ValueError as err:
+        parser.error(str(err))
+
+
 def main() -> None:
     """Parse CLI arguments and dispatch to appropriate pipeline function."""
     parser = _build_parser()
@@ -186,3 +266,5 @@ def main() -> None:
             parser.error(str(err))
     elif args.command == "fib-zones":
         _dispatch_fib_zones(parser, args, config)
+    elif args.command == "etf-race":
+        _dispatch_etf_race(parser, args, config)
