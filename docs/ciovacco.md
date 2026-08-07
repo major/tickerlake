@@ -19,6 +19,9 @@ uv run tickerlake ciovacco CIBR IGV XLK
 
 # Custom benchmark and display cap
 uv run tickerlake ciovacco --benchmark QQQ --max-etfs 0
+
+# Write the full scorecard to CSV (un-capped; Rich table still prints)
+uv run tickerlake ciovacco --csv ciovacco.csv
 ```
 
 When called with no arguments, `ciovacco` builds its ticker list the same way
@@ -71,6 +74,30 @@ Columns:
 
 Colors are ANSI and are disabled automatically by Rich when the output is not
 a terminal.
+
+### CSV output
+
+Pass `--csv PATH` to write the full scorecard to a CSV file alongside the
+Rich table:
+
+```bash
+uv run tickerlake ciovacco --csv ciovacco.csv
+```
+
+The CSV is un-capped by `--max-etfs` (which only constrains the Rich table)
+and includes every scored ticker sorted by `total` descending (nulls last).
+Columns:
+
+- `ticker` — the ETF
+- `benchmark` — the benchmark passed to `--benchmark` (default: SPY)
+- `score_1d_cloud` / `score_weekly_cloud` / `score_2wk_cloud` /
+  `score_3wk_cloud` / `score_monthly_cloud` — the 0.0-1.0 cloud scores
+- `score_200wk_ma` / `score_200wk_ma_slope` / `score_300wk_ma` /
+  `score_300wk_ma_slope` — the 0/1 MA scores
+- `total` — the 0.0-9.0 sum
+
+The parent directory is created if it does not already exist. Null cells
+(`n/a` in the Rich table) are written as empty strings.
 
 ## Methodology
 

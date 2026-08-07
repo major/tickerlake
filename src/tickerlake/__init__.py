@@ -226,6 +226,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help=("Benchmark for the MA comparisons (default: SPY)"),
     )
     ciovacco_parser.add_argument(
+        "--csv",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Write the full scorecard to a CSV file at PATH. Includes the "
+            "benchmark column, all 9 score columns, and the total. The CSV "
+            "is un-capped by --max-etfs; the Rich table still prints."
+        ),
+    )
+    ciovacco_parser.add_argument(
         "--output-dir",
         type=Path,
         metavar="DIR",
@@ -298,6 +309,7 @@ def _dispatch_ciovacco(
             min_volume_sma_20=args.min_vol_sma_20,
             max_etfs=max_etfs,
             benchmark=args.benchmark,
+            csv_path=args.csv,
         )
     except ValueError as err:
         parser.error(str(err))

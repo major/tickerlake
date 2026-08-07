@@ -648,6 +648,7 @@ def ciovacco(  # noqa: PLR0913 -- public API, args are all user-tunable
     min_volume_sma_20: float = 250_000.0,
     max_etfs: int | None = 50,
     benchmark: str = "SPY",
+    csv_path: Path | None = None,
 ) -> None:
     """Run the Ciovacco cloud-score report and print to the console.
 
@@ -657,6 +658,12 @@ def ciovacco(  # noqa: PLR0913 -- public API, args are all user-tunable
     and scores each ETF on 9 conditions: the five Ichimoku cloud timeframes
     (0-5 each) plus the four weekly moving-average conditions vs the
     benchmark (0/1 each). Read-only: no MASSIVE_API_KEY required.
+
+    When ``csv_path`` is provided, the full score frame is written to that
+    path as CSV: ticker, benchmark, the five cloud score columns, the four
+    MA score columns, and the total. The CSV is un-capped by ``max_etfs``
+    (which only controls the Rich table display). The Rich table always
+    prints to the console.
     """
     consumer_path = config.output_dir / "tickerlake.duckdb"
 
@@ -698,6 +705,41 @@ def ciovacco(  # noqa: PLR0913 -- public API, args are all user-tunable
     console.print(
         render_cloud_scorecard(scores, benchmark=benchmark, max_etfs=max_etfs)
     )
+
+    if csv_path is not None:
+        _write_ciovacco_csv(scores, csv_path=csv_path, benchmark=benchmark)
+
+
+def _write_ciovacco_csv(
+    scores: pl.DataFrame, *, csv_path: Path, benchmark: str
+) -> None:
+    """Write the full Ciovacco scorecard to a CSV file.
+
+    The CSV is sorted by ``total`` descending (nulls last) and includes a
+    ``benchmark`` column. The ``max_etfs`` display cap is NOT applied — the
+    CSV gets every scored row, since callers writing to CSV want the full
+    data for further analysis.
+    """
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    out = (
+        scores.sort("total", descending=True, nulls_last=True)
+        .with_columns(pl.lit(benchmark).alias("benchmark"))
+        .select(
+            "ticker",
+            "benchmark",
+            "score_1d_cloud",
+            "score_weekly_cloud",
+            "score_2wk_cloud",
+            "score_3wk_cloud",
+            "score_monthly_cloud",
+            "score_200wk_ma",
+            "score_200wk_ma_slope",
+            "score_300wk_ma",
+            "score_300wk_ma_slope",
+            "total",
+        )
+    )
+    out.write_csv(csv_path)
 
 
 def screen_fib_zones(

@@ -2187,3 +2187,111 @@ def test_ciovacco_max_etfs_none_forwarded_to_render(tmp_path: Path) -> None:
 
     render_call = mocks["render_cloud_scorecard"].call_args
     assert render_call.kwargs["max_etfs"] is None
+
+
+def test_ciovacco_no_csv_writes_no_file(tmp_path: Path) -> None:
+    """When csv_path is None, no CSV file is created."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+    csv_path = tmp_path / "ciovacco.csv"
+    assert not csv_path.exists()
+
+    with patch.multiple(
+        _PIPELINE,
+        _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
+        read_daily_bars=DEFAULT,
+        compute_cloud_scores=DEFAULT,
+        render_cloud_scorecard=DEFAULT,
+    ) as mocks:
+        mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
+            ["AAPL", "MSFT", "SPY"]
+        )
+        mocks["compute_cloud_scores"].return_value = _ciovacco_scores_df()
+        pipeline.ciovacco(config, tickers=["AAPL", "MSFT"])
+
+    assert not csv_path.exists()
+
+
+def test_ciovacco_csv_writes_full_scorecard(tmp_path: Path) -> None:
+    """When csv_path is provided, the full score frame is written to CSV."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+    csv_path = tmp_path / "subdir" / "ciovacco.csv"  # nested path tests mkdir
+
+    with patch.multiple(
+        _PIPELINE,
+        _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
+        read_daily_bars=DEFAULT,
+        compute_cloud_scores=DEFAULT,
+        render_cloud_scorecard=DEFAULT,
+    ) as mocks:
+        mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
+            ["AAPL", "MSFT", "QQQ"]
+        )
+        mocks["compute_cloud_scores"].return_value = _ciovacco_scores_df()
+        pipeline.ciovacco(
+            config,
+            tickers=["AAPL", "MSFT"],
+            csv_path=csv_path,
+            benchmark="QQQ",
+        )
+
+    assert csv_path.exists()
+    written = pl.read_csv(csv_path)
+    expected_columns = {
+        "ticker",
+        "benchmark",
+        "score_1d_cloud",
+        "score_weekly_cloud",
+        "score_2wk_cloud",
+        "score_3wk_cloud",
+        "score_monthly_cloud",
+        "score_200wk_ma",
+        "score_200wk_ma_slope",
+        "score_300wk_ma",
+        "score_300wk_ma_slope",
+        "total",
+    }
+    assert set(written.columns) == expected_columns
+    # Both ETFs written, sorted by total desc (AAPL 9.0, MSFT 7.75).
+    assert written["ticker"].to_list() == ["AAPL", "MSFT"]
+    assert written["benchmark"].to_list() == ["QQQ", "QQQ"]
+    assert written["total"].to_list() == [9.0, 7.75]
+
+
+def test_ciovacco_csv_unaffected_by_max_etfs(tmp_path: Path) -> None:
+    """CSV gets the full data even when max_etfs caps the Rich table."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+    csv_path = tmp_path / "ciovacco.csv"
+
+    with patch.multiple(
+        _PIPELINE,
+        _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
+        read_daily_bars=DEFAULT,
+        compute_cloud_scores=DEFAULT,
+        render_cloud_scorecard=DEFAULT,
+    ) as mocks:
+        mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
+            ["AAPL", "MSFT", "SPY"]
+        )
+        mocks["compute_cloud_scores"].return_value = _ciovacco_scores_df()
+        pipeline.ciovacco(
+            config,
+            tickers=["AAPL", "MSFT"],
+            max_etfs=1,  # display cap: only the top ETF renders
+            csv_path=csv_path,
+        )
+
+    written = pl.read_csv(csv_path)
+    # CSV has both rows; max_etfs only constrains the Rich table.
+    assert written["ticker"].to_list() == ["AAPL", "MSFT"]

@@ -740,5 +740,37 @@ class TestCiovaccoSubcommand:
                 "sys.argv", ["tickerlake", "ciovacco", "--max-etfs", "0"]
             )
             main()
+            mock_ciovacco.assert_called_once()
             _, kwargs = mock_ciovacco.call_args
             assert kwargs["max_etfs"] is None
+
+    def test_ciovacco_csv_default_is_none(self, monkeypatch):
+        """Verify --csv defaults to None when not provided."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.ciovacco") as mock_ciovacco:
+            monkeypatch.setattr("sys.argv", ["tickerlake", "ciovacco", "AAPL"])
+            main()
+            mock_ciovacco.assert_called_once()
+            _, kwargs = mock_ciovacco.call_args
+            assert kwargs["csv_path"] is None
+
+    def test_ciovacco_csv_path_passes_through(self, monkeypatch, tmp_path):
+        """Verify --csv PATH is forwarded to pipeline.ciovacco as csv_path."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        csv_path = tmp_path / "ciovacco.csv"
+        with patch("tickerlake.pipeline.ciovacco") as mock_ciovacco:
+            monkeypatch.setattr(
+                "sys.argv",
+                [
+                    "tickerlake",
+                    "ciovacco",
+                    "CIBR",
+                    "IGV",
+                    "--csv",
+                    str(csv_path),
+                ],
+            )
+            main()
+            mock_ciovacco.assert_called_once()
+            _, kwargs = mock_ciovacco.call_args
+            assert kwargs["csv_path"] == csv_path
