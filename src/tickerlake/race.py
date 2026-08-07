@@ -117,7 +117,7 @@ FORM_STYLE: dict[str, tuple[str, str | None]] = {
     "Closing ground": ("⚡", "yellow"),
     "Steady": ("➖", None),  # noqa: RUF001 -- deliberate per design spec
     "Losing steam": ("📉", "red"),
-    "Fading": ("🍂", "orange"),
+    "Fading": ("🍂", "dark_orange"),
     "Back of field": ("🐢", "dim red"),
     "Unknown": ("❔", "dim"),
 }

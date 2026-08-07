@@ -1309,7 +1309,7 @@ def test_form_style_maps_all_forms():
         "Closing ground": ("⚡", "yellow"),
         "Steady": ("➖", None),  # noqa: RUF001 -- deliberate per design spec
         "Losing steam": ("📉", "red"),
-        "Fading": ("🍂", "orange"),
+        "Fading": ("🍂", "dark_orange"),
         "Back of field": ("🐢", "dim red"),
         "Unknown": ("❔", "dim"),
     }
@@ -1361,6 +1361,27 @@ def test_render_relative_leaderboard_applies_form_emoji_and_row_styles():
     assert str(table.rows[1].style) == "cyan"
     assert table.rows[2].style is None
     assert str(table.rows[3].style) == "red"
+
+
+def test_render_relative_leaderboard_accepts_fading_row_style():
+    """The Fading form uses a Rich-compatible color name."""
+    metrics = pl.DataFrame(
+        {
+            "ticker": ["FADER"],
+            "position": [5],
+            "places_gained": [-3],
+            "relative_return_short": [-2.0],
+            "relative_return_medium": [-4.0],
+            "relative_return_long": [-6.0],
+            "race_score": [20.0],
+            "form": ["Fading"],
+        }
+    )
+
+    table = render_relative_leaderboard(metrics, benchmark="SPY")
+
+    _rich_text(table)
+    assert str(table.rows[0].style) == "dark_orange"
 
 
 def test_render_relative_leaderboard_colors_pace_and_race_cells():
