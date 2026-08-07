@@ -673,17 +673,16 @@ def render_relative_leaderboard(
 ) -> Table:
     """Build a Rich Table for relative momentum vs a benchmark.
 
-    The table uses horse-race language: position, places gained, pace over
-    three windows, race score, and form. Diagnostic RS-Ratio, trend, raw
-    momentum, and building columns are intentionally omitted. ``max_etfs``
-    caps the displayed rows after sorting (default: ``_DEFAULT_MAX_ETFS``,
-    pass ``None`` for unlimited); it is a display limit only, and does not
-    restrict the underlying computation.
+    The table uses horse-race language: pace over three windows, race score,
+    and form. Position and places-gained drive the form classification but
+    are intentionally not displayed. Diagnostic RS-Ratio, trend, raw
+    momentum, and building columns are also intentionally omitted.
+    ``max_etfs`` caps the displayed rows after sorting (default:
+    ``_DEFAULT_MAX_ETFS``, pass ``None`` for unlimited); it is a display
+    limit only, and does not restrict the underlying computation.
     """
     table = Table(title=f"🐎 vs {benchmark} Momentum", header_style="bold")
     table.add_column("Ticker", style="bold")
-    table.add_column("Pos", justify="right")
-    table.add_column("Places", justify="right")
     table.add_column("Pace Short", justify="right")
     table.add_column("Pace Medium", justify="right")
     table.add_column("Pace Long", justify="right")
@@ -707,8 +706,6 @@ def render_relative_leaderboard(
         form_label = row.get("form") or "Unknown"
         table.add_row(
             row["ticker"],
-            _fmt_or_na(row.get("position"), lambda value: str(int(value))),
-            _fmt_or_na(row.get("places_gained"), lambda value: f"{int(value):+d}"),
             Text(
                 _fmt_or_na(
                     row.get("relative_return_short"), lambda value: f"{value:+.1f}%"

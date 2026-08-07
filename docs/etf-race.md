@@ -46,9 +46,6 @@ long momentum window bars are
 filtered out to avoid degenerate values:
 
 - **Ticker** — the asset.
-- **Pos** — current position in the field, ranked by long-term relative pace.
-- **Places** — places gained or lost over the medium window. Positive values
-  mean the horse is moving toward the front.
 - **Pace Short/Medium/Long** — percentage performance of the ETF/benchmark
   ratio over the short (4 bars), medium (12 bars), and long (52 bars) windows.
   These are comparable across ETFs and are the primary pace measurements.

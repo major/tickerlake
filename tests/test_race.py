@@ -1055,7 +1055,7 @@ def test_classify_horse_form_labels_front_runner_and_charger():
 
 
 def test_render_relative_leaderboard_shows_horse_metrics():
-    """The single horse table exposes position, places, pace, and form."""
+    """The single horse table exposes pace, race score, and form."""
     metrics = pl.DataFrame(
         {
             "ticker": ["CHARGER"],
@@ -1080,10 +1080,11 @@ def test_render_relative_leaderboard_shows_horse_metrics():
 
     text = _rich_text(render_relative_leaderboard(metrics, benchmark="SPY"))
 
-    assert "Places" in text
     assert "Pace Short" in text
     assert "Race" in text
     assert "Charging" in text
+    assert "Pos" not in text
+    assert "Places" not in text
     assert "RS-Ratio" not in text
     assert "Trend" not in text
     assert "Momentum Short" not in text
