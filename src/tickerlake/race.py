@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 import duckdb
 import polars as pl
 from rich.table import Table
+from rich.text import Text
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -696,19 +697,36 @@ def render_relative_leaderboard(
         )
 
     for row in sorted_df.iter_rows(named=True):
+        emoji, row_style = _form_style(row.get("form"))
+        form_label = row.get("form") or "Unknown"
         table.add_row(
             row["ticker"],
             _fmt_or_na(row.get("position"), lambda value: str(int(value))),
             _fmt_or_na(row.get("places_gained"), lambda value: f"{int(value):+d}"),
-            _fmt_or_na(
-                row.get("relative_return_short"), lambda value: f"{value:+.1f}%"
+            Text(
+                _fmt_or_na(
+                    row.get("relative_return_short"), lambda value: f"{value:+.1f}%"
+                ),
+                style=_pace_style(row.get("relative_return_short")),
             ),
-            _fmt_or_na(
-                row.get("relative_return_medium"), lambda value: f"{value:+.1f}%"
+            Text(
+                _fmt_or_na(
+                    row.get("relative_return_medium"), lambda value: f"{value:+.1f}%"
+                ),
+                style=_pace_style(row.get("relative_return_medium")),
             ),
-            _fmt_or_na(row.get("relative_return_long"), lambda value: f"{value:+.1f}%"),
-            _fmt_or_na(row.get("race_score"), lambda value: f"{value:.0f}"),
-            row.get("form") or "Unknown",
+            Text(
+                _fmt_or_na(
+                    row.get("relative_return_long"), lambda value: f"{value:+.1f}%"
+                ),
+                style=_pace_style(row.get("relative_return_long")),
+            ),
+            Text(
+                _fmt_or_na(row.get("race_score"), lambda value: f"{value:.0f}"),
+                style=_race_score_style(row.get("race_score")),
+            ),
+            f"{emoji} {form_label}",
+            style=row_style,
         )
 
     return table
