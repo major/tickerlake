@@ -14,6 +14,11 @@ from rich.table import Table
 from tickerlake import console
 from tickerlake.calendar import get_trading_days
 from tickerlake.client import MassiveClient
+from tickerlake.cloud_score import (
+    compute_cloud_scores,
+    read_daily_bars,
+    render_cloud_scorecard,
+)
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
 from tickerlake.fib_zones import WEEKLY_FIB_ZONES_SCHEMA, compute_weekly_fib_zones_all
 from tickerlake.load import (
@@ -633,6 +638,66 @@ def _render_relative_view(  # noqa: PLR0913 -- momentum windows + benchmark + di
             f"[dim]No tickers with sufficient history (>{momentum_long_window} bars) "
             f"to compare vs {benchmark}[/dim]"
         )
+
+
+def ciovacco(  # noqa: PLR0913 -- public API, args are all user-tunable
+    config: Config,
+    *,
+    tickers: Sequence[str] | None = None,
+    lookback_days: int = 3650,  # 10y of daily bars covers every cloud timeframe
+    min_volume_sma_20: float = 250_000.0,
+    max_etfs: int | None = 50,
+    benchmark: str = "SPY",
+) -> None:
+    """Run the Ciovacco cloud-score report and print to the console.
+
+    Resolves tickers from either a positional list or the dynamic liquid-ETF
+    list pulled from the consumer DB (same resolution as etf-race), reads
+    daily bars for the universe plus ``benchmark`` over ``lookback_days``,
+    and scores each ETF on 9 conditions: the five Ichimoku cloud timeframes
+    (0-5 each) plus the four weekly moving-average conditions vs the
+    benchmark (0/1 each). Read-only: no MASSIVE_API_KEY required.
+    """
+    consumer_path = config.output_dir / "tickerlake.duckdb"
+
+    cloud_tickers = _resolve_race_tickers(
+        consumer_path,
+        tickers=tickers,
+        min_volume_sma_20=min_volume_sma_20,
+    )
+    cloud_tickers = [ticker.strip().upper() for ticker in cloud_tickers]
+    benchmark = benchmark.strip().upper()
+
+    read_list = list(dict.fromkeys([*cloud_tickers, benchmark]))
+    daily_bars = read_daily_bars(
+        consumer_path,
+        tickers=read_list,
+        lookback_days=lookback_days,
+    )
+
+    if benchmark not in daily_bars["ticker"].unique().to_list():
+        msg = (
+            f"No daily bars found for benchmark {benchmark!r} in the "
+            f"last {lookback_days} days."
+        )
+        raise ValueError(msg)
+
+    bars = daily_bars.filter(pl.col("ticker").is_in(cloud_tickers))
+    if bars.is_empty():
+        msg = (
+            f"No daily bars found for tickers {cloud_tickers!r} in the "
+            f"last {lookback_days} days. Run backfill or pick different tickers."
+        )
+        raise ValueError(msg)
+
+    scores = compute_cloud_scores(
+        daily_bars,
+        tickers=cloud_tickers,
+        benchmark=benchmark,
+    )
+    console.print(
+        render_cloud_scorecard(scores, benchmark=benchmark, max_etfs=max_etfs)
+    )
 
 
 def screen_fib_zones(

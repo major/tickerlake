@@ -2022,3 +2022,168 @@ def test_etf_race_short_history_filter_excludes_tickers(tmp_path: Path) -> None:
         # After the filter, only AAPL should remain (30 bars > 26)
         assert "AAPL" in ratio_arg["ticker"].to_list()
         assert "NEWCO" not in ratio_arg["ticker"].to_list()
+
+
+# ---- ciovacco cloud-score report -------------------------------------------
+
+
+def _ciovacco_bars_df(tickers: list[str]) -> pl.DataFrame:
+    """A one-row-per-ticker daily bars frame for ciovacco orchestration."""
+    return pl.DataFrame(
+        {
+            "date": [datetime.date(2024, 1, 1)] * len(tickers),
+            "ticker": tickers,
+            "open": [150.0] * len(tickers),
+            "high": [151.0] * len(tickers),
+            "low": [149.0] * len(tickers),
+            "close": [150.0] * len(tickers),
+            "volume": [1_000_000.0] * len(tickers),
+            "vwap": [150.0] * len(tickers),
+            "transactions": [5000] * len(tickers),
+        }
+    )
+
+
+def _ciovacco_scores_df() -> pl.DataFrame:
+    """A minimal CLOUD_SCORE_SCHEMA frame for render orchestration."""
+    from tickerlake.cloud_score import CLOUD_SCORE_SCHEMA
+
+    return pl.DataFrame(
+        {
+            "ticker": ["AAPL", "MSFT"],
+            "score_weekly_cloud": [1.0, 0.75],
+            "score_2wk_cloud": [1.0, 0.75],
+            "score_3wk_cloud": [1.0, 0.75],
+            "score_monthly_cloud": [1.0, 0.75],
+            "score_2mo_cloud": [1.0, 0.75],
+            "score_200wk_ma": [1, 1],
+            "score_200wk_ma_slope": [1, 1],
+            "score_300wk_ma": [1, 1],
+            "score_300wk_ma_slope": [1, 1],
+            "total": [9.0, 7.75],
+        },
+        schema=CLOUD_SCORE_SCHEMA,
+    )
+
+
+def test_ciovacco_renders_cloud_scorecard(tmp_path: Path) -> None:
+    """ciovacco reads daily bars, scores, and renders via console.print."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+    recording = Console(record=True)
+
+    with (
+        patch.multiple(
+            _PIPELINE,
+            _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
+            read_daily_bars=DEFAULT,
+            compute_cloud_scores=DEFAULT,
+            render_cloud_scorecard=DEFAULT,
+        ) as mocks,
+        patch(f"{_PIPELINE}.console", recording),
+    ):
+        mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
+            ["AAPL", "MSFT", "SPY"]
+        )
+        mocks["compute_cloud_scores"].return_value = _ciovacco_scores_df()
+        pipeline.ciovacco(config, tickers=["AAPL", "MSFT"])
+
+    # One read for the universe + benchmark (deduped), scored vs SPY.
+    read_call = mocks["read_daily_bars"].call_args
+    assert set(read_call.kwargs["tickers"]) == {"AAPL", "MSFT", "SPY"}
+    score_call = mocks["compute_cloud_scores"].call_args
+    assert set(score_call.kwargs["tickers"]) == {"AAPL", "MSFT"}
+    assert score_call.kwargs["benchmark"] == "SPY"
+    render_call = mocks["render_cloud_scorecard"].call_args
+    assert render_call.args[0].equals(_ciovacco_scores_df())
+    assert render_call.kwargs["benchmark"] == "SPY"
+    assert render_call.kwargs["max_etfs"] == 50
+    assert recording.export_text()  # a table was printed
+
+
+def test_ciovacco_lowercase_tickers_normalized_no_duplicates(tmp_path: Path) -> None:
+    """Lowercase tickers and benchmark are normalized and deduped (C3.4)."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+
+    with patch.multiple(
+        _PIPELINE,
+        _resolve_race_tickers=lambda consumer_path, **kw: ["spy", "xlk", "xlf"],
+        read_daily_bars=DEFAULT,
+        compute_cloud_scores=DEFAULT,
+        render_cloud_scorecard=DEFAULT,
+    ) as mocks:
+        mocks["read_daily_bars"].return_value = _ciovacco_bars_df(["SPY", "XLK", "XLF"])
+        pipeline.ciovacco(config, tickers=["spy", "xlk", "xlf"], benchmark="spy")
+
+    read_call = mocks["read_daily_bars"].call_args
+    assert set(read_call.kwargs["tickers"]) == {"SPY", "XLK", "XLF"}
+    assert len(read_call.kwargs["tickers"]) == 3
+
+
+def test_ciovacco_benchmark_missing_from_db_raises_error(tmp_path: Path) -> None:
+    """When the benchmark has no bars, ValueError is raised."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+
+    with patch.multiple(
+        _PIPELINE,
+        _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
+        read_daily_bars=DEFAULT,
+    ) as mocks:
+        mocks["read_daily_bars"].return_value = _ciovacco_bars_df(["AAPL", "MSFT"])
+
+        with pytest.raises(ValueError, match=r"No.*bars found for benchmark"):
+            pipeline.ciovacco(config, tickers=["AAPL", "MSFT"], benchmark="QQQ")
+
+
+def test_ciovacco_no_etf_bars_raises_error(tmp_path: Path) -> None:
+    """When none of the scored tickers have bars, ValueError is raised."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+
+    with patch.multiple(
+        _PIPELINE,
+        _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
+        read_daily_bars=DEFAULT,
+    ) as mocks:
+        mocks["read_daily_bars"].return_value = _ciovacco_bars_df(["SPY"])
+
+        with pytest.raises(ValueError, match=r"No daily bars found for tickers"):
+            pipeline.ciovacco(config, tickers=["AAPL", "MSFT"])
+
+
+def test_ciovacco_max_etfs_none_forwarded_to_render(tmp_path: Path) -> None:
+    """max_etfs=None means the scorecard is rendered uncapped."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+
+    with patch.multiple(
+        _PIPELINE,
+        _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
+        read_daily_bars=DEFAULT,
+        compute_cloud_scores=DEFAULT,
+        render_cloud_scorecard=DEFAULT,
+    ) as mocks:
+        mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
+            ["AAPL", "MSFT", "SPY"]
+        )
+        pipeline.ciovacco(config, tickers=["AAPL", "MSFT"], max_etfs=None)
+
+    render_call = mocks["render_cloud_scorecard"].call_args
+    assert render_call.kwargs["max_etfs"] is None

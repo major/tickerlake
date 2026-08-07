@@ -123,3 +123,108 @@ def sample_tickers_df() -> pl.DataFrame:
         pl.col("cik").cast(pl.Utf8),
         pl.col("active").cast(pl.Boolean),
     )
+
+
+@pytest.fixture
+def sample_daily_bars_df() -> pl.DataFrame:
+    """Create ~8 years of weekday daily OHLCV bars for the ciovacco report.
+
+    Four tickers with deterministic close paths:
+    - UP: steadily rising close (100 * 1.0005^i)
+    - DOWN: steadily falling close (100 * 0.9995^i)
+    - FLAT: constant close (100)
+    - SPY: the benchmark, moderately rising (200 * 1.0002^i)
+
+    High/low are derived from close (high = close*1.001, low = close*0.999).
+    The 8-year span is long enough for every cloud timeframe and the weekly
+    300-week MA conditions to resolve (the deepest cloud timeframe needs
+    ~6.5 years of daily bars).
+    """
+    dates = pl.date_range(
+        datetime.date(2017, 1, 2),
+        datetime.date(2024, 12, 31),
+        interval="1d",
+        eager=True,
+    )
+    dates = dates.filter(dates.dt.weekday() < 5).to_list()
+    paths = {
+        "UP": lambda i: 100.0 * (1.0005**i),
+        "DOWN": lambda i: 100.0 * (0.9995**i),
+        "FLAT": lambda i: 100.0,
+        "SPY": lambda i: 200.0 * (1.0002**i),
+    }
+    rows = []
+    for ticker, path in paths.items():
+        for index, day in enumerate(dates):
+            close = path(index)
+            rows.append(
+                {
+                    "date": day,
+                    "ticker": ticker,
+                    "open": close * 0.999,
+                    "high": close * 1.001,
+                    "low": close * 0.999,
+                    "close": close,
+                    "volume": 1_000_000.0,
+                    "vwap": close,
+                    "transactions": 5000,
+                }
+            )
+    return pl.DataFrame(rows).with_columns(
+        pl.col("date").cast(pl.Date),
+        pl.col("ticker").cast(pl.Utf8),
+        pl.col("open").cast(pl.Float32),
+        pl.col("high").cast(pl.Float32),
+        pl.col("low").cast(pl.Float32),
+        pl.col("close").cast(pl.Float32),
+        pl.col("volume").cast(pl.Float32),
+        pl.col("vwap").cast(pl.Float32),
+        pl.col("transactions").cast(pl.UInt32),
+    )
+
+
+@pytest.fixture
+def sample_ichimoku_df() -> pl.DataFrame:
+    """Create an Ichimoku frame for the score_ichimoku grid tests.
+
+    Each ticker has two bars; the second bar (2024-01-02) drives the score:
+    T1 scores 1.0 (above all 4 lines), T2 0.75 (senkou_b equal/below), T3 0.5
+    (exactly on senkou_a and senkou_b — the canonical "inside the cloud"
+    case), T4 0.25 (only tenkan above), T5 0.0, T6 null (senkou_a undefined),
+    and SPY (the benchmark) is present but must never be scored.
+    """
+    last_bar = {
+        "T1": (10.0, 9.0, 9.0, 9.0, 9.0),
+        "T2": (10.0, 9.0, 9.0, 9.0, 10.0),
+        "T3": (10.0, 9.0, 9.0, 10.0, 10.0),
+        "T4": (10.0, 9.0, 11.0, 11.0, 11.0),
+        "T5": (10.0, 11.0, 11.0, 11.0, 11.0),
+        "T6": (10.0, 9.0, 9.0, None, 9.0),
+        "SPY": (10.0, 9.0, 9.0, 9.0, 9.0),
+    }
+    rows = []
+    for ticker, (close, tenkan, kijun, sa, sb) in last_bar.items():
+        rows.append({"date": datetime.date(2024, 1, 1), "ticker": ticker})
+        rows.append(
+            {
+                "date": datetime.date(2024, 1, 2),
+                "ticker": ticker,
+                "close": close,
+                "tenkan": tenkan,
+                "kijun": kijun,
+                "senkou_a_at_current": sa,
+                "senkou_b_at_current": sb,
+            }
+        )
+    return pl.DataFrame(
+        rows,
+        schema={
+            "date": pl.Date,
+            "ticker": pl.Utf8,
+            "close": pl.Float32,
+            "tenkan": pl.Float32,
+            "kijun": pl.Float32,
+            "senkou_a_at_current": pl.Float32,
+            "senkou_b_at_current": pl.Float32,
+        },
+    )

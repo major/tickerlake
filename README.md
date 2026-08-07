@@ -59,6 +59,22 @@ uv run tickerlake update                            # Append new trading days
 uv run tickerlake info                              # Show database metadata
 ```
 
+Read-only reports (no `MASSIVE_API_KEY` required):
+
+```bash
+uv run tickerlake etf-race                          # vs-SPY relative-strength horserace leaderboard
+uv run tickerlake ciovacco                          # Ciovacco 9-condition Ichimoku cloud + MA scorecard vs SPY
+```
+
+`ciovacco` scores each ETF on five Ichimoku cloud timeframes (weekly through
+2-month, 0.00-1.00 in 0.25 steps — the share of the four cloud lines above
+the close) plus four weekly moving-average conditions (0/1 each) for a 0-9.0
+total. Every condition is computed on the per-ETF relative (ETF/SPY) ratio
+series, so the "vs benchmark" comparison is intrinsic — the clouds and MAs
+are the ratio's own, never cross-ticker dollar comparisons. See
+`docs/ciovacco.md` for the methodology and the backfill depth required for
+the deeper timeframes.
+
 ## Output
 
 Two DuckDB files in the working directory:

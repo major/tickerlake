@@ -23,13 +23,15 @@ tickerlake/
 │   ├── load.py         # DuckDB I/O via temporary parquet intermediaries
 │   ├── fib_zones.py    # Weekly Fibonacci-retracement IBZ/SMZ zone math
 │   ├── race.py         # Pure polars data layer for the etf-race report
+│   ├── cloud_score.py  # Pure polars data layer for the ciovacco cloud-score report
 │   └── pipeline.py     # Orchestrates E->T->L for backfill/update/info
 ├── tests/              # 1:1 test files per module + conftest fixtures
 ├── .github/workflows/
 │   └── ci.yml          # Lint, format, complexity, test-cov on push to main + PRs
 ├── docs/
 │   ├── fibonacci-retracements.md # Weekly Fibonacci strategy and DuckDB queries
-│   └── etf-race.md     # ETF horserace report usage, output, methodology
+│   ├── etf-race.md     # ETF horserace report usage, output, methodology
+│   └── ciovacco.md     # Ciovacco cloud-score report usage, output, methodology
 ├── pyproject.toml      # uv_build backend, deps, dev tools
 └── uv.lock
 ```
@@ -48,7 +50,8 @@ tickerlake/
 | Pipeline flow | `pipeline.py` | `_run_backfill()` has the full E->T->L sequence |
 | Fibonacci retracement strategy and queries | `docs/fibonacci-retracements.md` | Weekly leg calculation, zones, screening, and DuckDB examples |
 | ETF horserace report | `race.py`, `pipeline.etf_race` | `race.py` is pure data + rendering helpers; `pipeline.etf_race` is the orchestrator. Usage and methodology in `docs/etf-race.md` |
-| Shared test data | `tests/conftest.py` | 3 fixtures: `sample_bars_df`, `sample_splits_df`, `sample_tickers_df` |
+| Ciovacco cloud-score report | `cloud_score.py`, `pipeline.ciovacco` | `cloud_score.py` is pure data + rendering helpers; `pipeline.ciovacco` is the orchestrator. Usage and methodology in `docs/ciovacco.md` |
+| Shared test data | `tests/conftest.py` | 5 fixtures: `sample_bars_df`, `sample_splits_df`, `sample_tickers_df`, `sample_daily_bars_df`, `sample_ichimoku_df` |
 | CI/deployment | `.github/workflows/ci.yml` | Runs `make check` (lint, format-check, complexity+xenon, test-cov) on push to main + PRs |
 
 ## CONVENTIONS
@@ -85,6 +88,8 @@ uv run tickerlake update                         # Incremental (appends new days
 uv run tickerlake info                           # Show DB metadata
 uv run tickerlake etf-race CIBR IGV XLK          # vs-benchmark momentum leaderboard
 uv run tickerlake etf-race                       # Default: every qualifying liquid ETF analyzed, top 50 displayed (min 250k shares/day)
+uv run tickerlake ciovacco CIBR IGV XLK          # Ciovacco 9-condition Ichimoku cloud + MA scorecard vs SPY
+uv run tickerlake ciovacco                       # Default: every qualifying liquid ETF analyzed, top 50 displayed (min 250k shares/day, 7y lookback)
 uv run ruff check src/ tests/                    # Lint
 uv run ty check src/                             # Type check
 ```

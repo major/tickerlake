@@ -176,6 +176,61 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
     )
 
+    ciovacco_parser = subparsers.add_parser(
+        "ciovacco",
+        help=(
+            "Ciovacco-style 9-condition Ichimoku cloud + MA scorecard "
+            "vs a benchmark (default: SPY)"
+        ),
+    )
+    ciovacco_parser.add_argument(
+        "tickers",
+        nargs="*",
+        help=(
+            "Tickers to score, e.g. CIBR IGV XLK. Omit to use the dynamic "
+            "liquid-ETF list."
+        ),
+    )
+    ciovacco_parser.add_argument(
+        "--lookback-days",
+        type=_parse_positive_int,
+        default=3650,
+        help="Lookback window in days (default: 3650 = 10 years)",
+    )
+    ciovacco_parser.add_argument(
+        "--min-vol-sma-20",
+        type=float,
+        default=250_000.0,
+        metavar="SHARES",
+        help=(
+            "Minimum 20-day volume SMA for the default dynamic ETF list "
+            "(default: 250000)"
+        ),
+    )
+    ciovacco_parser.add_argument(
+        "--max-etfs",
+        type=int,
+        default=50,
+        metavar="N",
+        help=(
+            "Cap the displayed scorecard at the top N ETFs by total "
+            "(default: 50, use 0 for unlimited). The cap is applied after "
+            "scores are computed."
+        ),
+    )
+    ciovacco_parser.add_argument(
+        "--benchmark",
+        type=str,
+        default="SPY",
+        metavar="TICKER",
+        help=("Benchmark for the MA comparisons (default: SPY)"),
+    )
+    ciovacco_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        metavar="DIR",
+    )
+
     return parser
 
 
@@ -230,6 +285,24 @@ def _dispatch_etf_race(
         parser.error(str(err))
 
 
+def _dispatch_ciovacco(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: Config
+) -> None:
+    """Dispatch the ciovacco subcommand, wrapping ValueErrors."""
+    try:
+        max_etfs = None if args.max_etfs == 0 else args.max_etfs
+        pipeline.ciovacco(
+            config,
+            tickers=args.tickers or None,
+            lookback_days=args.lookback_days,
+            min_volume_sma_20=args.min_vol_sma_20,
+            max_etfs=max_etfs,
+            benchmark=args.benchmark,
+        )
+    except ValueError as err:
+        parser.error(str(err))
+
+
 def main() -> None:
     """Parse CLI arguments and dispatch to appropriate pipeline function."""
     parser = _build_parser()
@@ -262,3 +335,5 @@ def main() -> None:
         _dispatch_fib_zones(parser, args, config)
     elif args.command == "etf-race":
         _dispatch_etf_race(parser, args, config)
+    elif args.command == "ciovacco":
+        _dispatch_ciovacco(parser, args, config)
