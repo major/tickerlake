@@ -105,15 +105,18 @@ CLOUD_SCORE_SCHEMA: dict = {
     "total": pl.Float32,  # 0.0-9.0
 }
 
-# Ichimoku periods per timeframe as (tenkan, kijun, senkou_b). Weekly and
-# monthly use the standard 9/26/52; the custom 2-week / 3-week / 2-month
-# timeframes use shorter periods so all five resolve within a 10-year backfill.
+# Ichimoku periods per timeframe as (tenkan, kijun, senkou_b). All five
+# timeframes use the standard 9/26/52 — only the bar timeframe changes
+# between columns (1w, 2w, 3w, 1mo, 2mo). The deeper timeframes need more
+# history: weekly needs 78 bars (1.5y), 2-week needs 156 weeks (3y), 3-week
+# needs 234 weeks (4.5y), monthly needs 78 months (6.5y), and 2-month needs
+# 78 2-month bars (~13y). With a 10-year backfill the 2mo column will be n/a.
 TIMEFRAME_ICHIMOKU_PERIODS: dict[str, tuple[int, int, int]] = {
     "weekly": (9, 26, 52),
-    "2wk": (5, 13, 26),
-    "3wk": (3, 9, 18),
+    "2wk": (9, 26, 52),
+    "3wk": (9, 26, 52),
     "monthly": (9, 26, 52),
-    "2mo": (3, 6, 12),
+    "2mo": (9, 26, 52),
 }
 
 # Aggregation interval used to build each timeframe's bars from daily bars.

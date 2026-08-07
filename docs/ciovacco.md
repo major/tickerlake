@@ -137,13 +137,16 @@ The Ichimoku periods live in one place as a typed dict,
 | Timeframe | tenkan | kijun | senkou_b | History needed |
 |-----------|--------|-------|----------|----------------|
 | weekly (1w) | 9 | 26 | 52 | ~1.5y |
-| 2-week (2w) | 5 | 13 | 26 | ~1y |
-| 3-week (3w) | 3 | 9 | 18 | ~1y |
-| monthly (1mo) | 9 | 26 | 52 | ~4.3y |
-| 2-month (2mo) | 3 | 6 | 12 | ~2y |
+| 2-week (2w) | 9 | 26 | 52 | ~3y |
+| 3-week (3w) | 9 | 26 | 52 | ~4.5y |
+| monthly (1mo) | 9 | 26 | 52 | ~6.5y |
+| 2-month (2mo) | 9 | 26 | 52 | ~13y |
 
-Weekly and monthly use the standard 9/26/52 periods; the custom 2w/3w/2mo
-timeframes use shorter periods so all five resolve within a 5-year backfill.
+All five timeframes use the standard 9/26/52 Ichimoku periods — only the bar
+timeframe changes between columns. The deeper timeframes need more history
+(weekly needs 78 bars; 2-month needs 78 2-month bars ≈ 13y). With the
+project's 10-year backfill, the 2mo column will be `n/a`; re-run with
+`--start-date 2013-01-01` (or earlier) to populate it.
 
 ### MA + slope conditions
 
