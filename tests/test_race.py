@@ -186,9 +186,13 @@ def test_read_qualifying_etfs_filters_by_type_volume_and_active(tmp_path: Path):
     assert "FROM daily_metrics" in sql  # picks latest row per ticker
     assert "WHERE t.type = 'ETF' AND t.active" in sql
     assert "m.volume_sma_20 >= 250000" in sql
-    assert "regexp_matches(lower(t.name)" in sql
-    assert "1x|2x|3x|inverse|leverage" in sql
-    assert sql.index("regexp_matches") < sql.index("ORDER BY")
+    name_filter = (
+        "regexp_matches(lower(t.name), "
+        "'(^|[^a-z0-9])(1x|2x|3x|inverse|leverage|leveraged)"
+        "([^a-z0-9]|$)')"
+    )
+    assert name_filter in sql
+    assert sql.index(name_filter) < sql.index("ORDER BY")
     assert "ORDER BY m.volume_sma_20 DESC, t.ticker" in sql
     assert "LIMIT 50" in sql
     assert fake.closed
