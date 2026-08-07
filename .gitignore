@@ -27,3 +27,6 @@ htmlcov/
 .slim/worktrees/
 .slim/worktrees.json
 # END oh-my-opencode-slim worktrees
+
+# Isolated worktrees
+.worktrees/
