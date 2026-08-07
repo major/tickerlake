@@ -24,7 +24,7 @@ from __future__ import annotations
 import datetime
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import duckdb
 import polars as pl
@@ -227,6 +227,16 @@ def aggregate_daily_to_period(daily_bars: pl.DataFrame, *, every: str) -> pl.Dat
     Week-based bars are labeled with the period start (a Monday); month-based
     bars with the last trading day in the period. Returns a ``CLOUD_BARS_SCHEMA``
     frame sorted by (ticker, date).
+
+    Week-based bars are re-aligned to a common Monday date sequence after
+    aggregation. ``group_by_dynamic`` with ``start_by="monday"`` gives each
+    ticker a different first-Monday (the Monday of the week containing that
+    ticker's first observation), which makes the inner join on date fail for
+    timeframes like ``3w`` where the period doesn't divide the start-date
+    difference evenly. The realignment re-dates every bar to
+    ``reference_monday + slot * offset_days`` where the reference is the
+    earliest Monday in the aggregated data and the slot is the integer count
+    of periods between the bar's date and the reference.
     """
     supported = {"1d", "1w", "2w", "3w", "1mo", "2mo"}
     if every not in supported:
@@ -269,6 +279,40 @@ def aggregate_daily_to_period(daily_bars: pl.DataFrame, *, every: str) -> pl.Dat
         )
     )
     if is_week_based:
+        offset_days = {"1w": 7, "2w": 14, "3w": 21}[every]
+        # Re-align each ticker's bars to a common Monday date sequence so the
+        # inner join on date works regardless of when each ticker started
+        # trading. group_by_dynamic with start_by="monday" gives each ticker
+        # a different first-Monday, which is fine for 1w (the 1-week period
+        # is a divisor of any day offset) but fails for 3w when tickers
+        # start on different weekdays. The realignment uses the earliest
+        # Monday in the data as the reference; each bar gets a slot
+        # index = (date - reference) // offset_days and is re-dated to
+        # reference + slot * offset_days.
+        min_date_raw = aggregated["date"].min()
+        if min_date_raw is not None:
+            min_date = cast("datetime.date", min_date_raw)
+            reference_monday = min_date - datetime.timedelta(
+                days=min_date.weekday()
+            )
+            aggregated = (
+                aggregated.with_columns(
+                    (
+                        (pl.col("date") - pl.lit(reference_monday)).dt.total_days()
+                        // offset_days
+                    )
+                    .cast(pl.Int64)
+                    .alias("_slot")
+                )
+                .with_columns(
+                    (
+                        pl.lit(reference_monday)
+                        + pl.duration(days=pl.col("_slot") * offset_days)
+                    )
+                    .alias("date")
+                )
+                .drop("_slot")
+            )
         return (
             aggregated.drop("period_date")
             .sort(["ticker", "date"])
