@@ -15,7 +15,7 @@ class Config:
             may be empty for read-only commands. Massive-backed commands enforce
             the requirement at their own boundary.)
         output_dir: Directory for output files (defaults to current working directory)
-        start_date: Start date for data collection (defaults to 1 year ago)
+        start_date: Start date for data collection (defaults to 10 years ago)
         end_date: End date for data collection (defaults to today)
         ticker_types: List of ticker types to process (defaults to
             ["CS", "ETF", "ETV", "ETN", "ADRC"])
@@ -27,7 +27,7 @@ class Config:
         default_factory=lambda: (
             datetime.datetime.now(tz=datetime.UTC)
             .date()
-            .replace(year=datetime.datetime.now(tz=datetime.UTC).date().year - 5)
+            .replace(year=datetime.datetime.now(tz=datetime.UTC).date().year - 10)
         )
     )
     end_date: datetime.date = field(

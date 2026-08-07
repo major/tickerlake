@@ -29,11 +29,11 @@ class TestDates:
     """Test date configuration."""
 
     def test_start_date_default(self) -> None:
-        """start_date defaults to 5 years ago from today."""
+        """start_date defaults to 10 years ago from today."""
         with patch.dict(os.environ, {"MASSIVE_API_KEY": "test"}):
             config = Config()
             today = datetime.datetime.now(tz=datetime.UTC).date()
-            expected = today.replace(year=today.year - 5)
+            expected = today.replace(year=today.year - 10)
             assert config.start_date == expected
             assert isinstance(config.start_date, datetime.date)
 

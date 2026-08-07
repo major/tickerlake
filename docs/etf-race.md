@@ -147,6 +147,6 @@ positivity gate:
   sub-0.1% max relative error on the last bar is Float32 rounding
   in the weekly close column.
 - **Backfill depth**: the report reads whatever is in the consumer
-  DB. The default backfill is 5 years. Run `tickerlake backfill
+  DB. The default backfill is 10 years. Run `tickerlake backfill
   --start-date 2015-01-01` to see the full CIBR/IGV history
   available in the TradingView CSV.

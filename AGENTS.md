@@ -79,7 +79,7 @@ tickerlake/
 ```bash
 uv sync                                          # Install deps
 uv run pytest                                    # Run tests
-uv run tickerlake backfill                       # Full 5-year backfill
+uv run tickerlake backfill                       # Full 10-year backfill
 uv run tickerlake backfill --start-date 2023-01-01  # Custom start
 uv run tickerlake update                         # Incremental (appends new days)
 uv run tickerlake info                           # Show DB metadata
