@@ -2366,3 +2366,293 @@ def test_ciovacco_csv_ties_break_by_ticker_ascending(tmp_path: Path) -> None:
     written = pl.read_csv(csv_path)
     # MMM first (highest total), then AAA, then ZZZ (tied totals broken by ticker).
     assert written["ticker"].to_list() == ["MMM", "AAA", "ZZZ"]
+
+
+# ---- ciovacco-stocks cloud-score report ------------------------------------
+
+
+def test_resolve_stocks_tickers_dynamic_list(tmp_path: Path) -> None:
+    """tickers=None delegates to read_qualifying_stocks for the dynamic list."""
+    from tickerlake import pipeline
+
+    consumer_path = tmp_path / "tickerlake.duckdb"
+    consumer_path.touch()
+
+    with patch(_PIPELINE + ".read_qualifying_stocks") as mock_qualifying:
+        mock_qualifying.return_value = ["AAPL", "MSFT", "NVDA"]
+        out = pipeline._resolve_stocks_tickers(
+            consumer_path, tickers=None, min_volume_sma_20=250_000.0
+        )
+
+    assert out == ["AAPL", "MSFT", "NVDA"]
+    mock_qualifying.assert_called_once_with(consumer_path, min_volume_sma_20=250_000.0)
+
+
+def test_resolve_stocks_tickers_dynamic_empty_raises(tmp_path: Path) -> None:
+    """An empty dynamic common-stock list raises ValueError."""
+    from tickerlake import pipeline
+
+    consumer_path = tmp_path / "tickerlake.duckdb"
+    consumer_path.touch()
+
+    with (
+        patch(_PIPELINE + ".read_qualifying_stocks", return_value=[]),
+        pytest.raises(ValueError, match="No qualifying stocks found"),
+    ):
+        pipeline._resolve_stocks_tickers(
+            consumer_path, tickers=None, min_volume_sma_20=250_000.0
+        )
+
+
+def test_resolve_stocks_tickers_explicit_list(tmp_path: Path) -> None:
+    """An explicit tickers list is returned as-is, skipping the dynamic list."""
+    from tickerlake import pipeline
+
+    consumer_path = tmp_path / "tickerlake.duckdb"
+    consumer_path.touch()
+
+    with patch(_PIPELINE + ".read_qualifying_stocks") as mock_qualifying:
+        out = pipeline._resolve_stocks_tickers(
+            consumer_path, tickers=["AAPL", "MSFT"], min_volume_sma_20=250_000.0
+        )
+
+    assert out == ["AAPL", "MSFT"]
+    mock_qualifying.assert_not_called()
+
+
+def test_resolve_stocks_tickers_empty_explicit_raises(tmp_path: Path) -> None:
+    """An empty explicit tickers list raises ValueError."""
+    from tickerlake import pipeline
+
+    consumer_path = tmp_path / "tickerlake.duckdb"
+    consumer_path.touch()
+
+    with pytest.raises(ValueError, match="tickers must not be empty"):
+        pipeline._resolve_stocks_tickers(
+            consumer_path, tickers=[], min_volume_sma_20=250_000.0
+        )
+
+
+def test_ciovacco_stocks_renders_cloud_scorecard(tmp_path: Path) -> None:
+    """ciovacco_stocks reads daily bars, scores, and renders via console.print."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+    recording = Console(record=True)
+
+    with (
+        patch.multiple(
+            _PIPELINE,
+            _resolve_stocks_tickers=DEFAULT,
+            read_daily_bars=DEFAULT,
+            read_ticker_names=DEFAULT,
+            compute_cloud_scores=DEFAULT,
+            render_cloud_scorecard=DEFAULT,
+        ) as mocks,
+        patch(f"{_PIPELINE}.console", recording),
+    ):
+        mocks["_resolve_stocks_tickers"].return_value = ["AAPL", "MSFT"]
+        mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
+            ["AAPL", "MSFT", "SPY"]
+        )
+        mocks["read_ticker_names"].return_value = {
+            "AAPL": "Apple Inc.",
+            "MSFT": "Microsoft Corporation",
+        }
+        mocks["compute_cloud_scores"].return_value = _ciovacco_scores_df()
+        pipeline.ciovacco_stocks(config)  # default args
+
+    # Default args flow through: SPY benchmark, 3650-day lookback, max 50.
+    resolve_call = mocks["_resolve_stocks_tickers"].call_args
+    assert resolve_call.kwargs["min_volume_sma_20"] == 250_000.0
+    read_call = mocks["read_daily_bars"].call_args
+    # One read for the universe + benchmark (deduped).
+    assert set(read_call.kwargs["tickers"]) == {"AAPL", "MSFT", "SPY"}
+    assert len(read_call.kwargs["tickers"]) == 3
+    assert read_call.kwargs["lookback_days"] == 3650
+    score_call = mocks["compute_cloud_scores"].call_args
+    # Benchmark is excluded from scoring.
+    assert set(score_call.kwargs["tickers"]) == {"AAPL", "MSFT"}
+    assert score_call.kwargs["benchmark"] == "SPY"
+    names_call = mocks["read_ticker_names"].call_args
+    assert set(names_call.kwargs["tickers"]) == {"AAPL", "MSFT"}
+    render_call = mocks["render_cloud_scorecard"].call_args
+    assert render_call.kwargs["benchmark"] == "SPY"
+    assert render_call.kwargs["max_etfs"] == 50
+    assert render_call.kwargs["names"] == {
+        "AAPL": "Apple Inc.",
+        "MSFT": "Microsoft Corporation",
+    }
+    assert recording.export_text()  # a table was printed
+
+
+def test_ciovacco_stocks_custom_args_passthrough(tmp_path: Path) -> None:
+    """Custom lookback, benchmark, max_stocks, and csv_path are forwarded."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+    csv_path = tmp_path / "stocks.csv"
+
+    with patch.multiple(
+        _PIPELINE,
+        _resolve_stocks_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
+        read_daily_bars=DEFAULT,
+        read_ticker_names=DEFAULT,
+        compute_cloud_scores=DEFAULT,
+        render_cloud_scorecard=DEFAULT,
+    ) as mocks:
+        mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
+            ["AAPL", "MSFT", "QQQ"]
+        )
+        mocks["read_ticker_names"].return_value = {}
+        mocks["compute_cloud_scores"].return_value = _ciovacco_scores_df()
+        pipeline.ciovacco_stocks(
+            config,
+            tickers=["AAPL", "MSFT"],
+            lookback_days=3000,
+            min_volume_sma_20=500_000.0,
+            max_stocks=None,  # unlimited display
+            benchmark="QQQ",
+            csv_path=csv_path,
+        )
+
+    read_call = mocks["read_daily_bars"].call_args
+    assert read_call.kwargs["lookback_days"] == 3000
+    assert set(read_call.kwargs["tickers"]) == {"AAPL", "MSFT", "QQQ"}
+    score_call = mocks["compute_cloud_scores"].call_args
+    assert score_call.kwargs["benchmark"] == "QQQ"
+    render_call = mocks["render_cloud_scorecard"].call_args
+    assert render_call.kwargs["max_etfs"] is None
+    assert render_call.kwargs["benchmark"] == "QQQ"
+    assert csv_path.exists()
+    written = pl.read_csv(csv_path)
+    assert written["benchmark"].to_list() == ["QQQ", "QQQ"]
+
+
+def test_ciovacco_stocks_lowercase_tickers_normalized_no_duplicates(
+    tmp_path: Path,
+) -> None:
+    """Lowercase tickers and benchmark are normalized and deduped in read."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+
+    with patch.multiple(
+        _PIPELINE,
+        _resolve_stocks_tickers=lambda consumer_path, **kw: ["aapl", "msft", "spy"],
+        read_daily_bars=DEFAULT,
+        read_ticker_names=DEFAULT,
+        compute_cloud_scores=DEFAULT,
+        render_cloud_scorecard=DEFAULT,
+    ) as mocks:
+        mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
+            ["AAPL", "MSFT", "SPY"]
+        )
+        mocks["read_ticker_names"].return_value = {}
+        pipeline.ciovacco_stocks(
+            config, tickers=["aapl", "msft", "spy"], benchmark="spy"
+        )
+
+    read_call = mocks["read_daily_bars"].call_args
+    assert set(read_call.kwargs["tickers"]) == {"AAPL", "MSFT", "SPY"}
+    assert len(read_call.kwargs["tickers"]) == 3
+
+
+def test_ciovacco_stocks_benchmark_missing_from_db_raises_error(
+    tmp_path: Path,
+) -> None:
+    """When the benchmark has no bars, ValueError is raised."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+
+    with patch.multiple(
+        _PIPELINE,
+        _resolve_stocks_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
+        read_daily_bars=DEFAULT,
+    ) as mocks:
+        mocks["read_daily_bars"].return_value = _ciovacco_bars_df(["AAPL", "MSFT"])
+
+        with pytest.raises(ValueError, match=r"No.*bars found for benchmark"):
+            pipeline.ciovacco_stocks(config, tickers=["AAPL", "MSFT"], benchmark="QQQ")
+
+
+def test_ciovacco_stocks_no_stock_bars_raises_error(tmp_path: Path) -> None:
+    """When none of the scored tickers have bars, ValueError is raised."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+
+    with patch.multiple(
+        _PIPELINE,
+        _resolve_stocks_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
+        read_daily_bars=DEFAULT,
+    ) as mocks:
+        mocks["read_daily_bars"].return_value = _ciovacco_bars_df(["SPY"])
+
+        with pytest.raises(ValueError, match=r"No daily bars found for tickers"):
+            pipeline.ciovacco_stocks(config, tickers=["AAPL", "MSFT"])
+
+
+def test_ciovacco_stocks_csv_writes_full_scorecard_unaffected_by_max_stocks(
+    tmp_path: Path,
+) -> None:
+    """CSV gets ticker+benchmark+9 cols+total and ignores the display cap."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+    csv_path = tmp_path / "subdir" / "stocks.csv"  # nested path tests mkdir
+
+    with patch.multiple(
+        _PIPELINE,
+        _resolve_stocks_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
+        read_daily_bars=DEFAULT,
+        read_ticker_names=DEFAULT,
+        compute_cloud_scores=DEFAULT,
+        render_cloud_scorecard=DEFAULT,
+    ) as mocks:
+        mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
+            ["AAPL", "MSFT", "SPY"]
+        )
+        mocks["read_ticker_names"].return_value = {}
+        mocks["compute_cloud_scores"].return_value = _ciovacco_scores_df()
+        pipeline.ciovacco_stocks(
+            config,
+            tickers=["AAPL", "MSFT"],
+            max_stocks=1,  # display cap: only the top stock renders
+            csv_path=csv_path,
+        )
+
+    assert csv_path.exists()
+    written = pl.read_csv(csv_path)
+    expected_columns = {
+        "ticker",
+        "benchmark",
+        "score_1d_cloud",
+        "score_weekly_cloud",
+        "score_2wk_cloud",
+        "score_3wk_cloud",
+        "score_monthly_cloud",
+        "score_200wk_ma",
+        "score_200wk_ma_slope",
+        "score_300wk_ma",
+        "score_300wk_ma_slope",
+        "total",
+    }
+    assert set(written.columns) == expected_columns
+    # Both stocks written (CSV is not capped), sorted by total desc.
+    assert written["ticker"].to_list() == ["AAPL", "MSFT"]
+    assert written["benchmark"].to_list() == ["SPY", "SPY"]
+    assert written["total"].to_list() == [9.0, 7.75]

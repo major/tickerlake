@@ -268,6 +268,62 @@ def read_qualifying_etfs(
         tmp.unlink(missing_ok=True)
 
 
+def read_qualifying_stocks(
+    consumer_path: Path,
+    *,
+    min_volume_sma_20: float = _DEFAULT_MIN_VOL_SMA_20,
+) -> list[str]:
+    """Read every qualifying active common-stock ticker from the consumer DB.
+
+    Filters the ``tickers`` table to ``type='CS'`` and ``active=true``,
+    joins each ticker to its most recent ``daily_metrics`` row, and keeps
+    those whose ``volume_sma_20`` is at or above ``min_volume_sma_20``.
+    Returns all qualifying tickers (no cap) ordered by ``volume_sma_20``
+    descending (most liquid first), then ticker ascending as a tiebreaker.
+    Raises ``ValueError`` when the consumer DB is missing or the required
+    tables aren't present.
+    """
+    if min_volume_sma_20 < 0:
+        msg = "min_volume_sma_20 must be >= 0"
+        raise ValueError(msg)
+    if not consumer_path.exists():
+        msg = f"Consumer DB not found: {consumer_path}"
+        raise ValueError(msg)
+
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+        tmp = Path(f.name)
+    try:
+        con = duckdb.connect(str(consumer_path), read_only=True)
+        try:
+            con.execute(
+                "COPY ("  # noqa: S608 -- tables and threshold are internal constants
+                "SELECT t.ticker FROM tickers t "
+                "JOIN ("
+                "  SELECT m.ticker, m.volume_sma_20 FROM daily_metrics m "
+                "  JOIN ("
+                "    SELECT ticker, MAX(date) AS max_date "
+                "    FROM daily_metrics GROUP BY ticker"
+                "  ) latest "
+                "  ON m.ticker = latest.ticker AND m.date = latest.max_date"
+                ") m ON t.ticker = m.ticker "
+                "WHERE t.type = 'CS' AND t.active "
+                f"  AND m.volume_sma_20 >= {min_volume_sma_20} "
+                "ORDER BY m.volume_sma_20 DESC, t.ticker"
+                f") TO '{tmp}' (FORMAT PARQUET)"
+            )
+        except duckdb.CatalogException as err:
+            msg = (
+                "tickers/daily_metrics tables not found in consumer DB: "
+                f"{consumer_path}. Run backfill first."
+            )
+            raise ValueError(msg) from err
+        finally:
+            con.close()
+        return pl.read_parquet(tmp)["ticker"].to_list()
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def rebase_to_100(bars: pl.DataFrame) -> pl.DataFrame:
     """Rebase every ticker's closes so its first close in the window is 100.
 

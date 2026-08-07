@@ -774,3 +774,122 @@ class TestCiovaccoSubcommand:
             mock_ciovacco.assert_called_once()
             _, kwargs = mock_ciovacco.call_args
             assert kwargs["csv_path"] == csv_path
+
+
+class TestCiovaccoStocksSubcommand:
+    """Test ciovacco-stocks subcommand and its options."""
+
+    def test_ciovacco_stocks_with_tickers_calls_pipeline(self, monkeypatch, tmp_path):
+        """Verify ciovacco-stocks with positional tickers invokes pipeline."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.ciovacco_stocks") as mock_ciovacco_stocks:
+            monkeypatch.setattr(
+                "sys.argv",
+                [
+                    "tickerlake",
+                    "ciovacco-stocks",
+                    "AAPL",
+                    "MSFT",
+                    "NVDA",
+                    "--lookback-days",
+                    "3000",
+                    "--output-dir",
+                    str(tmp_path),
+                ],
+            )
+            main()
+            mock_ciovacco_stocks.assert_called_once()
+            args, kwargs = mock_ciovacco_stocks.call_args
+            config = args[0]
+            assert isinstance(config, Config)
+            assert config.output_dir == tmp_path
+            assert kwargs["tickers"] == ["AAPL", "MSFT", "NVDA"]
+            assert kwargs["lookback_days"] == 3000
+
+    def test_ciovacco_stocks_defaults(self, monkeypatch):
+        """Verify defaults: dynamic list, 3650d lookback, SPY, 50 max, no csv."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.ciovacco_stocks") as mock_ciovacco_stocks:
+            monkeypatch.setattr("sys.argv", ["tickerlake", "ciovacco-stocks"])
+            main()
+            mock_ciovacco_stocks.assert_called_once()
+            _, kwargs = mock_ciovacco_stocks.call_args
+            assert kwargs["tickers"] is None
+            assert kwargs["lookback_days"] == 3650
+            assert kwargs["min_volume_sma_20"] == 250_000.0
+            assert kwargs["max_stocks"] == 50
+            assert kwargs["benchmark"] == "SPY"
+            assert kwargs["csv_path"] is None
+
+    def test_ciovacco_stocks_custom_args_passthrough(self, monkeypatch, tmp_path):
+        """Verify custom option values are forwarded to pipeline.ciovacco_stocks."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        csv_path = tmp_path / "stocks.csv"
+        with patch("tickerlake.pipeline.ciovacco_stocks") as mock_ciovacco_stocks:
+            monkeypatch.setattr(
+                "sys.argv",
+                [
+                    "tickerlake",
+                    "ciovacco-stocks",
+                    "AAPL",
+                    "MSFT",
+                    "--lookback-days",
+                    "3000",
+                    "--min-vol-sma-20",
+                    "500000",
+                    "--max-stocks",
+                    "10",
+                    "--benchmark",
+                    "QQQ",
+                    "--csv",
+                    str(csv_path),
+                ],
+            )
+            main()
+            mock_ciovacco_stocks.assert_called_once()
+            _, kwargs = mock_ciovacco_stocks.call_args
+            assert kwargs["tickers"] == ["AAPL", "MSFT"]
+            assert kwargs["lookback_days"] == 3000
+            assert kwargs["min_volume_sma_20"] == 500_000.0
+            assert kwargs["max_stocks"] == 10
+            assert kwargs["benchmark"] == "QQQ"
+            assert kwargs["csv_path"] == csv_path
+
+    def test_ciovacco_stocks_max_stocks_zero_becomes_none(self, monkeypatch):
+        """Verify --max-stocks 0 is converted to None (unlimited display)."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch("tickerlake.pipeline.ciovacco_stocks") as mock_ciovacco_stocks:
+            monkeypatch.setattr(
+                "sys.argv", ["tickerlake", "ciovacco-stocks", "--max-stocks", "0"]
+            )
+            main()
+            mock_ciovacco_stocks.assert_called_once()
+            _, kwargs = mock_ciovacco_stocks.call_args
+            assert kwargs["max_stocks"] is None
+
+    def test_ciovacco_stocks_invalid_lookback_exits(self, monkeypatch):
+        """Verify --lookback-days must be a positive integer."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        monkeypatch.setattr(
+            "sys.argv",
+            ["tickerlake", "ciovacco-stocks", "AAPL", "--lookback-days", "0"],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code != 0
+
+    def test_ciovacco_stocks_value_error_becomes_cli_error(self, monkeypatch, capsys):
+        """Verify ValueError from pipeline exits cleanly without a traceback."""
+        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
+        with patch(
+            "tickerlake.pipeline.ciovacco_stocks",
+            side_effect=ValueError("consumer DB not found"),
+        ):
+            monkeypatch.setattr("sys.argv", ["tickerlake", "ciovacco-stocks", "AAPL"])
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        captured = capsys.readouterr()
+        assert exc_info.value.code != 0
+        assert "consumer DB not found" in captured.err
+        assert "Traceback" not in captured.err

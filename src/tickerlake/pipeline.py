@@ -43,6 +43,7 @@ from tickerlake.race import (
     compute_relative_race_metrics,
     compute_relative_ratio,
     read_qualifying_etfs,
+    read_qualifying_stocks,
     read_race_bars,
     render_relative_leaderboard,
 )
@@ -507,6 +508,39 @@ def _resolve_race_tickers(
     return list(tickers)
 
 
+def _resolve_stocks_tickers(
+    consumer_path: Path,
+    *,
+    tickers: Sequence[str] | None,
+    min_volume_sma_20: float,
+) -> list[str]:
+    """Resolve tickers from a dynamic common-stock list or explicit list.
+
+    If tickers is None, returns the full dynamic common-stock list from the
+    consumer DB (every qualifying active ``type='CS'`` ticker, ordered by
+    ``volume_sma_20`` descending, then ticker ascending; no cap — the
+    display cap is applied later in the render layer). Otherwise returns the
+    provided tickers list. Raises ValueError if tickers is empty or if the
+    dynamic list is empty.
+    """
+    if tickers is None:
+        resolved_tickers = read_qualifying_stocks(
+            consumer_path,
+            min_volume_sma_20=min_volume_sma_20,
+        )
+        if not resolved_tickers:
+            msg = (
+                f"No qualifying stocks found in consumer DB "
+                f"(type='CS', active, volume_sma_20 >= {min_volume_sma_20:,.0f})."
+            )
+            raise ValueError(msg)
+        return resolved_tickers
+    if not tickers:
+        msg = "tickers must not be empty"
+        raise ValueError(msg)
+    return list(tickers)
+
+
 def etf_race(  # noqa: PLR0913 -- public API, args are all user-tunable
     config: Config,
     *,
@@ -748,6 +782,84 @@ def _write_cloud_scorecard_csv(
         )
     )
     out.write_csv(csv_path)
+
+
+def ciovacco_stocks(  # noqa: PLR0913 -- public API, args are all user-tunable
+    config: Config,
+    *,
+    tickers: Sequence[str] | None = None,
+    lookback_days: int = 3650,  # 10y of daily bars covers every cloud timeframe
+    min_volume_sma_20: float = 250_000.0,
+    max_stocks: int | None = 50,
+    benchmark: str = "SPY",
+    csv_path: Path | None = None,
+) -> None:
+    """Run the Ciovacco cloud-score report on common stocks.
+
+    Parallel of :func:`ciovacco` for the common-stock universe. Resolves
+    tickers from either a positional list or the dynamic liquid common-stock
+    list pulled from the consumer DB (``type='CS'``, active,
+    ``volume_sma_20 >= min_volume_sma_20``), reads daily bars for the
+    universe plus ``benchmark`` over ``lookback_days``, and scores each
+    stock on the same 9 conditions: the five Ichimoku cloud timeframes
+    (0-5 each) plus the four weekly moving-average conditions vs the
+    benchmark (0/1 each). Read-only: no MASSIVE_API_KEY required.
+
+    When ``csv_path`` is provided, the full score frame is written to that
+    path as CSV: ticker, benchmark, the five cloud score columns, the four
+    MA score columns, and the total. The CSV is un-capped by ``max_stocks``
+    (which only controls the Rich table display). The Rich table always
+    prints to the console.
+    """
+    consumer_path = config.output_dir / "tickerlake.duckdb"
+
+    cloud_tickers = _resolve_stocks_tickers(
+        consumer_path,
+        tickers=tickers,
+        min_volume_sma_20=min_volume_sma_20,
+    )
+    cloud_tickers = [ticker.strip().upper() for ticker in cloud_tickers]
+    benchmark = benchmark.strip().upper()
+
+    read_list = list(dict.fromkeys([*cloud_tickers, benchmark]))
+    daily_bars = read_daily_bars(
+        consumer_path,
+        tickers=read_list,
+        lookback_days=lookback_days,
+    )
+
+    if benchmark not in daily_bars["ticker"].unique().to_list():
+        msg = (
+            f"No daily bars found for benchmark {benchmark!r} in the "
+            f"last {lookback_days} days."
+        )
+        raise ValueError(msg)
+
+    bars = daily_bars.filter(pl.col("ticker").is_in(cloud_tickers))
+    if bars.is_empty():
+        msg = (
+            f"No daily bars found for tickers {cloud_tickers!r} in the "
+            f"last {lookback_days} days. Run backfill or pick different tickers."
+        )
+        raise ValueError(msg)
+
+    scores = compute_cloud_scores(
+        daily_bars,
+        tickers=cloud_tickers,
+        benchmark=benchmark,
+    )
+    names = read_ticker_names(consumer_path, tickers=cloud_tickers)
+    console.print(
+        render_cloud_scorecard(
+            scores,
+            benchmark=benchmark,
+            max_etfs=max_stocks,
+            names=names,
+        )
+    )
+
+    if csv_path is not None:
+        _write_cloud_scorecard_csv(scores, csv_path=csv_path, benchmark=benchmark)
 
 
 def screen_fib_zones(

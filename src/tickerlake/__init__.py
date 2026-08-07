@@ -242,6 +242,72 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
     )
 
+    ciovacco_stocks_parser = subparsers.add_parser(
+        "ciovacco-stocks",
+        help=(
+            "Ciovacco-style 9-condition Ichimoku cloud + MA scorecard on "
+            "common stocks vs a benchmark (default: SPY)"
+        ),
+    )
+    ciovacco_stocks_parser.add_argument(
+        "tickers",
+        nargs="*",
+        help=(
+            "Tickers to score, e.g. AAPL MSFT NVDA. Omit to use the dynamic "
+            "liquid common-stock list."
+        ),
+    )
+    ciovacco_stocks_parser.add_argument(
+        "--lookback-days",
+        type=_parse_positive_int,
+        default=3650,
+        help="Lookback window in days (default: 3650 = 10 years)",
+    )
+    ciovacco_stocks_parser.add_argument(
+        "--min-vol-sma-20",
+        type=float,
+        default=250_000.0,
+        metavar="SHARES",
+        help=(
+            "Minimum 20-day volume SMA for the default dynamic common-stock "
+            "list (default: 250000)"
+        ),
+    )
+    ciovacco_stocks_parser.add_argument(
+        "--max-stocks",
+        type=int,
+        default=50,
+        metavar="N",
+        help=(
+            "Cap the displayed scorecard at the top N stocks by total "
+            "(default: 50, use 0 for unlimited). The cap is applied after "
+            "scores are computed."
+        ),
+    )
+    ciovacco_stocks_parser.add_argument(
+        "--benchmark",
+        type=str,
+        default="SPY",
+        metavar="TICKER",
+        help=("Benchmark for the MA comparisons (default: SPY)"),
+    )
+    ciovacco_stocks_parser.add_argument(
+        "--csv",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Write the full scorecard to a CSV file at PATH. Includes the "
+            "benchmark column, all 9 score columns, and the total. The CSV "
+            "is un-capped by --max-stocks; the Rich table still prints."
+        ),
+    )
+    ciovacco_stocks_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        metavar="DIR",
+    )
+
     return parser
 
 
@@ -255,6 +321,16 @@ def _make_config(args: argparse.Namespace) -> Config:
     if args.output_dir is not None:
         kwargs["output_dir"] = args.output_dir
     return Config(**kwargs)
+
+
+def _dispatch_etl(
+    parser: argparse.ArgumentParser, config: Config, command: str
+) -> None:
+    """Dispatch backfill/update to the pipeline, wrapping ValueErrors."""
+    try:
+        {"backfill": pipeline.backfill, "update": pipeline.update}[command](config)
+    except ValueError as err:
+        parser.error(str(err))
 
 
 def _dispatch_fib_zones(
@@ -315,6 +391,25 @@ def _dispatch_ciovacco(
         parser.error(str(err))
 
 
+def _dispatch_ciovacco_stocks(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, config: Config
+) -> None:
+    """Dispatch the ciovacco-stocks subcommand, wrapping ValueErrors."""
+    try:
+        max_stocks = None if args.max_stocks == 0 else args.max_stocks
+        pipeline.ciovacco_stocks(
+            config,
+            tickers=args.tickers or None,
+            lookback_days=args.lookback_days,
+            min_volume_sma_20=args.min_vol_sma_20,
+            max_stocks=max_stocks,
+            benchmark=args.benchmark,
+            csv_path=args.csv,
+        )
+    except ValueError as err:
+        parser.error(str(err))
+
+
 def main() -> None:
     """Parse CLI arguments and dispatch to appropriate pipeline function."""
     parser = _build_parser()
@@ -328,12 +423,7 @@ def main() -> None:
     config = _make_config(args)
 
     if args.command in {"backfill", "update"}:
-        try:
-            {"backfill": pipeline.backfill, "update": pipeline.update}[args.command](
-                config
-            )
-        except ValueError as err:
-            parser.error(str(err))
+        _dispatch_etl(parser, config, args.command)
     elif args.command == "info":
         pipeline.info(config)
     elif args.command == "compact":
@@ -349,3 +439,5 @@ def main() -> None:
         _dispatch_etf_race(parser, args, config)
     elif args.command == "ciovacco":
         _dispatch_ciovacco(parser, args, config)
+    elif args.command == "ciovacco-stocks":
+        _dispatch_ciovacco_stocks(parser, args, config)

@@ -252,6 +252,75 @@ def test_read_qualifying_etfs_missing_tables_raises_valueerror(tmp_path: Path):
     fake.close.assert_called_once()
 
 
+# ---- read_qualifying_stocks ------------------------------------------------
+
+
+def test_read_qualifying_stocks_filters_by_type_volume_and_active(tmp_path: Path):
+    consumer = tmp_path / "tickerlake.duckdb"
+    consumer.touch()
+    result_df = pl.DataFrame({"ticker": ["AAPL", "MSFT", "NVDA"]})
+    fake = FakeConnection(result_df)
+
+    with patch("tickerlake.race.duckdb.connect", return_value=fake):
+        out = race.read_qualifying_stocks(consumer)
+
+    assert out == ["AAPL", "MSFT", "NVDA"]
+    assert len(fake.calls) == 1
+    sql, _params = fake.calls[0]
+    assert "FROM tickers t" in sql
+    assert "FROM daily_metrics" in sql  # picks latest row per ticker
+    assert "WHERE t.type = 'CS' AND t.active" in sql
+    assert "m.volume_sma_20 >= 250000" in sql
+    # No leverage-name regex for common stocks.
+    assert "regexp_matches" not in sql
+    assert "ORDER BY m.volume_sma_20 DESC, t.ticker" in sql
+    assert "LIMIT" not in sql
+    assert fake.closed
+
+
+def test_read_qualifying_stocks_respects_custom_threshold(tmp_path: Path):
+    consumer = tmp_path / "tickerlake.duckdb"
+    consumer.touch()
+    result_df = pl.DataFrame({"ticker": ["AAPL"]})
+    fake = FakeConnection(result_df)
+
+    with patch("tickerlake.race.duckdb.connect", return_value=fake):
+        out = race.read_qualifying_stocks(consumer, min_volume_sma_20=1_000_000.0)
+
+    assert out == ["AAPL"]
+    sql, _ = fake.calls[0]
+    assert "m.volume_sma_20 >= 1000000" in sql
+
+
+def test_read_qualifying_stocks_default_threshold_is_250k():
+    assert race._DEFAULT_MIN_VOL_SMA_20 == 250_000.0
+
+
+def test_read_qualifying_stocks_validates_negative_threshold(tmp_path: Path):
+    with pytest.raises(ValueError, match="min_volume_sma_20"):
+        race.read_qualifying_stocks(tmp_path / "missing.duckdb", min_volume_sma_20=-1.0)
+
+
+def test_read_qualifying_stocks_validates_path_exists(tmp_path: Path):
+    with pytest.raises(ValueError, match="Consumer DB not found"):
+        race.read_qualifying_stocks(tmp_path / "missing.duckdb")
+
+
+def test_read_qualifying_stocks_missing_tables_raises_valueerror(tmp_path: Path):
+    consumer = tmp_path / "tickerlake.duckdb"
+    consumer.touch()
+    fake = MagicMock()
+    fake.execute.side_effect = duckdb.CatalogException("no such table: daily_metrics")
+
+    with (
+        patch("tickerlake.race.duckdb.connect", return_value=fake),
+        pytest.raises(ValueError, match="daily_metrics"),
+    ):
+        race.read_qualifying_stocks(consumer)
+
+    fake.close.assert_called_once()
+
+
 def test_rebase_to_100_handles_multi_ticker():
     bars = make_race_bars(
         {

@@ -31,7 +31,8 @@ tickerlake/
 ├── docs/
 │   ├── fibonacci-retracements.md # Weekly Fibonacci strategy and DuckDB queries
 │   ├── etf-race.md     # ETF horserace report usage, output, methodology
-│   └── ciovacco.md     # Ciovacco cloud-score report usage, output, methodology
+│   ├── ciovacco.md     # Ciovacco cloud-score report usage, output, methodology
+│   └── ciovacco-stocks.md # Ciovacco cloud-score report for common stocks
 ├── pyproject.toml      # uv_build backend, deps, dev tools
 └── uv.lock
 ```
@@ -51,6 +52,7 @@ tickerlake/
 | Fibonacci retracement strategy and queries | `docs/fibonacci-retracements.md` | Weekly leg calculation, zones, screening, and DuckDB examples |
 | ETF horserace report | `race.py`, `pipeline.etf_race` | `race.py` is pure data + rendering helpers; `pipeline.etf_race` is the orchestrator. Usage and methodology in `docs/etf-race.md` |
 | Ciovacco cloud-score report | `cloud_score.py`, `pipeline.ciovacco` | `cloud_score.py` is pure data + rendering helpers; `pipeline.ciovacco` is the orchestrator. Usage and methodology in `docs/ciovacco.md` |
+| Ciovacco cloud-score report for common stocks | `cloud_score.py`, `pipeline.ciovacco_stocks`, `race.read_qualifying_stocks` | Same 9-condition scorecard as `ciovacco` but on the `type='CS'` universe (SPY default benchmark); `pipeline.ciovacco_stocks` is the orchestrator, `read_qualifying_stocks` builds the dynamic stock list. Usage and methodology in `docs/ciovacco-stocks.md` |
 | Shared test data | `tests/conftest.py` | 5 fixtures: `sample_bars_df`, `sample_splits_df`, `sample_tickers_df`, `sample_daily_bars_df`, `sample_ichimoku_df` |
 | CI/deployment | `.github/workflows/ci.yml` | Runs `make check` (lint, format-check, complexity+xenon, test-cov) on push to main + PRs |
 
@@ -90,6 +92,8 @@ uv run tickerlake etf-race CIBR IGV XLK          # vs-benchmark momentum leaderb
 uv run tickerlake etf-race                       # Default: every qualifying liquid ETF analyzed, top 50 displayed (min 250k shares/day)
 uv run tickerlake ciovacco CIBR IGV XLK          # Ciovacco 9-condition Ichimoku cloud + MA scorecard vs SPY
 uv run tickerlake ciovacco                       # Default: every qualifying liquid ETF analyzed, top 50 displayed (min 250k shares/day, 7y lookback)
+uv run tickerlake ciovacco-stocks AAPL MSFT NVDA # Ciovacco 9-condition scorecard on common stocks vs SPY
+uv run tickerlake ciovacco-stocks                # Default: every qualifying liquid stock analyzed, top 50 displayed (min 250k shares/day)
 uv run ruff check src/ tests/                    # Lint
 uv run ty check src/                             # Type check
 ```
@@ -100,5 +104,6 @@ uv run ty check src/                             # Type check
 - **Two DuckDB files**: `raw.duckdb` (raw bars) and `tickerlake.duckdb` (adjusted bars + metrics + tickers)
 - **Consumer DB tables**: `daily_bars`, `daily_metrics`, `tickers`, `weekly_bars`, `weekly_metrics`, `weekly_fib_zones`, `monthly_bars`, `monthly_metrics`
 - **etf-race report** is read-only and works against any consumer DB that has the daily/weekly/monthly bars tables populated; it does not write to the DB and does not require `MASSIVE_API_KEY` at the CLI level (it will surface a clean `ValueError` if the consumer DB is missing or the table is absent). When called with no arguments it builds a dynamic ticker list from the consumer DB (`read_qualifying_etfs` in `race.py`): every active, non-leveraged ETF whose latest `daily_metrics` row has `volume_sma_20 >= 250,000` is fetched, analyzed against the benchmark, and ranked by `race_score`. The rendered leaderboard is then capped at the top 50 horses (`--max-etfs`, `0` for unlimited); `--min-vol-sma-20` tunes the eligibility threshold, not the display cap. See `docs/etf-race.md` for usage, output, and methodology.
+- **ciovacco-stocks report** mirrors `ciovacco` on the common-stock universe (`type='CS'`, active): same 9-condition Ichimoku cloud + MA scorecard vs a benchmark (default SPY), same Rich scorecard and CSV output. When called with no arguments it builds a dynamic stock list from the consumer DB (`read_qualifying_stocks` in `race.py`): every active common stock whose latest `daily_metrics` row has `volume_sma_20 >= 250,000`, capped at the top 50 by `total` (`--max-stocks`, `0` for unlimited). No leverage-name regex is applied — common stocks are already plain `type='CS'`. See `docs/ciovacco-stocks.md` for usage, output, and methodology.
 - **Update is incremental and revision-aware**: delegates to the backfill sequence (`_run_backfill(config, bars_start=...)`) with the bars-fetch start narrowed to a trailing `_REVISION_WINDOW_DAYS`-day window of already-cached dates (fetch-then-swap: fetch first, then delete+replace only the dates Massive actually returned data for in that window), so revisions Massive makes to already-published bars (up to ~5 trading days back) get picked up on the next run. Splits/tickers extraction always covers the full `config.start_date`-`config.end_date` range regardless. Consumer db is always fully rebuilt from raw.duckdb.
 - **Python 3.14 only**: `requires-python = ">=3.14,<3.15"` -- uses modern syntax throughout
