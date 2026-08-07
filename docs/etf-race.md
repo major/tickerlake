@@ -28,6 +28,9 @@ dynamically from the consumer DB: every active ETF (`type='ETF'`,
 the leaderboard is always a market-wide snapshot, not a hand-picked
 one. Tune the threshold with `--min-vol-sma-20` and the cap with
 `--max-etfs` (pass `0` for unlimited).
+Dynamic discovery excludes names containing standalone `1x`, `2x`, `3x`,
+`inverse`, `leverage`, or `leveraged` tokens. Explicit positional ticker
+arguments are not filtered.
 
 ## Output
 
