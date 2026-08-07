@@ -94,8 +94,8 @@ TIMEFRAME_TABLE: dict[str, str] = {
 # 20-day simple moving average of volume at or above this on its most recent
 # daily_metrics row to qualify.
 _DEFAULT_MIN_VOL_SMA_20 = 250_000.0
-# Default cap on the dynamic ETF list: only the top N most-liquid qualifying
-# ETFs (by volume_sma_20) are shown. 50 is wide enough to cover every major
+# Default display cap on the rendered leaderboard (applied as `.head(max_etfs)`
+# after sorting by `race_score`). 50 is wide enough to cover every major
 # sector/thematic ETF while keeping the leaderboard readable.
 _DEFAULT_MAX_ETFS = 50
 # Default cap on the pending-overtakes table. 50+ ETFs can produce a flood
@@ -190,30 +190,23 @@ def read_qualifying_etfs(
     consumer_path: Path,
     *,
     min_volume_sma_20: float = _DEFAULT_MIN_VOL_SMA_20,
-    limit: int | None = _DEFAULT_MAX_ETFS,
 ) -> list[str]:
-    """Read active ETF tickers whose latest ``daily_metrics`` row qualifies.
+    """Read every qualifying active, non-leveraged ETF ticker from the consumer DB.
 
     Filters the ``tickers`` table to ``type='ETF'`` and ``active=true``,
     joins each ticker to its most recent ``daily_metrics`` row, and keeps
     those whose ``volume_sma_20`` is at or above ``min_volume_sma_20``.
-    Returns the top ``limit`` qualifying tickers ordered by
-    ``volume_sma_20`` descending (most liquid first), then ticker ascending
-    as a tiebreaker. Pass ``limit=None`` to return every qualifying ticker.
+    Returns all qualifying tickers (no cap) ordered by ``volume_sma_20``
+    descending (most liquid first), then ticker ascending as a tiebreaker.
     Raises ``ValueError`` when the consumer DB is missing or the required
     tables aren't present.
     """
     if min_volume_sma_20 < 0:
         msg = "min_volume_sma_20 must be >= 0"
         raise ValueError(msg)
-    if limit is not None and limit < 1:
-        msg = "limit must be >= 1 or None"
-        raise ValueError(msg)
     if not consumer_path.exists():
         msg = f"Consumer DB not found: {consumer_path}"
         raise ValueError(msg)
-
-    limit_clause = f" LIMIT {limit}" if limit is not None else ""
 
     with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
         tmp = Path(f.name)
@@ -221,7 +214,7 @@ def read_qualifying_etfs(
         con = duckdb.connect(str(consumer_path), read_only=True)
         try:
             con.execute(
-                "COPY ("  # noqa: S608 -- tables, threshold, and limit are internal constants
+                "COPY ("  # noqa: S608 -- tables and threshold are internal constants
                 "SELECT t.ticker FROM tickers t "
                 "JOIN ("
                 "  SELECT m.ticker, m.volume_sma_20 FROM daily_metrics m "
@@ -237,7 +230,6 @@ def read_qualifying_etfs(
                 "'(^|[^a-z0-9])(1x|2x|3x|inverse|leverage|leveraged)"
                 "([^a-z0-9]|$)') "
                 "ORDER BY m.volume_sma_20 DESC, t.ticker"
-                f"{limit_clause}"
                 f") TO '{tmp}' (FORMAT PARQUET)"
             )
         except duckdb.CatalogException as err:
@@ -671,13 +663,19 @@ def _race_score_style(value: float | None) -> str | None:
 
 
 def render_relative_leaderboard(
-    relative_trend: pl.DataFrame, *, benchmark: str
+    relative_trend: pl.DataFrame,
+    *,
+    benchmark: str,
+    max_etfs: int | None = _DEFAULT_MAX_ETFS,
 ) -> Table:
     """Build a Rich Table for relative momentum vs a benchmark.
 
     The table uses horse-race language: position, places gained, pace over
     three windows, race score, and form. Diagnostic RS-Ratio, trend, raw
-    momentum, and building columns are intentionally omitted.
+    momentum, and building columns are intentionally omitted. ``max_etfs``
+    caps the displayed rows after sorting (default: ``_DEFAULT_MAX_ETFS``,
+    pass ``None`` for unlimited); it is a display limit only, and does not
+    restrict the underlying computation.
     """
     table = Table(title=f"🐎 vs {benchmark} Momentum", header_style="bold")
     table.add_column("Ticker", style="bold")
@@ -698,6 +696,8 @@ def render_relative_leaderboard(
         sorted_df = relative_trend.sort(
             ["building", "momentum_short"], descending=[True, True], nulls_last=True
         )
+    if max_etfs is not None:
+        sorted_df = sorted_df.head(max_etfs)
 
     for row in sorted_df.iter_rows(named=True):
         emoji, row_style = _form_style(row.get("form"))

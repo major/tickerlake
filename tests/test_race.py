@@ -194,7 +194,7 @@ def test_read_qualifying_etfs_filters_by_type_volume_and_active(tmp_path: Path):
     assert name_filter in sql
     assert sql.index(name_filter) < sql.index("ORDER BY")
     assert "ORDER BY m.volume_sma_20 DESC, t.ticker" in sql
-    assert "LIMIT 50" in sql
+    assert "LIMIT" not in sql
     assert fake.closed
 
 
@@ -210,41 +210,6 @@ def test_read_qualifying_etfs_respects_custom_threshold(tmp_path: Path):
     assert out == ["SPY"]
     sql, _ = fake.calls[0]
     assert "m.volume_sma_20 >= 1000000" in sql
-
-
-def test_read_qualifying_etfs_default_limit_is_50():
-    assert race._DEFAULT_MAX_ETFS == 50
-
-
-def test_read_qualifying_etfs_respects_custom_limit(tmp_path: Path):
-    consumer = tmp_path / "tickerlake.duckdb"
-    consumer.touch()
-    result_df = pl.DataFrame({"ticker": ["SPY"]})
-    fake = FakeConnection(result_df)
-
-    with patch("tickerlake.race.duckdb.connect", return_value=fake):
-        race.read_qualifying_etfs(consumer, limit=10)
-
-    sql, _ = fake.calls[0]
-    assert "LIMIT 10" in sql
-
-
-def test_read_qualifying_etfs_limit_none_omits_sql_limit(tmp_path: Path):
-    consumer = tmp_path / "tickerlake.duckdb"
-    consumer.touch()
-    result_df = pl.DataFrame({"ticker": ["SPY"]})
-    fake = FakeConnection(result_df)
-
-    with patch("tickerlake.race.duckdb.connect", return_value=fake):
-        race.read_qualifying_etfs(consumer, limit=None)
-
-    sql, _ = fake.calls[0]
-    assert "LIMIT" not in sql
-
-
-def test_read_qualifying_etfs_validates_limit_below_one(tmp_path: Path):
-    with pytest.raises(ValueError, match="limit"):
-        race.read_qualifying_etfs(tmp_path / "missing.duckdb", limit=0)
 
 
 def test_read_qualifying_etfs_default_threshold_is_250k():
@@ -826,6 +791,55 @@ def test_render_relative_leaderboard_omits_legacy_building_column():
     text = _rich_text(table)
     assert "Building" not in text
     assert "🚀" not in text
+
+
+def test_render_relative_leaderboard_caps_displayed_rows():
+    """max_etfs caps the rendered rows after sorting by race_score."""
+    trend = pl.DataFrame(
+        {
+            "ticker": ["AAA", "BBB", "CCC", "DDD", "EEE"],
+            "position": [5, 4, 3, 2, 1],
+            "places_gained": [0, 0, 0, 0, 0],
+            "relative_return_short": [1.0, 1.0, 1.0, 1.0, 1.0],
+            "relative_return_medium": [2.0, 2.0, 2.0, 2.0, 2.0],
+            "relative_return_long": [3.0, 3.0, 3.0, 3.0, 3.0],
+            "race_score": [10.0, 20.0, 30.0, 40.0, 50.0],
+            "form": ["Steady", "Steady", "Steady", "Steady", "Steady"],
+        }
+    )
+    table = render_relative_leaderboard(trend, benchmark="SPY", max_etfs=3)
+
+    assert len(table.rows) == 3
+    text = _rich_text(table)
+    # Highest race_score renders first; the cap keeps only the top 3.
+    assert "EEE" in text  # score 50
+    assert "DDD" in text  # score 40
+    assert "CCC" in text  # score 30
+    assert "AAA" not in text  # score 10, capped
+    assert "BBB" not in text  # score 20, capped
+
+
+def test_render_relative_leaderboard_default_cap_is_50():
+    """The default max_etfs is _DEFAULT_MAX_ETFS; None shows every row."""
+    n = 60
+    trend = pl.DataFrame(
+        {
+            "ticker": [f"T{i:02d}" for i in range(n)],
+            "position": list(range(1, n + 1)),
+            "places_gained": [0] * n,
+            "relative_return_short": [1.0] * n,
+            "relative_return_medium": [2.0] * n,
+            "relative_return_long": [3.0] * n,
+            "race_score": [float(n - i) for i in range(n)],
+            "form": ["Steady"] * n,
+        }
+    )
+
+    table = render_relative_leaderboard(trend, benchmark="SPY")
+    assert len(table.rows) == race._DEFAULT_MAX_ETFS
+
+    table = render_relative_leaderboard(trend, benchmark="SPY", max_etfs=None)
+    assert len(table.rows) == n
 
 
 # ---- End-to-end tests (M5) ------------------------------------------------

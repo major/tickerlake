@@ -7,7 +7,7 @@ lagging across multiple timeframes.
 ## Usage
 
 ```bash
-# Default: dynamic liquid-ETF list (top 50 by 20-day volume, min 250k shares/day)
+# Default: dynamic liquid-ETF list (every qualifying ETF analyzed, top 50 displayed)
 uv run tickerlake etf-race
 
 # vs-benchmark momentum table: 3+ tickers
@@ -21,13 +21,15 @@ uv run tickerlake etf-race CIBR IGV --timeframe daily --lookback-days 90
 ```
 
 When called with no arguments, `etf-race` builds its ticker list
-dynamically from the consumer DB: every active ETF (`type='ETF'`,
-`active=true`) whose latest `daily_metrics` row has
-`volume_sma_20 >= 250,000` qualifies. The list is then ranked by
-`volume_sma_20` descending and capped at the 50 most-liquid names, so
-the leaderboard is always a market-wide snapshot, not a hand-picked
-one. Tune the threshold with `--min-vol-sma-20` and the cap with
-`--max-etfs` (pass `0` for unlimited).
+dynamically from the consumer DB: every active, non-leveraged ETF
+(`type='ETF'`, `active=true`) whose latest `daily_metrics` row has
+`volume_sma_20 >= 250,000` is fetched, analyzed against the benchmark,
+and ranked by `race_score`. The displayed leaderboard is then capped at
+the top 50 horses (by `race_score`) so the table stays readable. Use
+`--min-vol-sma-20` to tune the eligibility threshold and `--max-etfs`
+to tune the display cap (pass `0` for unlimited). The eligibility
+threshold controls which ETFs are analyzed; the display cap controls
+how many are shown.
 Dynamic discovery excludes names containing standalone `1x`, `2x`, `3x`,
 `inverse`, `leverage`, or `leveraged` tokens. Explicit positional ticker
 arguments are not filtered.

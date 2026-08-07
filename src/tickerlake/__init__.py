@@ -164,8 +164,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default=50,
         metavar="N",
         help=(
-            "Cap the dynamic ETF list at the top N most-liquid tickers "
-            "(default: 50, use 0 for unlimited)"
+            "Cap the displayed leaderboard at the top N horses by `race_score` "
+            "(default: 50, use 0 for unlimited). The cap is applied after "
+            "metrics are computed."
         ),
     )
     etf_race_parser.add_argument(

@@ -473,19 +473,19 @@ def _resolve_race_tickers(
     *,
     tickers: Sequence[str] | None,
     min_volume_sma_20: float,
-    max_etfs: int | None,
 ) -> list[str]:
     """Resolve tickers from a dynamic list or explicit list.
 
-    If tickers is None, returns the dynamic ETF list from the consumer DB.
-    Otherwise returns the provided tickers list. Raises ValueError if tickers
-    is empty or if the dynamic list is empty.
+    If tickers is None, returns the full dynamic ETF list from the consumer
+    DB (every qualifying ticker, ordered by ``volume_sma_20`` descending,
+    then ticker ascending; no cap — the display cap is applied later in the
+    render layer). Otherwise returns the provided tickers list. Raises
+    ValueError if tickers is empty or if the dynamic list is empty.
     """
     if tickers is None:
         resolved_tickers = read_qualifying_etfs(
             consumer_path,
             min_volume_sma_20=min_volume_sma_20,
-            limit=max_etfs,
         )
         if not resolved_tickers:
             msg = (
@@ -517,10 +517,12 @@ def etf_race(  # noqa: PLR0913 -- public API, args are all user-tunable
 
     Resolves tickers from either a positional list or a dynamic ETF list
     pulled from the consumer DB. The dynamic list is used when ``tickers``
-    is not supplied; it contains every active ETF whose latest
-    ``daily_metrics`` row has ``volume_sma_20 >= min_volume_sma_20``,
-    ranked by volume_sma_20 descending and capped at ``max_etfs`` (pass
-    ``None`` for no cap). Shows the single horse-race table comparing
+    is not supplied; it contains every active, non-leveraged ETF whose
+    latest ``daily_metrics`` row has ``volume_sma_20 >= min_volume_sma_20``,
+    ranked by volume_sma_20 descending. The cap is a display limit applied
+    to the rendered leaderboard, not a coverage limit on the analysis: all
+    qualifying ETFs are fetched and analyzed; only the top ``max_etfs`` (by
+    ``race_score``) are shown. Shows the single horse-race table comparing
     each ticker's relative strength vs ``benchmark`` (default: SPY) across
     three windows: ``momentum_short_window`` (default: 4 bars, ~1 month for
     weekly), ``momentum_medium_window`` (default: 13 bars, ~1 quarter), and
@@ -541,7 +543,6 @@ def etf_race(  # noqa: PLR0913 -- public API, args are all user-tunable
         consumer_path,
         tickers=tickers,
         min_volume_sma_20=min_volume_sma_20,
-        max_etfs=max_etfs,
     )
 
     # Normalize tickers and benchmark to uppercase for DB consistency
@@ -579,21 +580,27 @@ def etf_race(  # noqa: PLR0913 -- public API, args are all user-tunable
     _render_relative_view(
         relative_bars,
         benchmark=benchmark,
+        max_etfs=max_etfs,
         momentum_short_window=momentum_short_window,
         momentum_medium_window=momentum_medium_window,
         momentum_long_window=momentum_long_window,
     )
 
 
-def _render_relative_view(
+def _render_relative_view(  # noqa: PLR0913 -- momentum windows + benchmark + display cap
     relative_bars: pl.DataFrame,
     *,
     benchmark: str,
+    max_etfs: int | None = None,
     momentum_short_window: int,
     momentum_medium_window: int,
     momentum_long_window: int,
 ) -> None:
-    """Render the vs-benchmark momentum table for the multi-asset view."""
+    """Render the vs-benchmark momentum table for the multi-asset view.
+
+    ``max_etfs`` is forwarded to ``render_relative_leaderboard`` as the
+    display cap on the rendered rows (None means unlimited).
+    """
     ratio_bars = compute_relative_ratio(relative_bars, benchmark=benchmark)
     # Filter out tickers with insufficient history (≤ long_window bars)
     # to avoid degenerate/misleading momentum values
@@ -609,7 +616,11 @@ def _render_relative_view(
         )
         relative_trend = classify_relative_trend(relative_metrics)
         horse_form = classify_horse_form(relative_trend)
-        console.print(render_relative_leaderboard(horse_form, benchmark=benchmark))
+        console.print(
+            render_relative_leaderboard(
+                horse_form, benchmark=benchmark, max_etfs=max_etfs
+            )
+        )
     else:
         console.print(
             f"[dim]No tickers with sufficient history (>{momentum_long_window} bars) "
