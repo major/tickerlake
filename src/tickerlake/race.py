@@ -707,23 +707,23 @@ def render_relative_leaderboard(
                 _fmt_or_na(
                     row.get("relative_return_short"), lambda value: f"{value:+.1f}%"
                 ),
-                style=_pace_style(row.get("relative_return_short")),
+                style=_pace_style(row.get("relative_return_short")),  # ty: ignore[invalid-argument-type]
             ),
             Text(
                 _fmt_or_na(
                     row.get("relative_return_medium"), lambda value: f"{value:+.1f}%"
                 ),
-                style=_pace_style(row.get("relative_return_medium")),
+                style=_pace_style(row.get("relative_return_medium")),  # ty: ignore[invalid-argument-type]
             ),
             Text(
                 _fmt_or_na(
                     row.get("relative_return_long"), lambda value: f"{value:+.1f}%"
                 ),
-                style=_pace_style(row.get("relative_return_long")),
+                style=_pace_style(row.get("relative_return_long")),  # ty: ignore[invalid-argument-type]
             ),
             Text(
                 _fmt_or_na(row.get("race_score"), lambda value: f"{value:.0f}"),
-                style=_race_score_style(row.get("race_score")),
+                style=_race_score_style(row.get("race_score")),  # ty: ignore[invalid-argument-type]
             ),
             f"{emoji} {form_label}",
             style=row_style,
