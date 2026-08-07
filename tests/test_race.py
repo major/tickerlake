@@ -15,8 +15,10 @@ from tickerlake.race import (
     RACE_BARS_SCHEMA,
     RELATIVE_MOMENTUM_SCHEMA,
     RELATIVE_TREND_SCHEMA,
+    classify_horse_form,
     classify_relative_trend,
     compute_relative_momentum,
+    compute_relative_race_metrics,
     compute_relative_ratio,
     rebase_to_100,
     render_relative_leaderboard,
@@ -944,6 +946,103 @@ def test_relative_ratio_misaligned_dates():
     table = render_relative_leaderboard(trend, benchmark="SPY")
     # Should render without error
     assert table.title == "🐎 vs SPY Momentum"
+
+
+def test_compute_relative_race_metrics_identifies_closing_horse():
+    """A horse gaining places has positive relative pace and places gained."""
+    dates = [datetime.date(2024, 1, 1) + datetime.timedelta(days=i) for i in range(6)]
+    ratio_bars = pl.DataFrame(
+        {
+            "date": dates * 3,
+            "ticker": ["CHARGER"] * 6 + ["STEADY"] * 6 + ["FADER"] * 6,
+            "close": (
+                [
+                    100.0,
+                    99.0,
+                    98.0,
+                    99.0,
+                    100.0,
+                    112.0,
+                    100.0,
+                    101.0,
+                    102.0,
+                    103.0,
+                    104.0,
+                    105.0,
+                    100.0,
+                    101.0,
+                    102.0,
+                    101.0,
+                    99.0,
+                    97.0,
+                ]
+            ),
+        },
+        schema=RACE_BARS_SCHEMA,
+    )
+
+    result = compute_relative_race_metrics(
+        ratio_bars, short_window=1, medium_window=2, long_window=3
+    )
+    charger = result.filter(pl.col("ticker") == "CHARGER").row(0, named=True)
+
+    assert charger["relative_return_short"] == pytest.approx(12.0, abs=0.01)
+    assert charger["relative_return_medium"] == pytest.approx(13.13, abs=0.01)
+    assert charger["relative_return_long"] == pytest.approx(14.29, abs=0.01)
+    assert charger["places_gained"] > 0
+    assert charger["race_score"] > 50
+
+
+def test_classify_horse_form_labels_front_runner_and_charger():
+    """Horse form uses plain race language for the single race table."""
+    metrics = pl.DataFrame(
+        {
+            "ticker": ["LEADER", "CHARGER", "FADER"],
+            "position": [1, 5, 3],
+            "places_gained": [0, 4, -2],
+            "relative_return_short": [2.0, 3.0, -1.0],
+            "relative_return_medium": [4.0, 5.0, 2.0],
+            "relative_return_long": [8.0, 1.0, 7.0],
+            "building": [False, True, False],
+            "race_score": [90.0, 85.0, 70.0],
+        }
+    )
+
+    result = classify_horse_form(metrics)
+
+    assert result["form"].to_list() == ["Front-runner", "Charging", "Losing steam"]
+
+
+def test_render_relative_leaderboard_shows_horse_metrics():
+    """The single horse table exposes position, places, pace, and form."""
+    metrics = pl.DataFrame(
+        {
+            "ticker": ["CHARGER"],
+            "position": [2],
+            "places_gained": [5],
+            "relative_return_short": [2.0],
+            "relative_return_medium": [4.0],
+            "relative_return_long": [6.0],
+            "race_score": [88.0],
+            "form": ["Charging"],
+            "rs_ratio": [108.0],
+            "momentum_short": [2.0],
+            "momentum_medium": [4.0],
+            "momentum_long": [6.0],
+            "rate_short": [2.0],
+            "rate_medium": [2.0],
+            "rate_long": [2.0],
+            "trend": ["Leading"],
+            "building": [True],
+        }
+    )
+
+    text = _rich_text(render_relative_leaderboard(metrics, benchmark="SPY"))
+
+    assert "Places" in text
+    assert "Pace Short" in text
+    assert "Race" in text
+    assert "Charging" in text
 
 
 def test_classify_relative_trend_decelerating_decline():

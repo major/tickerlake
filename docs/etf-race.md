@@ -31,18 +31,30 @@ one. Tune the threshold with `--min-vol-sma-20` and the cap with
 
 ## Output
 
-The command prints a vs-benchmark momentum leaderboard.
+The command prints one vs-benchmark momentum table: the field running against
+the chosen benchmark.
 
 ### vs-Benchmark momentum view
 
 A "🐎 vs {benchmark} Momentum" table (default
 benchmark: SPY, configurable via `--benchmark`) shows relative strength
 (RS) momentum for each ticker compared to the chosen benchmark. The
-benchmark ticker itself is excluded from this table (it still appears in
-the main leaderboard if raced explicitly). Tickers with at most the
-long momentum window bars are filtered out to avoid degenerate values:
+benchmark ticker itself is excluded from this table. Tickers with at most the
+long momentum window bars are
+filtered out to avoid degenerate values:
 
 - **Ticker** — the asset.
+- **Pos** — current position in the field, ranked by long-term relative pace.
+- **Places** — places gained or lost over the medium window. Positive values
+  mean the horse is moving toward the front.
+- **Pace Short/Medium/Long** — percentage performance of the ETF/benchmark
+  ratio over the short (4 bars), medium (13 bars), and long (26 bars) windows.
+  These are comparable across ETFs and are the primary pace measurements.
+- **Race** — a 0–100 score combining current momentum, places gained, and
+  staying power. Higher is better.
+- **Form** — horse-racing interpretation of the current race:
+  `Charging`, `Closing ground`, `Front-runner`, `Losing steam`, `Fading`,
+  `Back of field`, or `Steady`.
 - **RS-Ratio** — current ratio of `ticker_close / benchmark_close`,
   rebased to 100 at each ticker's first available bar (per-ticker rebasing,
   not shared window start; matches TradingView's relative-strength charts,
@@ -61,6 +73,11 @@ long momentum window bars are filtered out to avoid degenerate values:
   already positive). Indicates sustained momentum building, not early-mover
   fade.
 
+The race score is descriptive rather than predictive. It separates horses
+already in front from horses closing ground: front-runners score well on
+leadership and staying power, while chargers score well on places gained and
+recent pace.
+
 ## Methodology
 
 ### vs-Benchmark Momentum
@@ -78,6 +95,16 @@ tickers):
 - `momentum_short = rs_ratio_current − rs_ratio_4_bars_ago` (default 4-bar window)
 - `momentum_medium = rs_ratio_current − rs_ratio_13_bars_ago` (default 13-bar window)
 - `momentum_long = rs_ratio_current − rs_ratio_26_bars_ago` (default 26-bar window)
+
+The horse-table pace columns use directly comparable relative returns instead:
+
+- `pace_N = ((ratio_current / ratio_N_bars_ago) - 1) × 100`
+
+The field is ranked by long-window pace. `places_gained` is the prior
+medium-window position minus the current position, so a positive number means
+the horse moved toward the front. The 0–100 race score combines momentum
+ranking (45%), places gained (35%), and the percentage of available
+medium-window observations with positive pace, called staying power (20%).
 
 The **building indicator** (🚀) uses **rate-normalized** momentum
 (`momentum / actual_bars_back`, not raw cumulative deltas), with a

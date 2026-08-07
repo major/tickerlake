@@ -1932,9 +1932,9 @@ def test_etf_race_short_history_filter_excludes_tickers(tmp_path: Path) -> None:
         _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "NEWCO"],
         read_race_bars=DEFAULT,
         compute_relative_ratio=DEFAULT,
-        rebase_to_100=DEFAULT,
-        compute_relative_momentum=DEFAULT,
+        compute_relative_race_metrics=DEFAULT,
         classify_relative_trend=DEFAULT,
+        classify_horse_form=DEFAULT,
         render_relative_leaderboard=DEFAULT,
         console=DEFAULT,
     ) as mocks:
@@ -1971,7 +1971,9 @@ def test_etf_race_short_history_filter_excludes_tickers(tmp_path: Path) -> None:
             }
         )
         mocks["compute_relative_ratio"].return_value = ratio_df
-        mocks["rebase_to_100"].side_effect = lambda df: df  # Identity for testing
+        mocks["compute_relative_race_metrics"].return_value = pl.DataFrame(
+            {"ticker": ["AAPL"]}
+        )
 
         pipeline.etf_race(
             config,
@@ -1980,10 +1982,10 @@ def test_etf_race_short_history_filter_excludes_tickers(tmp_path: Path) -> None:
             momentum_long_window=26,
         )
 
-        # Verify rebase_to_100 was called once for ratio_bars (vs-benchmark).
+        # Verify race metrics were computed from the filtered ratio bars.
         # The call should have NEWCO filtered out (only AAPL with > 26 bars).
-        assert mocks["rebase_to_100"].call_count == 1
-        ratio_arg = mocks["rebase_to_100"].call_args.args[0]
+        assert mocks["compute_relative_race_metrics"].call_count == 1
+        ratio_arg = mocks["compute_relative_race_metrics"].call_args.args[0]
         # After the filter, only AAPL should remain (30 bars > 26)
         assert "AAPL" in ratio_arg["ticker"].to_list()
         assert "NEWCO" not in ratio_arg["ticker"].to_list()

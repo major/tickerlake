@@ -31,12 +31,12 @@ from tickerlake.load import (
     write_weekly_fib_zones,
 )
 from tickerlake.race import (
+    classify_horse_form,
     classify_relative_trend,
-    compute_relative_momentum,
+    compute_relative_race_metrics,
     compute_relative_ratio,
     read_qualifying_etfs,
     read_race_bars,
-    rebase_to_100,
     render_relative_leaderboard,
 )
 from tickerlake.transform import (
@@ -520,7 +520,7 @@ def etf_race(  # noqa: PLR0913 -- public API, args are all user-tunable
     is not supplied; it contains every active ETF whose latest
     ``daily_metrics`` row has ``volume_sma_20 >= min_volume_sma_20``,
     ranked by volume_sma_20 descending and capped at ``max_etfs`` (pass
-    ``None`` for no cap). Shows the vs-benchmark momentum table comparing
+    ``None`` for no cap). Shows the single horse-race table comparing
     each ticker's relative strength vs ``benchmark`` (default: SPY) across
     three windows: ``momentum_short_window`` (default: 4 bars, ~1 month for
     weekly), ``momentum_medium_window`` (default: 13 bars, ~1 quarter), and
@@ -608,15 +608,15 @@ def _render_relative_view(
         pl.col("date").count().over("ticker") > momentum_long_window
     )
     if not ratio_bars.is_empty():
-        rebased_ratio = rebase_to_100(ratio_bars)
-        relative_momentum = compute_relative_momentum(
-            rebased_ratio,
+        relative_metrics = compute_relative_race_metrics(
+            ratio_bars,
             short_window=momentum_short_window,
             medium_window=momentum_medium_window,
             long_window=momentum_long_window,
         )
-        relative_trend = classify_relative_trend(relative_momentum)
-        console.print(render_relative_leaderboard(relative_trend, benchmark=benchmark))
+        relative_trend = classify_relative_trend(relative_metrics)
+        horse_form = classify_horse_form(relative_trend)
+        console.print(render_relative_leaderboard(horse_form, benchmark=benchmark))
     else:
         console.print(
             f"[dim]No tickers with sufficient history (>{momentum_long_window} bars) "

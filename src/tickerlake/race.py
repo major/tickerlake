@@ -4,12 +4,10 @@ Reads close prices for a set of tickers from the consumer DuckDB across
 daily/weekly/monthly timeframes, then computes the race view:
 
 1. Multi-asset race view (``rebase_to_100``): every ticker's closes are
-   rebased to 100 at the first bar of its window so the leaderboard
-   compares like-for-like across tickers with very different prices.
+   rebased to 100 at the first bar of its window for the diagnostic RS view.
 
-Also provides per-ticker metrics (``compute_race_metrics``), ranking
-(``rank_by_current``), overtake detection (``detect_pending_overtakes``),
-and Rich rendering helpers (``render_leaderboard``, ``render_overtakes``).
+Also provides relative race metrics (pace, position, places gained, and race
+form) and Rich rendering helpers for the horse-race table.
 
 No CLI, no DB writes.
 """
@@ -66,6 +64,22 @@ RELATIVE_TREND_SCHEMA: dict = {
     "building": pl.Boolean,
 }
 
+# Horse-race terminology is intentionally kept in the derived report layer;
+# these values are not persisted in DuckDB.
+HORSE_FORM_COLUMNS = {
+    "position": pl.Int64,
+    "places_gained": pl.Int64,
+    "relative_return_short": pl.Float32,
+    "relative_return_medium": pl.Float32,
+    "relative_return_long": pl.Float32,
+    "staying_power": pl.Float32,
+    "momentum_score": pl.Float32,
+    "closing_score": pl.Float32,
+    "leadership_score": pl.Float32,
+    "race_score": pl.Float32,
+    "form": pl.Utf8,
+}
+
 # Consumer-DB table that backs each supported timeframe. The weekly_bars
 # and monthly_bars tables share the daily bars schema, so the same reader
 # works for all three.
@@ -91,6 +105,7 @@ _DEFAULT_MAX_PENDING_OVERTAKES = 25
 # Detection thresholds (kept module-level so ruff doesn't flag them as
 # magic numbers and so the values are discoverable in one place).
 _RS_RATIO_BASELINE = 100.0
+_MIN_PLACES_TO_CHARGE = 2
 
 
 def read_race_bars(
@@ -377,6 +392,145 @@ def compute_relative_momentum(
     ).cast(RELATIVE_MOMENTUM_SCHEMA)
 
 
+def compute_relative_race_metrics(
+    ratio_bars: pl.DataFrame,
+    *,
+    short_window: int,
+    medium_window: int,
+    long_window: int,
+) -> pl.DataFrame:
+    """Add comparable pace, position, places-gained, and race scores.
+
+    ``ratio_bars`` contains the raw ETF/benchmark ratio.  Returns are
+    percentage changes in that ratio, so they are comparable across horses;
+    unlike the rebased RS-Ratio level, they do not depend on when a ticker
+    first appeared in the input.
+    """
+    if ratio_bars.is_empty():
+        return pl.DataFrame(schema={"ticker": pl.Utf8, **HORSE_FORM_COLUMNS})
+
+    windows = {
+        "short": short_window,
+        "medium": medium_window,
+        "long": long_window,
+    }
+    working = ratio_bars.sort(["ticker", "date"])
+    for label, window in windows.items():
+        working = working.with_columns(
+            ((pl.col("close") / pl.col("close").shift(window).over("ticker")) - 1)
+            .mul(100)
+            .cast(pl.Float32)
+            .alias(f"relative_return_{label}")
+        )
+        working = working.with_columns(
+            pl.col(f"relative_return_{label}")
+            .rank("ordinal", descending=True)
+            .over("date")
+            .cast(pl.Int64)
+            .alias(f"position_{label}")
+        )
+
+    latest_date = working.select(pl.col("date").max()).item()
+    current = working.filter(pl.col("date") == latest_date)
+    if current.is_empty():
+        return pl.DataFrame(schema={"ticker": pl.Utf8, **HORSE_FORM_COLUMNS})
+
+    n_horses = current.height
+    score_denominator = max(1, n_horses - 1)
+    current = current.with_columns(
+        pl.col("position_long").alias("position"),
+        (
+            pl.col("position_medium").shift(medium_window).over("ticker")
+            - pl.col("position_medium")
+        ).alias("places_gained"),
+    )
+
+    # The current rows have no prior rows after filtering to latest_date, so
+    # obtain the historical medium-race positions before joining current rows.
+    historical = working.select(
+        "ticker",
+        "date",
+        places_gained=pl.col("position_medium"),
+    )
+    prior = (
+        historical.with_columns(
+            pl.col("places_gained").shift(medium_window).over("ticker").alias("prior")
+        )
+        .filter(pl.col("date") == latest_date)
+        .select("ticker", places_gained=pl.col("prior") - pl.col("places_gained"))
+    )
+    current = current.drop("places_gained").join(prior, on="ticker", how="left")
+
+    staying = working.group_by("ticker").agg(
+        pl.col("relative_return_medium")
+        .gt(0)
+        .cast(pl.Float32)
+        .mean()
+        .mul(100)
+        .alias("staying_power")
+    )
+    current = current.join(staying, on="ticker", how="left")
+
+    for label in windows:
+        current = current.with_columns(
+            (
+                (n_horses - pl.col(f"position_{label}")).cast(pl.Float32)
+                / score_denominator
+                * 100
+            )
+            .clip(0, 100)
+            .alias(f"{label}_score")
+        )
+
+    current = (
+        current.with_columns(
+            (50 + pl.col("places_gained").cast(pl.Float32) / score_denominator * 50)
+            .clip(0, 100)
+            .alias("closing_score"),
+            pl.col("long_score").alias("leadership_score"),
+        )
+        .with_columns(
+            (pl.col("short_score") + pl.col("medium_score") + pl.col("long_score"))
+            .truediv(3)
+            .alias("momentum_score")
+        )
+        .with_columns(
+            (
+                pl.col("momentum_score") * 0.45
+                + pl.col("closing_score") * 0.35
+                + pl.col("staying_power") * 0.20
+            )
+            .cast(pl.Float32)
+            .alias("race_score")
+        )
+    )
+
+    rebased = rebase_to_100(ratio_bars)
+    momentum = compute_relative_momentum(
+        rebased,
+        short_window=short_window,
+        medium_window=medium_window,
+        long_window=long_window,
+    )
+    return momentum.join(
+        current.select(
+            "ticker",
+            "position",
+            "places_gained",
+            "relative_return_short",
+            "relative_return_medium",
+            "relative_return_long",
+            "staying_power",
+            "momentum_score",
+            "closing_score",
+            "leadership_score",
+            "race_score",
+        ),
+        on="ticker",
+        how="inner",
+    )
+
+
 def classify_relative_trend(relative_momentum: pl.DataFrame) -> pl.DataFrame:
     """Add trend classification and building indicator to relative momentum.
 
@@ -429,6 +583,42 @@ def classify_relative_trend(relative_momentum: pl.DataFrame) -> pl.DataFrame:
     return relative_momentum.with_columns(trend, building)
 
 
+def classify_horse_form(metrics: pl.DataFrame) -> pl.DataFrame:
+    """Classify the field using accessible horse-racing terminology."""
+    if metrics.is_empty():
+        return metrics.with_columns(pl.lit(None, dtype=pl.Utf8).alias("form"))
+
+    field_size = metrics.height
+    front_cutoff = max(1, (field_size + 4) // 5)
+    form = (
+        pl.when(pl.col("position").is_null())
+        .then(pl.lit("Unknown"))
+        .when((pl.col("places_gained") >= _MIN_PLACES_TO_CHARGE) & pl.col("building"))
+        .then(pl.lit("Charging"))
+        .when(
+            (pl.col("position") <= front_cutoff)
+            & (pl.col("relative_return_short") >= 0)
+            & (pl.col("relative_return_medium") >= 0)
+        )
+        .then(pl.lit("Front-runner"))
+        .when(pl.col("places_gained") >= _MIN_PLACES_TO_CHARGE)
+        .then(pl.lit("Closing ground"))
+        .when(
+            (pl.col("position") <= front_cutoff) & (pl.col("relative_return_short") < 0)
+        )
+        .then(pl.lit("Losing steam"))
+        .when((pl.col("places_gained") < 0) & (pl.col("relative_return_short") < 0))
+        .then(pl.lit("Losing steam"))
+        .when(pl.col("places_gained") < 0)
+        .then(pl.lit("Fading"))
+        .when(pl.col("position") > field_size * 0.8)
+        .then(pl.lit("Back of field"))
+        .otherwise(pl.lit("Steady"))
+        .alias("form")
+    )
+    return metrics.with_columns(form)
+
+
 def _fmt_momentum(value: float) -> str:
     """Format a momentum value with color but no hot/cold emoji.
 
@@ -448,14 +638,22 @@ def render_relative_leaderboard(
 ) -> Table:
     """Build a Rich Table for relative momentum vs a benchmark.
 
-    Title is ``f"🐎 vs {benchmark} Momentum"``. Columns: Ticker (bold),
-    RS-Ratio (right-justified, 2 decimals), Trend (with emoji prefix),
-    Momentum Short/Medium/Long (colored, no emoji), and Building
-    (🚀 when True, empty otherwise). Sorted by building descending, then
-    momentum_short descending.
+    The table uses horse-race language when the enriched race metrics are
+    present: position, places gained, pace over three windows, race score,
+    and form. The legacy RS-Ratio, trend, momentum, and building columns are
+    retained for diagnostic continuity.
     """
     table = Table(title=f"🐎 vs {benchmark} Momentum", header_style="bold")
     table.add_column("Ticker", style="bold")
+    enriched = "race_score" in relative_trend.columns
+    if enriched:
+        table.add_column("Pos", justify="right")
+        table.add_column("Places", justify="right")
+        table.add_column("Pace Short", justify="right")
+        table.add_column("Pace Medium", justify="right")
+        table.add_column("Pace Long", justify="right")
+        table.add_column("Race", justify="right")
+        table.add_column("Form")
     table.add_column("RS-Ratio", justify="right")
     table.add_column("Trend")
     table.add_column("Momentum Short", justify="right")
@@ -466,9 +664,12 @@ def render_relative_leaderboard(
     if relative_trend.is_empty():
         return table
 
-    sorted_df = relative_trend.sort(
-        ["building", "momentum_short"], descending=[True, True], nulls_last=True
-    )
+    if enriched:
+        sorted_df = relative_trend.sort("race_score", descending=True, nulls_last=True)
+    else:
+        sorted_df = relative_trend.sort(
+            ["building", "momentum_short"], descending=[True, True], nulls_last=True
+        )
 
     trend_emoji = {
         "Leading": "🟢",
@@ -488,14 +689,38 @@ def render_relative_leaderboard(
         # m-4: null-safe rendering for rs_ratio and momentum values
         rs_ratio_str = "n/a" if row["rs_ratio"] is None else f"{row['rs_ratio']:.2f}"
 
-        table.add_row(
-            row["ticker"],
-            rs_ratio_str,
-            trend_str,
-            _fmt_or_na(row["momentum_short"], _fmt_momentum),
-            _fmt_or_na(row["momentum_medium"], _fmt_momentum),
-            _fmt_or_na(row["momentum_long"], _fmt_momentum),
-            building_marker,
+        cells = [row["ticker"]]
+        if enriched:
+            cells.extend(
+                [
+                    _fmt_or_na(row["position"], lambda value: str(int(value))),
+                    _fmt_or_na(row["places_gained"], lambda value: f"{int(value):+d}"),
+                    _fmt_or_na(
+                        row["relative_return_short"],
+                        lambda value: f"{value:+.1f}%",
+                    ),
+                    _fmt_or_na(
+                        row["relative_return_medium"],
+                        lambda value: f"{value:+.1f}%",
+                    ),
+                    _fmt_or_na(
+                        row["relative_return_long"],
+                        lambda value: f"{value:+.1f}%",
+                    ),
+                    _fmt_or_na(row["race_score"], lambda value: f"{value:.0f}"),
+                    row["form"] or "Unknown",
+                ]
+            )
+        cells.extend(
+            [
+                rs_ratio_str,
+                trend_str,
+                _fmt_or_na(row["momentum_short"], _fmt_momentum),
+                _fmt_or_na(row["momentum_medium"], _fmt_momentum),
+                _fmt_or_na(row["momentum_long"], _fmt_momentum),
+                building_marker,
+            ]
         )
+        table.add_row(*cells)
 
     return table
