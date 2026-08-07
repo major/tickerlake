@@ -619,15 +619,6 @@ def classify_horse_form(metrics: pl.DataFrame) -> pl.DataFrame:
     return metrics.with_columns(form)
 
 
-def _fmt_momentum(value: float) -> str:
-    """Format a momentum value with color but no hot/cold emoji.
-
-    Green for positive, red for negative, white for zero.
-    """
-    color = "green" if value > 0 else ("red" if value < 0 else "white")
-    return f"[{color}]{value:+.2f}[/]"
-
-
 def _fmt_or_na(value: float | None, formatter: Callable[[float], str]) -> str:
     """Format a value using the given formatter, or return 'n/a' if null."""
     return "n/a" if value is None else formatter(value)
@@ -638,89 +629,44 @@ def render_relative_leaderboard(
 ) -> Table:
     """Build a Rich Table for relative momentum vs a benchmark.
 
-    The table uses horse-race language when the enriched race metrics are
-    present: position, places gained, pace over three windows, race score,
-    and form. The legacy RS-Ratio, trend, momentum, and building columns are
-    retained for diagnostic continuity.
+    The table uses horse-race language: position, places gained, pace over
+    three windows, race score, and form. Diagnostic RS-Ratio, trend, raw
+    momentum, and building columns are intentionally omitted.
     """
     table = Table(title=f"🐎 vs {benchmark} Momentum", header_style="bold")
     table.add_column("Ticker", style="bold")
-    enriched = "race_score" in relative_trend.columns
-    if enriched:
-        table.add_column("Pos", justify="right")
-        table.add_column("Places", justify="right")
-        table.add_column("Pace Short", justify="right")
-        table.add_column("Pace Medium", justify="right")
-        table.add_column("Pace Long", justify="right")
-        table.add_column("Race", justify="right")
-        table.add_column("Form")
-    table.add_column("RS-Ratio", justify="right")
-    table.add_column("Trend")
-    table.add_column("Momentum Short", justify="right")
-    table.add_column("Momentum Medium", justify="right")
-    table.add_column("Momentum Long", justify="right")
-    table.add_column("Building")
+    table.add_column("Pos", justify="right")
+    table.add_column("Places", justify="right")
+    table.add_column("Pace Short", justify="right")
+    table.add_column("Pace Medium", justify="right")
+    table.add_column("Pace Long", justify="right")
+    table.add_column("Race", justify="right")
+    table.add_column("Form")
 
     if relative_trend.is_empty():
         return table
 
-    if enriched:
+    if "race_score" in relative_trend.columns:
         sorted_df = relative_trend.sort("race_score", descending=True, nulls_last=True)
     else:
         sorted_df = relative_trend.sort(
             ["building", "momentum_short"], descending=[True, True], nulls_last=True
         )
 
-    trend_emoji = {
-        "Leading": "🟢",
-        "Fading": "🟠",
-        "Improving": "🟡",
-        "Lagging": "🔴",
-        "Unknown": "❓",
-    }
-
     for row in sorted_df.iter_rows(named=True):
-        trend_label = row["trend"]
-        emoji = trend_emoji.get(trend_label, "")
-        trend_str = f"{emoji} {trend_label}" if emoji else trend_label
-
-        building_marker = "🚀" if row["building"] else ""
-
-        # m-4: null-safe rendering for rs_ratio and momentum values
-        rs_ratio_str = "n/a" if row["rs_ratio"] is None else f"{row['rs_ratio']:.2f}"
-
-        cells = [row["ticker"]]
-        if enriched:
-            cells.extend(
-                [
-                    _fmt_or_na(row["position"], lambda value: str(int(value))),
-                    _fmt_or_na(row["places_gained"], lambda value: f"{int(value):+d}"),
-                    _fmt_or_na(
-                        row["relative_return_short"],
-                        lambda value: f"{value:+.1f}%",
-                    ),
-                    _fmt_or_na(
-                        row["relative_return_medium"],
-                        lambda value: f"{value:+.1f}%",
-                    ),
-                    _fmt_or_na(
-                        row["relative_return_long"],
-                        lambda value: f"{value:+.1f}%",
-                    ),
-                    _fmt_or_na(row["race_score"], lambda value: f"{value:.0f}"),
-                    row["form"] or "Unknown",
-                ]
-            )
-        cells.extend(
-            [
-                rs_ratio_str,
-                trend_str,
-                _fmt_or_na(row["momentum_short"], _fmt_momentum),
-                _fmt_or_na(row["momentum_medium"], _fmt_momentum),
-                _fmt_or_na(row["momentum_long"], _fmt_momentum),
-                building_marker,
-            ]
+        table.add_row(
+            row["ticker"],
+            _fmt_or_na(row.get("position"), lambda value: str(int(value))),
+            _fmt_or_na(row.get("places_gained"), lambda value: f"{int(value):+d}"),
+            _fmt_or_na(
+                row.get("relative_return_short"), lambda value: f"{value:+.1f}%"
+            ),
+            _fmt_or_na(
+                row.get("relative_return_medium"), lambda value: f"{value:+.1f}%"
+            ),
+            _fmt_or_na(row.get("relative_return_long"), lambda value: f"{value:+.1f}%"),
+            _fmt_or_na(row.get("race_score"), lambda value: f"{value:.0f}"),
+            row.get("form") or "Unknown",
         )
-        table.add_row(*cells)
 
     return table

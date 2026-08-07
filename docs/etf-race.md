@@ -55,23 +55,10 @@ filtered out to avoid degenerate values:
 - **Form** — horse-racing interpretation of the current race:
   `Charging`, `Closing ground`, `Front-runner`, `Losing steam`, `Fading`,
   `Back of field`, or `Steady`.
-- **RS-Ratio** — current ratio of `ticker_close / benchmark_close`,
-  rebased to 100 at each ticker's first available bar (per-ticker rebasing,
-  not shared window start; matches TradingView's relative-strength charts,
-  not RRG-style z-score normalization).
-- **Trend** — one of:
-  - **Leading** — RS ≥ 100 and short-term momentum > 0 (outperforming and rising).
-  - **Fading** — RS ≥ 100 and short-term momentum ≤ 0 (outperforming but declining).
-  - **Improving** — RS < 100 and short-term momentum > 0 (underperforming but rising).
-  - **Lagging** — RS < 100 and short-term momentum ≤ 0 (underperforming and declining).
-- **Momentum Short/Medium/Long** — point-change on the rebased RS ratio
-  over short (4 bars, default ~1 month for weekly), medium (13 bars,
-  default ~1 quarter), and long (26 bars, default ~6 months) windows.
-  Gracefully clamped to available history for recently-listed tickers.
-- **Building** — 🚀 when outperformance vs benchmark is accelerating
-  (short-term rate of change > medium > long, and medium-term momentum
-  already positive). Indicates sustained momentum building, not early-mover
-  fade.
+
+The table intentionally omits the underlying RS-Ratio, raw momentum, trend,
+and building diagnostics to keep the race readable. They remain available to
+the calculation layer that derives pace, scores, and form.
 
 The race score is descriptive rather than predictive. It separates horses
 already in front from horses closing ground: front-runners score well on

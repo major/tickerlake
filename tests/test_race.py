@@ -763,8 +763,8 @@ def test_render_relative_leaderboard_empty_input():
     assert "Ticker" in text
 
 
-def test_render_relative_leaderboard_trend_emojis():
-    """Trend column includes correct emoji prefixes."""
+def test_render_relative_leaderboard_omits_legacy_trend_column():
+    """The compact horse table omits the legacy trend diagnostic."""
     trend = pl.DataFrame(
         {
             "ticker": ["A", "B", "C", "D"],
@@ -782,15 +782,15 @@ def test_render_relative_leaderboard_trend_emojis():
     )
     table = render_relative_leaderboard(trend, benchmark="SPY")
     text = _rich_text(table)
-    # Check for emoji markers.
-    assert "🟢" in text  # Leading
-    assert "🟠" in text  # Fading
-    assert "🟡" in text  # Improving
-    assert "🔴" in text  # Lagging
+    assert "Trend" not in text
+    assert "🟢" not in text
+    assert "🟠" not in text
+    assert "🟡" not in text
+    assert "🔴" not in text
 
 
-def test_render_relative_leaderboard_building_marker():
-    """Building column shows 🚀 when True, empty when False."""
+def test_render_relative_leaderboard_omits_legacy_building_column():
+    """The compact horse table omits the legacy building diagnostic."""
     trend = pl.DataFrame(
         {
             "ticker": ["A", "B"],
@@ -808,7 +808,8 @@ def test_render_relative_leaderboard_building_marker():
     )
     table = render_relative_leaderboard(trend, benchmark="SPY")
     text = _rich_text(table)
-    assert "🚀" in text  # A has building=True
+    assert "Building" not in text
+    assert "🚀" not in text
 
 
 # ---- End-to-end tests (M5) ------------------------------------------------
@@ -1043,6 +1044,10 @@ def test_render_relative_leaderboard_shows_horse_metrics():
     assert "Pace Short" in text
     assert "Race" in text
     assert "Charging" in text
+    assert "RS-Ratio" not in text
+    assert "Trend" not in text
+    assert "Momentum Short" not in text
+    assert "Building" not in text
 
 
 def test_classify_relative_trend_decelerating_decline():
@@ -1229,7 +1234,7 @@ def test_relative_ratio_misaligned_dates_reverse():
 
 
 def test_render_relative_leaderboard_no_hot_cold_emoji():
-    """m-5: Verify 🔥/🧊 emoji are absent from momentum columns."""
+    """m-5: Verify compact rendering has no legacy trend or hot/cold emoji."""
     trend = pl.DataFrame(
         {
             "ticker": ["A", "B"],
@@ -1250,13 +1255,12 @@ def test_render_relative_leaderboard_no_hot_cold_emoji():
     # 🔥 and 🧊 should NOT appear (they're only in _fmt_pct, not _fmt_momentum)
     assert "🔥" not in text
     assert "🧊" not in text
-    # But trend emoji should still be present
-    assert "🟢" in text  # Leading
-    assert "🟡" in text  # Improving
+    assert "🟢" not in text
+    assert "🟡" not in text
 
 
 def test_render_relative_leaderboard_null_safe():
-    """m-4: Null-safe rendering for Unknown trend with null values."""
+    """m-4: Null-safe rendering for Unknown form with null values."""
     # Construct a row with trend="Unknown" and null rs_ratio/momentum values
     # (bypassing compute_relative_momentum's filter)
     trend = pl.DataFrame(
@@ -1278,5 +1282,5 @@ def test_render_relative_leaderboard_null_safe():
     text = _rich_text(table)
     # Should render without raising, with "n/a" for null values
     assert "UNKNOWN" in text
-    assert "❓" in text  # Unknown emoji
+    assert "Unknown" in text
     assert "n/a" in text  # Null rs_ratio rendered as "n/a"
