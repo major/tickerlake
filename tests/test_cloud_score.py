@@ -137,11 +137,11 @@ def test_cloud_bars_schema_defined():
 def test_cloud_score_schema_defined():
     assert set(cloud_score.CLOUD_SCORE_SCHEMA) == {
         "ticker",
+        "score_1d_cloud",
         "score_weekly_cloud",
         "score_2wk_cloud",
         "score_3wk_cloud",
         "score_monthly_cloud",
-        "score_2mo_cloud",
         "score_200wk_ma",
         "score_200wk_ma_slope",
         "score_300wk_ma",
@@ -161,11 +161,11 @@ def test_cloud_score_schema_defined():
 
 def test_timeframe_ichimoku_periods_are_typed_and_locked():
     assert TIMEFRAME_ICHIMOKU_PERIODS == {
+        "1d": (9, 26, 52),
         "weekly": (9, 26, 52),
         "2wk": (9, 26, 52),
         "3wk": (9, 26, 52),
         "monthly": (9, 26, 52),
-        "2mo": (9, 26, 52),
     }
     assert all(
         isinstance(value, tuple) and len(value) == 3
@@ -276,7 +276,7 @@ def test_aggregate_daily_to_period_monthly_labels_last_trading_day():
     assert monthly["close"].to_list() == pytest.approx([130.0, 159.0])
 
 
-@pytest.mark.parametrize("every", ["2w", "3w", "2mo"])
+@pytest.mark.parametrize("every", ["1d", "2w", "3w", "2mo"])
 def test_aggregate_daily_to_period_supports_custom_periods(every: str):
     bars = _make_ohlc({"X": [100.0] * 400})
     result = aggregate_daily_to_period(bars, every=every)
@@ -286,7 +286,7 @@ def test_aggregate_daily_to_period_supports_custom_periods(every: str):
 
 def test_aggregate_daily_to_period_invalid_every():
     with pytest.raises(ValueError, match="every"):
-        aggregate_daily_to_period(_make_ohlc({"X": [1.0]}), every="1d")
+        aggregate_daily_to_period(_make_ohlc({"X": [1.0]}), every="5d")
 
 
 def test_aggregate_daily_to_period_empty_input():
@@ -728,10 +728,9 @@ def test_compute_cloud_scores_end_to_end(sample_daily_bars_df):
     # UP is above all four cloud lines on all five timeframes → 1.0; DOWN is
     # below everything → 0.0. The clouds are scored on the ETF/SPY ratio, so
     # UP's rising ratio beats its own lines and DOWN's falling ratio loses to
-    # them on every timeframe. The 2mo column may be null because the 8y
-    # fixture only has ~67 2-month bars and the standard (9, 26, 52) Ichimoku
-    # needs 78 2-month bars; accept null for the 2mo column.
+    # them on every timeframe.
     for column in (
+        "score_1d_cloud",
         "score_weekly_cloud",
         "score_2wk_cloud",
         "score_3wk_cloud",
@@ -739,10 +738,6 @@ def test_compute_cloud_scores_end_to_end(sample_daily_bars_df):
     ):
         assert by_ticker["UP"][column] == pytest.approx(1.0)
         assert by_ticker["DOWN"][column] == pytest.approx(0.0)
-    # 2mo: the 8y fixture may not have enough 2-month bars for the standard
-    # periods; accept either 1.0/0.0 or null.
-    assert by_ticker["UP"]["score_2mo_cloud"] in (pytest.approx(1.0), None)
-    assert by_ticker["DOWN"]["score_2mo_cloud"] in (pytest.approx(0.0), None)
 
     # The four MA conditions are self-comparisons on the ratio: UP's ratio
     # rises (above its own MAs, rising slopes → all 1); DOWN's ratio falls
@@ -845,11 +840,11 @@ def test_compute_cloud_scores_clouds_scored_on_ratio_not_raw_prices():
     result = compute_cloud_scores(bars, tickers=["HIGH"], benchmark="SPY")
     row = result.row(0, named=True)
     for column in (
+        "score_1d_cloud",
         "score_weekly_cloud",
         "score_2wk_cloud",
         "score_3wk_cloud",
         "score_monthly_cloud",
-        "score_2mo_cloud",
     ):
         # Either 0.0 (ratio below Ichimoku lines) or None (insufficient
         # history for the deeper timeframe with the standard periods).
@@ -871,11 +866,11 @@ def _scorecard_frame() -> pl.DataFrame:
     return pl.DataFrame(
         {
             "ticker": ["AAA", "BBB", "CCC"],
+            "score_1d_cloud": [1.0, 0.75, 0.25],
             "score_weekly_cloud": [1.0, 0.75, 0.25],
             "score_2wk_cloud": [1.0, 0.75, 0.25],
             "score_3wk_cloud": [1.0, 0.75, 0.25],
             "score_monthly_cloud": [1.0, 0.75, 0.25],
-            "score_2mo_cloud": [1.0, 0.75, 0.25],
             "score_200wk_ma": [1, 1, 0],
             "score_200wk_ma_slope": [1, 1, 0],
             "score_300wk_ma": [1, 0, None],
@@ -893,11 +888,11 @@ def test_render_cloud_scorecard_returns_table_with_expected_columns():
     labels = [column.header for column in table.columns]
     assert labels == [
         "Ticker",
+        "1D-Cloud",
         "W-Cloud",
         "2W-Cloud",
         "3W-Cloud",
         "Mo-Cloud",
-        "2Mo-Cloud",
         "200W MA",
         "200W slope",
         "300W MA",

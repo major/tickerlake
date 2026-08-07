@@ -38,21 +38,21 @@ bars to resolve. It is read-only and does not require `MASSIVE_API_KEY`.
 The command prints a single Rich scorecard, one row per ETF:
 
 ```
-┌────────┬─────────┬──────────┬──────────┬─────────┬──────────┬────────┬───────────┬────────┬───────────┬───────┐
-│ Ticker ┆ W-Cloud ┆ 2W-Cloud ┆ 3W-Cloud ┆ Mo-Cloud ┆ 2Mo-Cloud ┆ 200W MA ┆ 200W slope ┆ 300W MA ┆ 300W slope ┆ Total │
-├────────┼─────────┼──────────┼──────────┼─────────┼──────────┼────────┼───────────┼────────┼───────────┼───────┤
-│ XLK    ┆  0.75   ┆   0.75   ┆   0.75   ┆  1.00   ┆   1.00    ┆   1    ┆     1      ┆   1    ┆     1      ┆ 8.25  │
-│ CIBR   ┆  1.00   ┆   1.00   ┆   1.00   ┆  1.00   ┆   1.00    ┆   1    ┆     0      ┆   1    ┆     1      ┆ 8.00  │
-│ IGV    ┆  0.50   ┆   0.50   ┆   0.50   ┆  0.00   ┆   0.25    ┆   0    ┆     0      ┆   0    ┆     0      ┆ 1.75  │
-└────────┴─────────┴──────────┴──────────┴─────────┴──────────┴────────┴───────────┴────────┴───────────┴───────┘
+┌────────┬──────────┬─────────┬──────────┬──────────┬─────────┬────────┬───────────┬────────┬───────────┬───────┐
+│ Ticker ┆ 1D-Cloud ┆ W-Cloud ┆ 2W-Cloud ┆ 3W-Cloud ┆ Mo-Cloud ┆ 200W MA ┆ 200W slope ┆ 300W MA ┆ 300W slope ┆ Total │
+├────────┼──────────┼─────────┼──────────┼──────────┼─────────┼────────┼───────────┼────────┼───────────┼───────┤
+│ XLK    ┆   0.75   ┆  0.75   ┆   0.75   ┆   0.75   ┆  1.00   ┆   1    ┆     1      ┆   1    ┆     1      ┆ 8.25  │
+│ CIBR   ┆   1.00   ┆  1.00   ┆   1.00   ┆   1.00   ┆  1.00   ┆   1    ┆     0      ┆   1    ┆     1      ┆ 8.00  │
+│ IGV    ┆   0.50   ┆  0.50   ┆   0.50   ┆   0.50   ┆  0.00   ┆   0    ┆     0      ┆   0    ┆     0      ┆ 1.75  │
+└────────┴──────────┴─────────┴──────────┴──────────┴─────────┴────────┴───────────┴────────┴───────────┴───────┘
 ```
 
 Columns:
 
 - **Ticker** — the ETF.
-- **W-Cloud / 2W-Cloud / 3W-Cloud / Mo-Cloud / 2Mo-Cloud** — 0.0-1.0 in 0.25
+- **1D-Cloud / W-Cloud / 2W-Cloud / 3W-Cloud / Mo-Cloud** — 0.0-1.0 in 0.25
   steps: the count of the four Ichimoku lines the ETF/SPY ratio's close is
-  above on weekly, 2-week, 3-week, monthly, and 2-month bars, divided by 4.
+  above on daily, weekly, 2-week, 3-week, and monthly bars, divided by 4.
   "1.00" means the ratio is above all four lines; "0.50" means above two of
   four (the classic "inside the cloud" reading); "0.00" means below all four.
 - **200W MA / 300W MA** — 1 when the ratio's close is above the ratio's own
@@ -92,7 +92,7 @@ strength directly.
 ### The 4 Ichimoku lines per cloud
 
 On each timeframe, the ETF's daily bars are aggregated to that timeframe's
-bars (1w, 2w, 3w, 1mo, 2mo) for both the ETF and SPY, then reduced to the
+bars (1d, 1w, 2w, 3w, 1mo) for both the ETF and SPY, then reduced to the
 per-ETF ratio series: `ratio_close = etf_close / spy_close`, date-aligned via
 an inner join. The cloud lines are computed on the ratio series itself, and
 the ratio's close is compared to them, each weighted 0.25:
@@ -136,17 +136,16 @@ The Ichimoku periods live in one place as a typed dict,
 
 | Timeframe | tenkan | kijun | senkou_b | History needed |
 |-----------|--------|-------|----------|----------------|
+| daily (1d) | 9 | 26 | 52 | ~4 months |
 | weekly (1w) | 9 | 26 | 52 | ~1.5y |
 | 2-week (2w) | 9 | 26 | 52 | ~3y |
 | 3-week (3w) | 9 | 26 | 52 | ~4.5y |
 | monthly (1mo) | 9 | 26 | 52 | ~6.5y |
-| 2-month (2mo) | 9 | 26 | 52 | ~13y |
 
 All five timeframes use the standard 9/26/52 Ichimoku periods — only the bar
 timeframe changes between columns. The deeper timeframes need more history
-(weekly needs 78 bars; 2-month needs 78 2-month bars ≈ 13y). With the
-project's 10-year backfill, the 2mo column will be `n/a`; re-run with
-`--start-date 2013-01-01` (or earlier) to populate it.
+(daily needs 78 daily bars ≈ 4 months; monthly needs 78 monthly bars ≈ 6.5y).
+All five resolve within the 10-year backfill.
 
 ### MA + slope conditions
 
@@ -173,11 +172,11 @@ possible score is 9.0 (1.00 + 1.00 + 1.00 + 1.00 + 1.00 for the clouds plus
 ## Caveats
 
 - **Backfill depth matters.** The deeper conditions need a deep backfill: the
-  monthly and 2-month clouds each include the 26-bar Senkou displacement
-  (needing ~6.5 years of daily bars) and the 300-WK MA needs ~6.25 years of
-  weekly bars. With only ~5 years of daily bars those columns render `n/a`
-  (the weekly/2wk/3wk clouds and the 200-WK MA resolve fine). Re-run the
-  backfill for a deeper range to fill them in:
+  monthly cloud includes the 26-bar Senkou displacement (needing ~6.5 years of
+  daily bars) and the 300-WK MA needs ~6.25 years of weekly bars. With only
+  ~5 years of daily bars those columns render `n/a` (the daily/weekly/2wk/3wk
+  clouds and the 200-WK MA resolve fine). Re-run the backfill for a deeper
+  range to fill them in:
 
   ```bash
   uv run tickerlake backfill --start-date 2015-01-01

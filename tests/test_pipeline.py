@@ -2051,11 +2051,11 @@ def _ciovacco_scores_df() -> pl.DataFrame:
     return pl.DataFrame(
         {
             "ticker": ["AAPL", "MSFT"],
+            "score_1d_cloud": [1.0, 0.75],
             "score_weekly_cloud": [1.0, 0.75],
             "score_2wk_cloud": [1.0, 0.75],
             "score_3wk_cloud": [1.0, 0.75],
             "score_monthly_cloud": [1.0, 0.75],
-            "score_2mo_cloud": [1.0, 0.75],
             "score_200wk_ma": [1, 1],
             "score_200wk_ma_slope": [1, 1],
             "score_300wk_ma": [1, 1],

@@ -6,7 +6,7 @@ separate "ETF vs SPY" comparison step.
 
 1-5. Five cloud-timeframe columns (0.0-1.0 each): the ratio's close vs four
    Ichimoku lines (Tenkan-sen, Kijun-sen, Senkou Span A, Senkou Span B)
-   computed on the ratio's weekly, 2-week, 3-week, monthly, and 2-month
+   computed on the ratio's daily, weekly, 2-week, 3-week, and monthly
    bars. Each cloud column is the count of "above" lines divided by 4, so
    values land in {0.0, 0.25, 0.5, 0.75, 1.0}.
 6-9. Four MA columns (0/1 each): the ratio's own weekly 200-week / 300-week
@@ -93,11 +93,11 @@ MA_SCORE_SCHEMA: dict = {
 # total).
 CLOUD_SCORE_SCHEMA: dict = {
     "ticker": pl.Utf8,
+    "score_1d_cloud": pl.Float32,  # 0.0-1.0
     "score_weekly_cloud": pl.Float32,  # 0.0-1.0
     "score_2wk_cloud": pl.Float32,  # 0.0-1.0
     "score_3wk_cloud": pl.Float32,  # 0.0-1.0
     "score_monthly_cloud": pl.Float32,  # 0.0-1.0
-    "score_2mo_cloud": pl.Float32,  # 0.0-1.0
     "score_200wk_ma": pl.Int64,  # 0 or 1
     "score_200wk_ma_slope": pl.Int64,  # 0 or 1
     "score_300wk_ma": pl.Int64,  # 0 or 1
@@ -107,34 +107,35 @@ CLOUD_SCORE_SCHEMA: dict = {
 
 # Ichimoku periods per timeframe as (tenkan, kijun, senkou_b). All five
 # timeframes use the standard 9/26/52 — only the bar timeframe changes
-# between columns (1w, 2w, 3w, 1mo, 2mo). The deeper timeframes need more
-# history: weekly needs 78 bars (1.5y), 2-week needs 156 weeks (3y), 3-week
-# needs 234 weeks (4.5y), monthly needs 78 months (6.5y), and 2-month needs
-# 78 2-month bars (~13y). With a 10-year backfill the 2mo column will be n/a.
+# between columns (1d, 1w, 2w, 3w, 1mo). The deeper timeframes need more
+# history: daily needs 78 bars (~4 months), weekly needs 78 bars (1.5y),
+# 2-week needs 156 weeks (3y), 3-week needs 234 weeks (4.5y), monthly needs
+# 78 months (6.5y). All five resolve within the 10-year backfill.
 TIMEFRAME_ICHIMOKU_PERIODS: dict[str, tuple[int, int, int]] = {
+    "1d": (9, 26, 52),
     "weekly": (9, 26, 52),
     "2wk": (9, 26, 52),
     "3wk": (9, 26, 52),
     "monthly": (9, 26, 52),
-    "2mo": (9, 26, 52),
 }
 
 # Aggregation interval used to build each timeframe's bars from daily bars.
+# "1d" is a pass-through (no aggregation); the rest are polars `every` strings.
 _TIMEFRAME_EVERY: dict[str, str] = {
+    "1d": "1d",
     "weekly": "1w",
     "2wk": "2w",
     "3wk": "3w",
     "monthly": "1mo",
-    "2mo": "2mo",
 }
 
 # Output column for each timeframe's cloud score.
 _CLOUD_SCORE_COLUMNS: dict[str, str] = {
+    "1d": "score_1d_cloud",
     "weekly": "score_weekly_cloud",
     "2wk": "score_2wk_cloud",
     "3wk": "score_3wk_cloud",
     "monthly": "score_monthly_cloud",
-    "2mo": "score_2mo_cloud",
 }
 
 # Senkou Span A/B are plotted 26 periods ahead of the bar they're computed
@@ -220,17 +221,23 @@ def read_daily_bars(
 def aggregate_daily_to_period(daily_bars: pl.DataFrame, *, every: str) -> pl.DataFrame:
     """Aggregate daily OHLCV bars into calendar periods per ticker.
 
-    Supports the week-based ``1w``/``2w``/``3w`` and month-based ``1mo``/``2mo``
-    ``every`` intervals. Week-based bars are labeled with the period start (a
-    Monday); month-based bars with the last trading day in the period. Returns
-    a ``CLOUD_BARS_SCHEMA`` frame sorted by (ticker, date).
+    Supports ``1d`` (pass-through, no aggregation) and the week-based
+    ``1w``/``2w``/``3w`` and month-based ``1mo``/``2mo`` ``every`` intervals.
+    ``1d`` returns the input as-is; the others use polars ``group_by_dynamic``.
+    Week-based bars are labeled with the period start (a Monday); month-based
+    bars with the last trading day in the period. Returns a ``CLOUD_BARS_SCHEMA``
+    frame sorted by (ticker, date).
     """
-    supported = {"1w", "2w", "3w", "1mo", "2mo"}
+    supported = {"1d", "1w", "2w", "3w", "1mo", "2mo"}
     if every not in supported:
         msg = f"every must be one of: {', '.join(sorted(supported))}"
         raise ValueError(msg)
     if daily_bars.is_empty():
         return pl.DataFrame(schema=CLOUD_BARS_SCHEMA)
+    if every == "1d":
+        return daily_bars.select(list(CLOUD_BARS_SCHEMA)).sort(
+            ["ticker", "date"]
+        ).cast(CLOUD_BARS_SCHEMA)
 
     is_week_based = every in {"1w", "2w", "3w"}
     aggregated = (
@@ -671,7 +678,9 @@ def render_cloud_scorecard(
         header_style="bold",
     )
     table.add_column("Ticker", style="bold")
-    for column in ("W-Cloud", "2W-Cloud", "3W-Cloud", "Mo-Cloud", "2Mo-Cloud"):
+    for column in (
+        "1D-Cloud", "W-Cloud", "2W-Cloud", "3W-Cloud", "Mo-Cloud"
+    ):
         table.add_column(column, justify="center")
     for column in ("200W MA", "200W slope", "300W MA", "300W slope"):
         table.add_column(column, justify="center")
@@ -685,11 +694,11 @@ def render_cloud_scorecard(
         sorted_scores = sorted_scores.head(max_etfs)
 
     cloud_columns = (
+        "score_1d_cloud",
         "score_weekly_cloud",
         "score_2wk_cloud",
         "score_3wk_cloud",
         "score_monthly_cloud",
-        "score_2mo_cloud",
     )
     ma_columns = (
         "score_200wk_ma",
