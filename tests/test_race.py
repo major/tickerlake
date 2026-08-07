@@ -1284,3 +1284,37 @@ def test_render_relative_leaderboard_null_safe():
     assert "UNKNOWN" in text
     assert "Unknown" in text
     assert "n/a" in text  # Null rs_ratio rendered as "n/a"
+
+
+def test_form_style_maps_all_forms():
+    assert race.FORM_STYLE == {
+        "Charging": ("🚀", "green"),
+        "Front-runner": ("🏆", "cyan"),
+        "Closing ground": ("⚡", "yellow"),
+        "Steady": ("➖", None),  # noqa: RUF001 -- deliberate per design spec
+        "Losing steam": ("📉", "red"),
+        "Fading": ("🍂", "orange"),
+        "Back of field": ("🐢", "dim red"),
+        "Unknown": ("❔", "dim"),
+    }
+
+
+def test_form_style_falls_back_to_unknown():
+    assert race._form_style(None) == ("❔", "dim")
+    assert race._form_style("Not a form") == ("❔", "dim")
+
+
+def test_pace_style_sign_coloring():
+    assert race._pace_style(2.0) == "green"
+    assert race._pace_style(-0.5) == "red"
+    assert race._pace_style(0.0) is None
+    assert race._pace_style(None) is None
+
+
+def test_race_score_style_buckets():
+    assert race._race_score_style(88.0) == "green"
+    assert race._race_score_style(70.0) == "green"
+    assert race._race_score_style(55.0) == "yellow"
+    assert race._race_score_style(40.0) == "yellow"
+    assert race._race_score_style(39.9) == "red"
+    assert race._race_score_style(None) is None

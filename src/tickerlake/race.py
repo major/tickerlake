@@ -107,6 +107,25 @@ _DEFAULT_MAX_PENDING_OVERTAKES = 25
 _RS_RATIO_BASELINE = 100.0
 _MIN_PLACES_TO_CHARGE = 2
 
+# Rendering styles for the horse-race leaderboard: form label -> (emoji,
+# row style). The emoji is shown in the Form cell; the style tints the whole
+# row. Style is None for forms that render unstyled.
+FORM_STYLE: dict[str, tuple[str, str | None]] = {
+    "Charging": ("🚀", "green"),
+    "Front-runner": ("🏆", "cyan"),
+    "Closing ground": ("⚡", "yellow"),
+    "Steady": ("➖", None),  # noqa: RUF001 -- deliberate per design spec
+    "Losing steam": ("📉", "red"),
+    "Fading": ("🍂", "orange"),
+    "Back of field": ("🐢", "dim red"),
+    "Unknown": ("❔", "dim"),
+}
+
+# Race-score color buckets: >= _RACE_SCORE_HIGH is green, >= _RACE_SCORE_LOW
+# is yellow, below is red.
+_RACE_SCORE_HIGH = 70.0
+_RACE_SCORE_LOW = 40.0
+
 
 def read_race_bars(
     consumer_path: Path,
@@ -622,6 +641,29 @@ def classify_horse_form(metrics: pl.DataFrame) -> pl.DataFrame:
 def _fmt_or_na(value: float | None, formatter: Callable[[float], str]) -> str:
     """Format a value using the given formatter, or return 'n/a' if null."""
     return "n/a" if value is None else formatter(value)
+
+
+def _form_style(form: str | None) -> tuple[str, str | None]:
+    """Return (emoji, row style) for a horse form; Unknown for null/unknown."""
+    return FORM_STYLE.get(form, FORM_STYLE["Unknown"])
+
+
+def _pace_style(value: float | None) -> str | None:
+    """Return a Rich style for a pace value: green for gains, red for losses."""
+    if value is None or value == 0:
+        return None
+    return "green" if value > 0 else "red"
+
+
+def _race_score_style(value: float | None) -> str | None:
+    """Return a Rich style for a race score bucket (green/yellow/red)."""
+    if value is None:
+        return None
+    if value >= _RACE_SCORE_HIGH:
+        return "green"
+    if value >= _RACE_SCORE_LOW:
+        return "yellow"
+    return "red"
 
 
 def render_relative_leaderboard(
