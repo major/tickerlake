@@ -1769,6 +1769,39 @@ def test_etf_race_momentum_windows_validation() -> None:
         )
 
 
+def test_etf_race_prints_only_the_leaderboard(tmp_path: Path) -> None:
+    """etf-race does not print a title or metadata preamble above the table."""
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+    recording = Console(record=True)
+
+    with (
+        patch.multiple(
+            _PIPELINE,
+            _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
+            read_race_bars=DEFAULT,
+            _render_relative_view=DEFAULT,
+        ) as mocks,
+        patch(f"{_PIPELINE}.console", recording),
+    ):
+        mocks["read_race_bars"].return_value = pl.DataFrame(
+            {
+                "date": [datetime.date(2024, 1, 1)] * 3,
+                "ticker": ["AAPL", "MSFT", "SPY"],
+                "close": [150.0, 300.0, 400.0],
+            }
+        )
+        pipeline.etf_race(config, tickers=["AAPL", "MSFT"])
+
+    text = recording.export_text()
+    assert "ETF Horserace" not in text
+    assert "weekly bars, 365-day lookback" not in text
+    mocks["_render_relative_view"].assert_called_once()
+
+
 def test_etf_race_benchmark_in_race_tickers_single_read(tmp_path: Path) -> None:
     """When benchmark is in race_tickers, only ONE read_race_bars call (B3.1)."""
     from tickerlake import pipeline

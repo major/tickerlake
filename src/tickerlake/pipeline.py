@@ -548,13 +548,6 @@ def etf_race(  # noqa: PLR0913 -- public API, args are all user-tunable
     race_tickers = [t.strip().upper() for t in race_tickers]
     benchmark = benchmark.strip().upper()
 
-    label = " / ".join(race_tickers)
-    console.print(f"\n[bold]🏇 ETF Horserace: {label} 🏇[/bold]")
-    console.print(
-        f"{timeframe} bars, {lookback_days}-day lookback "
-        f"({len(race_tickers)} ETF{'s' if len(race_tickers) != 1 else ''})"
-    )
-
     # Multi-asset view: fetch race tickers + benchmark in one deduped query
     read_list = list(dict.fromkeys([*race_tickers, benchmark]))
     relative_bars = read_race_bars(

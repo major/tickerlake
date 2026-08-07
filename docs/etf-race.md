@@ -31,8 +31,8 @@ one. Tune the threshold with `--min-vol-sma-20` and the cap with
 
 ## Output
 
-The command prints one vs-benchmark momentum table: the field running against
-the chosen benchmark.
+The command prints the vs-benchmark momentum table directly, showing the field
+running against the chosen benchmark.
 
 ### vs-Benchmark momentum view
 
