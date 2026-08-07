@@ -715,14 +715,15 @@ def _write_ciovacco_csv(
 ) -> None:
     """Write the full Ciovacco scorecard to a CSV file.
 
-    The CSV is sorted by ``total`` descending (nulls last) and includes a
+    The CSV is sorted by ``total`` descending (nulls last), with ``ticker``
+    ascending as a stable tie-breaker when totals are equal, and includes a
     ``benchmark`` column. The ``max_etfs`` display cap is NOT applied — the
     CSV gets every scored row, since callers writing to CSV want the full
     data for further analysis.
     """
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     out = (
-        scores.sort("total", descending=True, nulls_last=True)
+        scores.sort(["total", "ticker"], descending=[True, False], nulls_last=True)
         .with_columns(pl.lit(benchmark).alias("benchmark"))
         .select(
             "ticker",

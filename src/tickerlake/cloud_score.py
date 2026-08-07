@@ -711,7 +711,8 @@ def render_cloud_scorecard(
 ) -> Table:
     """Build a Rich scorecard: one row per ETF, 9 score columns + total.
 
-    Rows are sorted by ``total`` descending (nulls last) and capped at
+    Rows are sorted by ``total`` descending (nulls last), with ``ticker``
+    ascending as a stable tie-breaker when totals are equal, and capped at
     ``max_etfs`` (default 50, None for unlimited). Cloud cells are tinted by
     score (1.0 green .. 0.0 red) and formatted to 2 decimals, MA cells
     green/red for 1/0, null cells render as ``n/a`` in dim, and the total
@@ -733,7 +734,9 @@ def render_cloud_scorecard(
     if scores.is_empty():
         return table
 
-    sorted_scores = scores.sort("total", descending=True, nulls_last=True)
+    sorted_scores = scores.sort(
+        ["total", "ticker"], descending=[True, False], nulls_last=True
+    )
     if max_etfs is not None:
         sorted_scores = sorted_scores.head(max_etfs)
 

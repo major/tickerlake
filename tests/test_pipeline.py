@@ -2295,3 +2295,49 @@ def test_ciovacco_csv_unaffected_by_max_etfs(tmp_path: Path) -> None:
     written = pl.read_csv(csv_path)
     # CSV has both rows; max_etfs only constrains the Rich table.
     assert written["ticker"].to_list() == ["AAPL", "MSFT"]
+
+
+def test_ciovacco_csv_ties_break_by_ticker_ascending(tmp_path: Path) -> None:
+    """Tied totals in the CSV are broken by ticker ascending."""
+    from tickerlake import pipeline
+    from tickerlake.cloud_score import CLOUD_SCORE_SCHEMA
+    from tickerlake.config import Config
+
+    config = Config(output_dir=tmp_path)
+    (tmp_path / "tickerlake.duckdb").touch()
+    csv_path = tmp_path / "ciovacco.csv"
+
+    # ZZZ and AAA tie on total=2.0; MMM wins with total=9.0.
+    tied_scores = pl.DataFrame(
+        {
+            "ticker": ["ZZZ", "AAA", "MMM"],
+            "score_1d_cloud": [0.5, 0.5, 1.0],
+            "score_weekly_cloud": [0.5, 0.5, 1.0],
+            "score_2wk_cloud": [0.5, 0.5, 1.0],
+            "score_3wk_cloud": [0.5, 0.5, 1.0],
+            "score_monthly_cloud": [0.5, 0.5, 1.0],
+            "score_200wk_ma": [0, 0, 1],
+            "score_200wk_ma_slope": [0, 0, 1],
+            "score_300wk_ma": [0, 0, 1],
+            "score_300wk_ma_slope": [0, 0, 1],
+            "total": [2.0, 2.0, 9.0],
+        },
+        schema=CLOUD_SCORE_SCHEMA,
+    )
+
+    with patch.multiple(
+        _PIPELINE,
+        _resolve_race_tickers=lambda consumer_path, **kw: ["AAA", "MMM", "ZZZ"],
+        read_daily_bars=DEFAULT,
+        compute_cloud_scores=DEFAULT,
+        render_cloud_scorecard=DEFAULT,
+    ) as mocks:
+        mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
+            ["AAA", "MMM", "ZZZ", "SPY"]
+        )
+        mocks["compute_cloud_scores"].return_value = tied_scores
+        pipeline.ciovacco(config, tickers=["AAA", "MMM", "ZZZ"], csv_path=csv_path)
+
+    written = pl.read_csv(csv_path)
+    # MMM first (highest total), then AAA, then ZZZ (tied totals broken by ticker).
+    assert written["ticker"].to_list() == ["MMM", "AAA", "ZZZ"]

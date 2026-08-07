@@ -915,6 +915,39 @@ def test_render_cloud_scorecard_sorts_by_total_descending():
     assert "CCC" in lines[2]  # total 1.25
 
 
+def test_render_cloud_scorecard_ties_break_by_ticker_ascending():
+    """Tied totals are broken by ticker ascending (stable order)."""
+    from tickerlake.cloud_score import CLOUD_SCORE_SCHEMA
+
+    frame = pl.DataFrame(
+        {
+            "ticker": ["ZZZ", "AAA", "MMM"],
+            "score_1d_cloud": [0.5, 0.5, 1.0],
+            "score_weekly_cloud": [0.5, 0.5, 1.0],
+            "score_2wk_cloud": [0.5, 0.5, 1.0],
+            "score_3wk_cloud": [0.5, 0.5, 1.0],
+            "score_monthly_cloud": [0.5, 0.5, 1.0],
+            "score_200wk_ma": [0, 0, 1],
+            "score_200wk_ma_slope": [0, 0, 1],
+            "score_300wk_ma": [0, 0, 1],
+            "score_300wk_ma_slope": [0, 0, 1],
+            "total": [2.0, 2.0, 9.0],
+        },
+        schema=CLOUD_SCORE_SCHEMA,
+    )
+    table = render_cloud_scorecard(frame, benchmark="SPY")
+    text = _rich_text(table)
+    lines = [
+        line
+        for line in text.split("\n")
+        if any(t in line for t in ["AAA", "MMM", "ZZZ"])
+    ]
+    assert len(lines) == 3
+    assert "MMM" in lines[0]  # total 9.0, unique
+    assert "AAA" in lines[1]  # total 2.0, ticker A
+    assert "ZZZ" in lines[2]  # total 2.0, ticker Z
+
+
 def test_render_cloud_scorecard_displays_two_decimal_clouds():
     """Cloud cells render as 2-decimal values (1.00, 0.75, ...)."""
     table = render_cloud_scorecard(_scorecard_frame(), benchmark="SPY")
