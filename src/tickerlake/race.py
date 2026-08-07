@@ -35,6 +35,26 @@ RACE_BARS_SCHEMA: dict = {
     "close": pl.Float32,
 }
 
+# Schema of the ratio-indicator frame: one row per ticker with the
+# latest RSI (0-100) and MACD histogram (MACD line minus signal) on the
+# ticker/benchmark ratio. Used to enrich the relative leaderboard.
+RATIO_INDICATORS_SCHEMA: dict = {
+    "ticker": pl.Utf8,
+    "rsi": pl.Float32,
+    "macd_hist": pl.Float32,
+}
+
+# Default indicator periods. RSI uses Wilder's smoothing (alpha=1/period);
+# MACD uses standard EMA (span=period).
+_DEFAULT_RSI_PERIOD = 14
+_DEFAULT_MACD_FAST = 12
+_DEFAULT_MACD_SLOW = 26
+_DEFAULT_MACD_SIGNAL = 9
+
+# RSI overbought/oversold thresholds (industry-standard 70/30).
+_RSI_OVERBOUGHT = 70.0
+_RSI_OVERSOLD = 30.0
+
 # Schema of the race metrics frame: one row per ticker with its current
 # value, total/recent returns, and momentum.
 # Schema of the relative momentum frame: one row per ticker with its
@@ -410,6 +430,114 @@ def compute_relative_momentum(
     ).cast(RELATIVE_MOMENTUM_SCHEMA)
 
 
+def compute_ratio_indicators(
+    ratio_bars: pl.DataFrame,
+    *,
+    rsi_period: int = _DEFAULT_RSI_PERIOD,
+    macd_fast: int = _DEFAULT_MACD_FAST,
+    macd_slow: int = _DEFAULT_MACD_SLOW,
+    macd_signal: int = _DEFAULT_MACD_SIGNAL,
+) -> pl.DataFrame:
+    """Compute per-ticker RSI and MACD histogram on the ticker/benchmark ratio.
+
+    ``ratio_bars`` is a long-form frame ``(date, ticker, close)`` from
+    :func:`compute_relative_ratio` (no rebasing - the raw ratio is the
+    right "price" for indicator math). Returns one row per ticker with the
+    **latest** ``rsi`` (0-100, Wilder's smoothing with ``alpha=1/period``)
+    and ``macd_hist`` (MACD line minus signal, both standard EMA
+    ``span=period``). Insufficient-history tickers emit null for that
+    indicator. Empty input returns the empty schema.
+    """
+    if rsi_period < 1:
+        msg = "rsi_period must be >= 1"
+        raise ValueError(msg)
+    if not (macd_fast < macd_slow):
+        msg = (
+            f"macd_fast must be < macd_slow: "
+            f"macd_fast={macd_fast} < macd_slow={macd_slow}"
+        )
+        raise ValueError(msg)
+    if macd_signal < 1:
+        msg = "macd_signal must be >= 1"
+        raise ValueError(msg)
+
+    if ratio_bars.is_empty():
+        return pl.DataFrame(schema=RATIO_INDICATORS_SCHEMA)
+
+    sorted_bars = ratio_bars.sort(["ticker", "date"])
+    alpha = 1.0 / rsi_period
+
+    # Per-bar running values. The `.over("ticker")` window keeps each
+    # ticker's EWM independent. Wilder's RSI uses `ewm_mean(alpha=1/N,
+    # adjust=False)`; standard EMA for MACD uses `ewm_mean(span=N,
+    # adjust=False)`.
+    enriched = (
+        sorted_bars.with_columns(
+            pl.col("close").diff().over("ticker").alias("_change"),
+        )
+        .with_columns(
+            pl.max_horizontal(pl.col("_change"), pl.lit(0.0))
+            .cast(pl.Float32)
+            .alias("_gain"),
+            pl.max_horizontal(-pl.col("_change"), pl.lit(0.0))
+            .cast(pl.Float32)
+            .alias("_loss"),
+        )
+        .with_columns(
+            pl.col("_gain")
+            .ewm_mean(alpha=alpha, adjust=False)
+            .over("ticker")
+            .alias("_avg_gain"),
+            pl.col("_loss")
+            .ewm_mean(alpha=alpha, adjust=False)
+            .over("ticker")
+            .alias("_avg_loss"),
+            pl.col("close")
+            .ewm_mean(span=macd_fast, adjust=False)
+            .over("ticker")
+            .alias("_ema_fast"),
+            pl.col("close")
+            .ewm_mean(span=macd_slow, adjust=False)
+            .over("ticker")
+            .alias("_ema_slow"),
+        )
+        .with_columns(
+            (pl.col("_ema_fast") - pl.col("_ema_slow")).alias("_macd_line"),
+        )
+        .with_columns(
+            pl.col("_macd_line")
+            .ewm_mean(span=macd_signal, adjust=False)
+            .over("ticker")
+            .alias("_signal"),
+        )
+        .with_columns(
+            # RSI: 100 * gain / (gain + loss). When both EWM averages are 0
+            # (truly flat series — no gains AND no losses), the ratio is
+            # undefined; return 50 (neutral) so the cell doesn't falsely
+            # signal "max oversold."
+            pl.when((pl.col("_avg_gain") + pl.col("_avg_loss")) == 0)
+            .then(pl.lit(50.0))
+            .otherwise(
+                100.0
+                * pl.col("_avg_gain")
+                / (pl.col("_avg_gain") + pl.col("_avg_loss"))
+            )
+            .cast(pl.Float32)
+            .alias("rsi"),
+            (pl.col("_macd_line") - pl.col("_signal"))
+            .cast(pl.Float32)
+            .alias("macd_hist"),
+        )
+    )
+
+    return (
+        enriched.group_by("ticker")
+        .agg(pl.col("rsi").last(), pl.col("macd_hist").last())
+        .select("ticker", "rsi", "macd_hist")
+        .cast(RATIO_INDICATORS_SCHEMA)
+    )
+
+
 def compute_relative_race_metrics(
     ratio_bars: pl.DataFrame,
     *,
@@ -654,6 +782,24 @@ def _pace_style(value: float | None) -> str | None:
     return "green" if value > 0 else "red"
 
 
+def _macd_style(value: float | None) -> str | None:
+    """Return a Rich style for an MACD histogram: green > 0, red < 0."""
+    if value is None or value == 0:
+        return None
+    return "green" if value > 0 else "red"
+
+
+def _rsi_style(value: float | None) -> str | None:
+    """Return a Rich style for RSI: red > 70 (overbought), green < 30 (oversold)."""
+    if value is None:
+        return None
+    if value > _RSI_OVERBOUGHT:
+        return "red"
+    if value < _RSI_OVERSOLD:
+        return "green"
+    return None
+
+
 def _race_score_style(value: float | None) -> str | None:
     """Return a Rich style for a race score bucket (green/yellow/red)."""
     if value is None:
@@ -673,19 +819,22 @@ def render_relative_leaderboard(
 ) -> Table:
     """Build a Rich Table for relative momentum vs a benchmark.
 
-    The table uses horse-race language: pace over three windows, race score,
-    and form. Position and places-gained drive the form classification but
-    are intentionally not displayed. Diagnostic RS-Ratio, trend, raw
-    momentum, and building columns are also intentionally omitted.
-    ``max_etfs`` caps the displayed rows after sorting (default:
-    ``_DEFAULT_MAX_ETFS``, pass ``None`` for unlimited); it is a display
-    limit only, and does not restrict the underlying computation.
+    The table uses horse-race language: pace over three windows, ratio-based
+    RSI(14) and MACD histogram (12/26/9), race score, and form. Position and
+    places-gained drive the form classification but are intentionally not
+    displayed. Diagnostic RS-Ratio, trend, raw momentum, and building
+    columns are also intentionally omitted. ``max_etfs`` caps the displayed
+    rows after sorting (default: ``_DEFAULT_MAX_ETFS``, pass ``None`` for
+    unlimited); it is a display limit only, and does not restrict the
+    underlying computation.
     """
     table = Table(title=f"🐎 vs {benchmark} Momentum", header_style="bold")
     table.add_column("Ticker", style="bold")
     table.add_column("Pace Short", justify="right")
     table.add_column("Pace Medium", justify="right")
     table.add_column("Pace Long", justify="right")
+    table.add_column("RSI", justify="right")
+    table.add_column("MACD Δ", justify="right")
     table.add_column("Race", justify="right")
     table.add_column("Form")
 
@@ -723,6 +872,14 @@ def render_relative_leaderboard(
                     row.get("relative_return_long"), lambda value: f"{value:+.1f}%"
                 ),
                 style=_pace_style(row.get("relative_return_long")),  # ty: ignore[invalid-argument-type]
+            ),
+            Text(
+                _fmt_or_na(row.get("rsi"), lambda value: f"{value:.0f}"),
+                style=_rsi_style(row.get("rsi")),  # ty: ignore[invalid-argument-type]
+            ),
+            Text(
+                _fmt_or_na(row.get("macd_hist"), lambda value: f"{value:+.4f}"),
+                style=_macd_style(row.get("macd_hist")),  # ty: ignore[invalid-argument-type]
             ),
             Text(
                 _fmt_or_na(row.get("race_score"), lambda value: f"{value:.0f}"),

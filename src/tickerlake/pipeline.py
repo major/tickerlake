@@ -33,6 +33,7 @@ from tickerlake.load import (
 from tickerlake.race import (
     classify_horse_form,
     classify_relative_trend,
+    compute_ratio_indicators,
     compute_relative_race_metrics,
     compute_relative_ratio,
     read_qualifying_etfs,
@@ -617,6 +618,11 @@ def _render_relative_view(  # noqa: PLR0913 -- momentum windows + benchmark + di
         )
         relative_trend = classify_relative_trend(relative_metrics)
         horse_form = classify_horse_form(relative_trend)
+        # Enrich the leaderboard with RSI + MACD histogram computed on the
+        # ticker/benchmark ratio. Left-joined: if any ticker is missing an
+        # indicator, the row still renders with n/a in those cells.
+        indicators = compute_ratio_indicators(ratio_bars)
+        horse_form = horse_form.join(indicators, on="ticker", how="left")
         console.print(
             render_relative_leaderboard(
                 horse_form, benchmark=benchmark, max_etfs=max_etfs

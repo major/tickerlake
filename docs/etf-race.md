@@ -49,6 +49,14 @@ filtered out to avoid degenerate values:
 - **Pace Short/Medium/Long** — percentage performance of the ETF/benchmark
   ratio over the short (4 bars), medium (12 bars), and long (52 bars) windows.
   These are comparable across ETFs and are the primary pace measurements.
+- **RSI** — Wilder's 14-period RSI computed on the ETF/benchmark ratio (not
+  on absolute price). 0–100 scale; tinted red above 70 (overbought vs the
+  benchmark) and green below 30 (oversold). Tells you whether the
+  relative-strength trend is stretched in either direction.
+- **MACD Δ** — MACD histogram (MACD line minus signal, standard 12/26/9
+  EMAs) on the ETF/benchmark ratio. Tinted green when positive, red when
+  negative. Positive = relative momentum accelerating; negative = decelerating
+  or reversing.
 - **Race** — a 0–100 score combining current momentum, places gained, and
   staying power. Higher is better.
 - **Form** — horse-racing interpretation of the current race:

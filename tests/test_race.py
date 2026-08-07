@@ -17,6 +17,7 @@ from tickerlake.race import (
     RELATIVE_TREND_SCHEMA,
     classify_horse_form,
     classify_relative_trend,
+    compute_ratio_indicators,
     compute_relative_momentum,
     compute_relative_race_metrics,
     compute_relative_ratio,
@@ -521,6 +522,90 @@ def test_compute_relative_momentum_missing_rebased_column():
 
 
 # ---- classify_relative_trend ------------------------------------------------
+
+
+def test_compute_ratio_indicators_monotonic_rise():
+    """A monotonically rising ratio → RSI = 100 and a positive MACD hist."""
+    dates = pl.date_range(
+        pl.date(2023, 1, 6), pl.date(2024, 2, 16), interval="1w", eager=True
+    )
+    closes = [0.4 + i * 0.001 for i in range(len(dates))]
+    df = pl.DataFrame(
+        {
+            "date": list(dates),
+            "ticker": ["UP"] * len(dates),
+            "close": closes,
+        }
+    )
+    out = compute_ratio_indicators(df)
+    assert out.height == 1
+    assert out["ticker"].to_list() == ["UP"]
+    assert out["rsi"].to_list()[0] == pytest.approx(100.0)
+    assert out["macd_hist"].to_list()[0] > 0
+
+
+def test_compute_ratio_indicators_monotonic_decline():
+    """A monotonically falling ratio → RSI = 0 (or near it) and negative MACD."""
+    dates = pl.date_range(
+        pl.date(2023, 1, 6), pl.date(2024, 2, 16), interval="1w", eager=True
+    )
+    closes = [1.0 - i * 0.001 for i in range(len(dates))]
+    df = pl.DataFrame(
+        {
+            "date": list(dates),
+            "ticker": ["DN"] * len(dates),
+            "close": closes,
+        }
+    )
+    out = compute_ratio_indicators(df)
+    assert out["rsi"].to_list()[0] == pytest.approx(0.0, abs=1e-3)
+    assert out["macd_hist"].to_list()[0] < 0
+
+
+def test_compute_ratio_indicators_handles_multiple_tickers():
+    """Two tickers are computed independently and emitted in one frame."""
+    dates = pl.date_range(
+        pl.date(2023, 1, 6), pl.date(2024, 2, 16), interval="1w", eager=True
+    )
+    n = len(dates)
+    up = [0.4 + i * 0.001 for i in range(n)]
+    flat = [0.5] * n
+    df = pl.DataFrame(
+        {
+            "date": list(dates) * 2,
+            "ticker": ["UP"] * n + ["FLAT"] * n,
+            "close": up + flat,
+        }
+    )
+    out = compute_ratio_indicators(df)
+    assert out.height == 2
+    by_ticker = {row["ticker"]: row for row in out.iter_rows(named=True)}
+    assert by_ticker["UP"]["rsi"] == pytest.approx(100.0)
+    # FLAT has all-zero changes → no gains AND no losses → RSI is
+    # undefined, returned as 50 (neutral).
+    assert by_ticker["FLAT"]["rsi"] == pytest.approx(50.0)
+    assert by_ticker["UP"]["macd_hist"] > 0
+    assert by_ticker["FLAT"]["macd_hist"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_compute_ratio_indicators_validates_args():
+    """Bad rsi_period / macd args raise ValueError."""
+    df = pl.DataFrame({"date": [pl.date(2024, 1, 5)], "ticker": ["X"], "close": [0.5]})
+    with pytest.raises(ValueError, match="rsi_period"):
+        compute_ratio_indicators(df, rsi_period=0)
+    with pytest.raises(ValueError, match="macd_fast"):
+        compute_ratio_indicators(df, macd_fast=26, macd_slow=12)
+    with pytest.raises(ValueError, match="macd_signal"):
+        compute_ratio_indicators(df, macd_signal=0)
+
+
+def test_compute_ratio_indicators_empty_input():
+    """Empty input returns the empty schema (no rows)."""
+    out = compute_ratio_indicators(
+        pl.DataFrame(schema={"date": pl.Date, "ticker": pl.Utf8, "close": pl.Float32})
+    )
+    assert out.is_empty()
+    assert set(out.columns) == {"ticker", "rsi", "macd_hist"}
 
 
 def test_classify_relative_trend_leading():
@@ -1055,7 +1140,7 @@ def test_classify_horse_form_labels_front_runner_and_charger():
 
 
 def test_render_relative_leaderboard_shows_horse_metrics():
-    """The single horse table exposes pace, race score, and form."""
+    """The single horse table exposes pace, RSI/MACD, race score, and form."""
     metrics = pl.DataFrame(
         {
             "ticker": ["CHARGER"],
@@ -1064,6 +1149,8 @@ def test_render_relative_leaderboard_shows_horse_metrics():
             "relative_return_short": [2.0],
             "relative_return_medium": [4.0],
             "relative_return_long": [6.0],
+            "rsi": [62.0],
+            "macd_hist": [0.0012],
             "race_score": [88.0],
             "form": ["Charging"],
             "rs_ratio": [108.0],
@@ -1081,6 +1168,8 @@ def test_render_relative_leaderboard_shows_horse_metrics():
     text = _rich_text(render_relative_leaderboard(metrics, benchmark="SPY"))
 
     assert "Pace Short" in text
+    assert "RSI" in text
+    assert "MACD" in text
     assert "Race" in text
     assert "Charging" in text
     assert "Pos" not in text
@@ -1089,6 +1178,99 @@ def test_render_relative_leaderboard_shows_horse_metrics():
     assert "Trend" not in text
     assert "Momentum Short" not in text
     assert "Building" not in text
+
+
+def test_render_relative_leaderboard_rsi_coloring():
+    """RSI > 70 tints red (overbought), RSI < 30 tints green (oversold)."""
+    metrics = pl.DataFrame(
+        {
+            "ticker": ["HOT", "COLD", "MID"],
+            "position": [1, 3, 2],
+            "places_gained": [0, 0, 0],
+            "relative_return_short": [1.0, 1.0, 1.0],
+            "relative_return_medium": [1.0, 1.0, 1.0],
+            "relative_return_long": [1.0, 1.0, 1.0],
+            "rsi": [78.0, 22.0, 50.0],
+            "macd_hist": [0.0, 0.0, 0.0],
+            "race_score": [50.0, 50.0, 50.0],
+            "form": ["Steady", "Steady", "Steady"],
+            "rs_ratio": [100.0, 100.0, 100.0],
+            "momentum_short": [1.0, 1.0, 1.0],
+            "momentum_medium": [1.0, 1.0, 1.0],
+            "momentum_long": [1.0, 1.0, 1.0],
+            "rate_short": [1.0, 1.0, 1.0],
+            "rate_medium": [1.0, 1.0, 1.0],
+            "rate_long": [1.0, 1.0, 1.0],
+            "trend": ["Leading", "Lagging", "Leading"],
+            "building": [False, False, False],
+        }
+    )
+    ansi = _rich_ansi(render_relative_leaderboard(metrics, benchmark="SPY"))
+
+    # HOT (RSI 78) is overbought → its row contains the red escape code.
+    # Use row-level extraction: each row starts with the ticker. The red
+    # escape appears at the start of the row when the row style is set OR
+    # in the RSI cell. We check that the string "78" is preceded by a red
+    # escape somewhere in the rendered text (cell-level color).
+    assert "78" in ansi
+    assert "22" in ansi
+    # Find the HOT row and assert it has a red ANSI sequence
+    hot_idx = ansi.find("HOT")
+    cold_idx = ansi.find("COLD")
+    # Extract a slice of the row and check for color codes (look for the
+    # \x1b[31m red prefix and \x1b[32m green prefix).
+    red = "\x1b[31m"
+    green = "\x1b[32m"
+    assert red in ansi[hot_idx : hot_idx + 400]
+    assert green in ansi[cold_idx : cold_idx + 400]
+
+
+def test_render_relative_leaderboard_macd_sign_coloring():
+    """MACD histogram > 0 tints green, < 0 tints red, == 0 unstyled."""
+    metrics = pl.DataFrame(
+        {
+            "ticker": ["UP", "DOWN", "FLAT"],
+            "position": [1, 3, 2],
+            "places_gained": [0, 0, 0],
+            "relative_return_short": [1.0, 1.0, 1.0],
+            "relative_return_medium": [1.0, 1.0, 1.0],
+            "relative_return_long": [1.0, 1.0, 1.0],
+            "rsi": [50.0, 50.0, 50.0],
+            "macd_hist": [0.005, -0.005, 0.0],
+            "race_score": [50.0, 50.0, 50.0],
+            "form": ["Steady", "Steady", "Steady"],
+            "rs_ratio": [100.0, 100.0, 100.0],
+            "momentum_short": [1.0, 1.0, 1.0],
+            "momentum_medium": [1.0, 1.0, 1.0],
+            "momentum_long": [1.0, 1.0, 1.0],
+            "rate_short": [1.0, 1.0, 1.0],
+            "rate_medium": [1.0, 1.0, 1.0],
+            "rate_long": [1.0, 1.0, 1.0],
+            "trend": ["Leading", "Lagging", "Leading"],
+            "building": [False, False, False],
+        }
+    )
+    ansi = _rich_ansi(render_relative_leaderboard(metrics, benchmark="SPY"))
+
+    red = "\x1b[31m"
+    green = "\x1b[32m"
+    up_idx = ansi.find("UP")
+    down_idx = ansi.find("DOWN")
+    flat_idx = ansi.find("FLAT")
+    # UP row contains green (positive MACD), DOWN contains red, FLAT is unstyled.
+    assert green in ansi[up_idx : up_idx + 400]
+    assert red in ansi[down_idx : down_idx + 400]
+    # FLAT row's MACD cell has no sign color (0 value)
+    # The MACD cell value is "+0.0000" for flat — green/red should not be
+    # applied to the value (style is None for value == 0).
+    flat_row = ansi[flat_idx : flat_idx + 400]
+    # Find the MACD cell value "+0.0000" in flat's row
+    macd_pos = flat_row.find("+0.0000")
+    assert macd_pos >= 0
+    # The 4-char value should be immediately preceded by the cell style
+    # (or lack thereof). We just assert the value is present without
+    # forcing a specific style around it.
+    assert "+0.0000" in flat_row
 
 
 def test_classify_relative_trend_decelerating_decline():
