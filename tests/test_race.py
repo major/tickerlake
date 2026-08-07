@@ -193,6 +193,16 @@ def test_read_qualifying_etfs_filters_by_type_volume_and_active(tmp_path: Path):
     )
     assert name_filter in sql
     assert sql.index(name_filter) < sql.index("ORDER BY")
+    # ProShares Ultra/UltraPro/UltraShort are 2x/3x/-2x equity leverage.
+    # Anchored on the ProShares brand prefix so it doesn't false-positive
+    # on bond-duration "Ultra Short" funds (PIMCO, Vanguard, iShares, etc.).
+    proshares_filter = (
+        "regexp_matches(lower(t.name), "
+        "'(^|[^a-z0-9])proshares[[:space:]]+ultra"
+        "(pro|short)?([^a-z0-9]|$)')"
+    )
+    assert proshares_filter in sql
+    assert sql.index(proshares_filter) < sql.index("ORDER BY")
     assert "ORDER BY m.volume_sma_20 DESC, t.ticker" in sql
     assert "LIMIT" not in sql
     assert fake.closed

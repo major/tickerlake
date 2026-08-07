@@ -229,6 +229,9 @@ def read_qualifying_etfs(
                 "  AND NOT regexp_matches(lower(t.name), "
                 "'(^|[^a-z0-9])(1x|2x|3x|inverse|leverage|leveraged)"
                 "([^a-z0-9]|$)') "
+                "  AND NOT regexp_matches(lower(t.name), "
+                "'(^|[^a-z0-9])proshares[[:space:]]+ultra"
+                "(pro|short)?([^a-z0-9]|$)') "
                 "ORDER BY m.volume_sma_20 DESC, t.ticker"
                 f") TO '{tmp}' (FORMAT PARQUET)"
             )
