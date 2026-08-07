@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 import duckdb
 import polars as pl
 from rich.table import Table
+from rich.text import Text
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -106,6 +107,25 @@ _DEFAULT_MAX_PENDING_OVERTAKES = 25
 # magic numbers and so the values are discoverable in one place).
 _RS_RATIO_BASELINE = 100.0
 _MIN_PLACES_TO_CHARGE = 2
+
+# Rendering styles for the horse-race leaderboard: form label -> (emoji,
+# row style). The emoji is shown in the Form cell; the style tints the whole
+# row. Style is None for forms that render unstyled.
+FORM_STYLE: dict[str, tuple[str, str | None]] = {
+    "Charging": ("🚀", "green"),
+    "Front-runner": ("🏆", "cyan"),
+    "Closing ground": ("⚡", "yellow"),
+    "Steady": ("➖", None),  # noqa: RUF001 -- deliberate per design spec
+    "Losing steam": ("📉", "red"),
+    "Fading": ("🍂", "orange"),
+    "Back of field": ("🐢", "dim red"),
+    "Unknown": ("❔", "dim"),
+}
+
+# Race-score color buckets: >= _RACE_SCORE_HIGH is green, >= _RACE_SCORE_LOW
+# is yellow, below is red.
+_RACE_SCORE_HIGH = 70.0
+_RACE_SCORE_LOW = 40.0
 
 
 def read_race_bars(
@@ -627,6 +647,29 @@ def _fmt_or_na(value: float | None, formatter: Callable[[float], str]) -> str:
     return "n/a" if value is None else formatter(value)
 
 
+def _form_style(form: str | None) -> tuple[str, str | None]:
+    """Return (emoji, row style) for a horse form; Unknown for null/unknown."""
+    return FORM_STYLE.get(form, FORM_STYLE["Unknown"])
+
+
+def _pace_style(value: float | None) -> str | None:
+    """Return a Rich style for a pace value: green for gains, red for losses."""
+    if value is None or value == 0:
+        return None
+    return "green" if value > 0 else "red"
+
+
+def _race_score_style(value: float | None) -> str | None:
+    """Return a Rich style for a race score bucket (green/yellow/red)."""
+    if value is None:
+        return None
+    if value >= _RACE_SCORE_HIGH:
+        return "green"
+    if value >= _RACE_SCORE_LOW:
+        return "yellow"
+    return "red"
+
+
 def render_relative_leaderboard(
     relative_trend: pl.DataFrame, *, benchmark: str
 ) -> Table:
@@ -657,19 +700,36 @@ def render_relative_leaderboard(
         )
 
     for row in sorted_df.iter_rows(named=True):
+        emoji, row_style = _form_style(row.get("form"))
+        form_label = row.get("form") or "Unknown"
         table.add_row(
             row["ticker"],
             _fmt_or_na(row.get("position"), lambda value: str(int(value))),
             _fmt_or_na(row.get("places_gained"), lambda value: f"{int(value):+d}"),
-            _fmt_or_na(
-                row.get("relative_return_short"), lambda value: f"{value:+.1f}%"
+            Text(
+                _fmt_or_na(
+                    row.get("relative_return_short"), lambda value: f"{value:+.1f}%"
+                ),
+                style=_pace_style(row.get("relative_return_short")),  # ty: ignore[invalid-argument-type]
             ),
-            _fmt_or_na(
-                row.get("relative_return_medium"), lambda value: f"{value:+.1f}%"
+            Text(
+                _fmt_or_na(
+                    row.get("relative_return_medium"), lambda value: f"{value:+.1f}%"
+                ),
+                style=_pace_style(row.get("relative_return_medium")),  # ty: ignore[invalid-argument-type]
             ),
-            _fmt_or_na(row.get("relative_return_long"), lambda value: f"{value:+.1f}%"),
-            _fmt_or_na(row.get("race_score"), lambda value: f"{value:.0f}"),
-            row.get("form") or "Unknown",
+            Text(
+                _fmt_or_na(
+                    row.get("relative_return_long"), lambda value: f"{value:+.1f}%"
+                ),
+                style=_pace_style(row.get("relative_return_long")),  # ty: ignore[invalid-argument-type]
+            ),
+            Text(
+                _fmt_or_na(row.get("race_score"), lambda value: f"{value:.0f}"),
+                style=_race_score_style(row.get("race_score")),  # ty: ignore[invalid-argument-type]
+            ),
+            f"{emoji} {form_label}",
+            style=row_style,
         )
 
     return table

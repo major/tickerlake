@@ -68,6 +68,22 @@ already in front from horses closing ground: front-runners score well on
 leadership and staying power, while chargers score well on places gained and
 recent pace.
 
+### Reading the table
+
+The table uses color and emoji so the state of the field is scannable at a
+glance:
+
+- **Form column** — each horse gets an emoji and its whole row is tinted:
+  🚀 `Charging` (green), 🏆 `Front-runner` (cyan), ⚡ `Closing ground`
+  (yellow), ➖ `Steady` (no tint), 📉 `Losing steam` (red), 🍂 `Fading`
+  (orange), 🐢 `Back of field` (dim red), ❔ `Unknown` (dim).
+- **Pace columns** — green when the pace is positive (outperforming the
+  benchmark), red when negative.
+- **Race column** — green for scores ≥ 70, yellow for 40–69, red for < 40.
+
+Colors are ANSI and are disabled automatically by Rich when the output is
+not a terminal; emoji remain plain text.
+
 ## Methodology
 
 ### vs-Benchmark Momentum

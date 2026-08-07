@@ -317,6 +317,15 @@ def _rich_text(table) -> str:
     return console.export_text()
 
 
+def _rich_ansi(table) -> str:
+    """Render a Rich Table to ANSI text so style assertions can inspect it."""
+    from rich.console import Console
+
+    console = Console(record=True, width=200, force_terminal=False)
+    console.print(table)
+    return console.export_text(styles=True)
+
+
 # ---- detect_pending_overtakes ---------------------------------------------
 
 
@@ -1291,3 +1300,111 @@ def test_render_relative_leaderboard_null_safe():
     assert "UNKNOWN" in text
     assert "Unknown" in text
     assert "n/a" in text  # Null rs_ratio rendered as "n/a"
+
+
+def test_form_style_maps_all_forms():
+    assert race.FORM_STYLE == {
+        "Charging": ("🚀", "green"),
+        "Front-runner": ("🏆", "cyan"),
+        "Closing ground": ("⚡", "yellow"),
+        "Steady": ("➖", None),  # noqa: RUF001 -- deliberate per design spec
+        "Losing steam": ("📉", "red"),
+        "Fading": ("🍂", "orange"),
+        "Back of field": ("🐢", "dim red"),
+        "Unknown": ("❔", "dim"),
+    }
+
+
+def test_form_style_falls_back_to_unknown():
+    assert race._form_style(None) == ("❔", "dim")
+    assert race._form_style("Not a form") == ("❔", "dim")
+
+
+def test_pace_style_sign_coloring():
+    assert race._pace_style(2.0) == "green"
+    assert race._pace_style(-0.5) == "red"
+    assert race._pace_style(0.0) is None
+    assert race._pace_style(None) is None
+
+
+def test_race_score_style_buckets():
+    assert race._race_score_style(88.0) == "green"
+    assert race._race_score_style(70.0) == "green"
+    assert race._race_score_style(55.0) == "yellow"
+    assert race._race_score_style(40.0) == "yellow"
+    assert race._race_score_style(39.9) == "red"
+    assert race._race_score_style(None) is None
+
+
+def test_render_relative_leaderboard_applies_form_emoji_and_row_styles():
+    """The Form column shows emoji and each row is tinted by its form."""
+    metrics = pl.DataFrame(
+        {
+            "ticker": ["CHARGER", "FRONTRUNNER", "STEADY", "LOSER"],
+            "position": [2, 1, 4, 5],
+            "places_gained": [5, 1, 0, -3],
+            "relative_return_short": [2.0, 1.0, 0.5, -2.0],
+            "relative_return_medium": [4.0, 2.0, 0.5, -4.0],
+            "relative_return_long": [6.0, 3.0, 0.5, -6.0],
+            "race_score": [88.0, 85.0, 50.0, 20.0],
+            "form": ["Charging", "Front-runner", "Steady", "Losing steam"],
+        }
+    )
+    table = render_relative_leaderboard(metrics, benchmark="SPY")
+
+    # Sorted by race_score descending: CHARGER, FRONTRUNNER, STEADY, LOSER.
+    assert "🚀 Charging" in _rich_text(table)
+    assert "🏆 Front-runner" in _rich_text(table)
+    assert "➖ Steady" in _rich_text(table)  # noqa: RUF001 -- deliberate per design spec
+    assert "📉 Losing steam" in _rich_text(table)
+    assert str(table.rows[0].style) == "green"
+    assert str(table.rows[1].style) == "cyan"
+    assert table.rows[2].style is None
+    assert str(table.rows[3].style) == "red"
+
+
+def test_render_relative_leaderboard_colors_pace_and_race_cells():
+    """Pace cells are green/red by sign and the Race cell is bucketed."""
+    metrics = pl.DataFrame(
+        {
+            "ticker": ["MIXED"],
+            "position": [1],
+            "places_gained": [0],
+            "relative_return_short": [2.0],
+            "relative_return_medium": [-1.5],
+            "relative_return_long": [0.0],
+            "race_score": [55.0],
+            "form": ["Steady"],
+        }
+    )
+    table = render_relative_leaderboard(metrics, benchmark="SPY")
+    ansi = _rich_ansi(table)
+    assert "\x1b[32m" in ansi  # green: positive pace short
+    assert "\x1b[31m" in ansi  # red: negative pace medium
+    assert "\x1b[33m" in ansi  # yellow: race score 55 in the 40-69 bucket
+
+
+def test_render_relative_leaderboard_unknown_form_unstyled_values():
+    """Missing form/score columns fall back to Unknown and unstyled cells."""
+    metrics = pl.DataFrame(
+        {
+            "ticker": ["NODATA"],
+            "position": [None],
+            "places_gained": [None],
+            "relative_return_short": [None],
+            "relative_return_medium": [None],
+            "relative_return_long": [None],
+            "race_score": [None],
+            "form": [None],
+        }
+    )
+    table = render_relative_leaderboard(metrics, benchmark="SPY")
+    text = _rich_text(table)
+    assert "❔ Unknown" in text
+    assert "n/a" in text
+    # No color codes (dim/bold codes like \x1b[2m may appear from the row
+    # style and header; only forbid color codes).
+    ansi = _rich_ansi(table)
+    assert "\x1b[32m" not in ansi
+    assert "\x1b[31m" not in ansi
+    assert "\x1b[33m" not in ansi
