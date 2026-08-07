@@ -2080,6 +2080,7 @@ def test_ciovacco_renders_cloud_scorecard(tmp_path: Path) -> None:
             _PIPELINE,
             _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
             read_daily_bars=DEFAULT,
+            read_ticker_names=DEFAULT,
             compute_cloud_scores=DEFAULT,
             render_cloud_scorecard=DEFAULT,
         ) as mocks,
@@ -2088,6 +2089,10 @@ def test_ciovacco_renders_cloud_scorecard(tmp_path: Path) -> None:
         mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
             ["AAPL", "MSFT", "SPY"]
         )
+        mocks["read_ticker_names"].return_value = {
+            "AAPL": "Apple Inc.",
+            "MSFT": "Microsoft Corporation",
+        }
         mocks["compute_cloud_scores"].return_value = _ciovacco_scores_df()
         pipeline.ciovacco(config, tickers=["AAPL", "MSFT"])
 
@@ -2097,10 +2102,18 @@ def test_ciovacco_renders_cloud_scorecard(tmp_path: Path) -> None:
     score_call = mocks["compute_cloud_scores"].call_args
     assert set(score_call.kwargs["tickers"]) == {"AAPL", "MSFT"}
     assert score_call.kwargs["benchmark"] == "SPY"
+    # Names are read for the scored universe (not the benchmark) and
+    # forwarded to the renderer as the ``names`` kwarg.
+    names_call = mocks["read_ticker_names"].call_args
+    assert set(names_call.kwargs["tickers"]) == {"AAPL", "MSFT"}
     render_call = mocks["render_cloud_scorecard"].call_args
     assert render_call.args[0].equals(_ciovacco_scores_df())
     assert render_call.kwargs["benchmark"] == "SPY"
     assert render_call.kwargs["max_etfs"] == 50
+    assert render_call.kwargs["names"] == {
+        "AAPL": "Apple Inc.",
+        "MSFT": "Microsoft Corporation",
+    }
     assert recording.export_text()  # a table was printed
 
 
@@ -2116,10 +2129,12 @@ def test_ciovacco_lowercase_tickers_normalized_no_duplicates(tmp_path: Path) -> 
         _PIPELINE,
         _resolve_race_tickers=lambda consumer_path, **kw: ["spy", "xlk", "xlf"],
         read_daily_bars=DEFAULT,
+        read_ticker_names=DEFAULT,
         compute_cloud_scores=DEFAULT,
         render_cloud_scorecard=DEFAULT,
     ) as mocks:
         mocks["read_daily_bars"].return_value = _ciovacco_bars_df(["SPY", "XLK", "XLF"])
+        mocks["read_ticker_names"].return_value = {}
         pipeline.ciovacco(config, tickers=["spy", "xlk", "xlf"], benchmark="spy")
 
     read_call = mocks["read_daily_bars"].call_args
@@ -2177,12 +2192,14 @@ def test_ciovacco_max_etfs_none_forwarded_to_render(tmp_path: Path) -> None:
         _PIPELINE,
         _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
         read_daily_bars=DEFAULT,
+        read_ticker_names=DEFAULT,
         compute_cloud_scores=DEFAULT,
         render_cloud_scorecard=DEFAULT,
     ) as mocks:
         mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
             ["AAPL", "MSFT", "SPY"]
         )
+        mocks["read_ticker_names"].return_value = {}
         pipeline.ciovacco(config, tickers=["AAPL", "MSFT"], max_etfs=None)
 
     render_call = mocks["render_cloud_scorecard"].call_args
@@ -2203,12 +2220,14 @@ def test_ciovacco_no_csv_writes_no_file(tmp_path: Path) -> None:
         _PIPELINE,
         _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
         read_daily_bars=DEFAULT,
+        read_ticker_names=DEFAULT,
         compute_cloud_scores=DEFAULT,
         render_cloud_scorecard=DEFAULT,
     ) as mocks:
         mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
             ["AAPL", "MSFT", "SPY"]
         )
+        mocks["read_ticker_names"].return_value = {}
         mocks["compute_cloud_scores"].return_value = _ciovacco_scores_df()
         pipeline.ciovacco(config, tickers=["AAPL", "MSFT"])
 
@@ -2228,12 +2247,14 @@ def test_ciovacco_csv_writes_full_scorecard(tmp_path: Path) -> None:
         _PIPELINE,
         _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
         read_daily_bars=DEFAULT,
+        read_ticker_names=DEFAULT,
         compute_cloud_scores=DEFAULT,
         render_cloud_scorecard=DEFAULT,
     ) as mocks:
         mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
             ["AAPL", "MSFT", "QQQ"]
         )
+        mocks["read_ticker_names"].return_value = {}
         mocks["compute_cloud_scores"].return_value = _ciovacco_scores_df()
         pipeline.ciovacco(
             config,
@@ -2278,12 +2299,14 @@ def test_ciovacco_csv_unaffected_by_max_etfs(tmp_path: Path) -> None:
         _PIPELINE,
         _resolve_race_tickers=lambda consumer_path, **kw: ["AAPL", "MSFT"],
         read_daily_bars=DEFAULT,
+        read_ticker_names=DEFAULT,
         compute_cloud_scores=DEFAULT,
         render_cloud_scorecard=DEFAULT,
     ) as mocks:
         mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
             ["AAPL", "MSFT", "SPY"]
         )
+        mocks["read_ticker_names"].return_value = {}
         mocks["compute_cloud_scores"].return_value = _ciovacco_scores_df()
         pipeline.ciovacco(
             config,
@@ -2329,12 +2352,14 @@ def test_ciovacco_csv_ties_break_by_ticker_ascending(tmp_path: Path) -> None:
         _PIPELINE,
         _resolve_race_tickers=lambda consumer_path, **kw: ["AAA", "MMM", "ZZZ"],
         read_daily_bars=DEFAULT,
+        read_ticker_names=DEFAULT,
         compute_cloud_scores=DEFAULT,
         render_cloud_scorecard=DEFAULT,
     ) as mocks:
         mocks["read_daily_bars"].return_value = _ciovacco_bars_df(
             ["AAA", "MMM", "ZZZ", "SPY"]
         )
+        mocks["read_ticker_names"].return_value = {}
         mocks["compute_cloud_scores"].return_value = tied_scores
         pipeline.ciovacco(config, tickers=["AAA", "MMM", "ZZZ"], csv_path=csv_path)
 

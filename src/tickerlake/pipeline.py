@@ -17,6 +17,7 @@ from tickerlake.client import MassiveClient
 from tickerlake.cloud_score import (
     compute_cloud_scores,
     read_daily_bars,
+    read_ticker_names,
     render_cloud_scorecard,
 )
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
@@ -702,24 +703,30 @@ def ciovacco(  # noqa: PLR0913 -- public API, args are all user-tunable
         tickers=cloud_tickers,
         benchmark=benchmark,
     )
+    names = read_ticker_names(consumer_path, tickers=cloud_tickers)
     console.print(
-        render_cloud_scorecard(scores, benchmark=benchmark, max_etfs=max_etfs)
+        render_cloud_scorecard(
+            scores,
+            benchmark=benchmark,
+            max_etfs=max_etfs,
+            names=names,
+        )
     )
 
     if csv_path is not None:
-        _write_ciovacco_csv(scores, csv_path=csv_path, benchmark=benchmark)
+        _write_cloud_scorecard_csv(scores, csv_path=csv_path, benchmark=benchmark)
 
 
-def _write_ciovacco_csv(
+def _write_cloud_scorecard_csv(
     scores: pl.DataFrame, *, csv_path: Path, benchmark: str
 ) -> None:
     """Write the full Ciovacco scorecard to a CSV file.
 
     The CSV is sorted by ``total`` descending (nulls last), with ``ticker``
     ascending as a stable tie-breaker when totals are equal, and includes a
-    ``benchmark`` column. The ``max_etfs`` display cap is NOT applied — the
-    CSV gets every scored row, since callers writing to CSV want the full
-    data for further analysis.
+    ``benchmark`` column. The ``max_etfs``/``max_stocks`` display cap is NOT
+    applied — the CSV gets every scored row, since callers writing to CSV
+    want the full data for further analysis.
     """
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     out = (

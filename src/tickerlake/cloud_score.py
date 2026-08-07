@@ -161,6 +161,65 @@ _CLOUD_STYLES: dict[float, str] = {
 # >= _TOTAL_LOW yellow, below red.
 _TOTAL_HIGH = 7.0
 _TOTAL_LOW = 4.0
+# Max characters to render in the Name column before truncating with an
+# ellipsis. ETF descriptions can run 40+ chars (e.g. "Direxion Daily
+# Semiconductor Bull 3X Shares"); 50 fits most terminals with the other
+# 11 score columns still visible.
+_NAME_MAX_LEN = 50
+_NAME_ELLIPSIS = "…"
+
+
+def read_ticker_names(
+    consumer_path: Path,
+    *,
+    tickers: Sequence[str],
+) -> dict[str, str]:
+    """Read ETF names for ``tickers`` from the consumer-DB ``tickers`` table.
+
+    Returns a ``{ticker: name}`` dict for every requested ticker that has a
+    row in the ``tickers`` table. Tickers missing from the table are simply
+    absent from the returned dict; callers should default the display to an
+    empty string. Raises ``ValueError`` when the consumer DB does not exist
+    or the ``tickers`` table is missing.
+    """
+    if not tickers:
+        msg = "tickers must not be empty"
+        raise ValueError(msg)
+    if not consumer_path.exists():
+        msg = f"Consumer DB not found: {consumer_path}"
+        raise ValueError(msg)
+
+    placeholders = ", ".join(["?"] * len(tickers))
+    params = [ticker.upper() for ticker in tickers]
+
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f:
+        tmp = Path(f.name)
+    try:
+        con = duckdb.connect(str(consumer_path), read_only=True)
+        try:
+            try:
+                con.execute(
+                    "COPY ("  # noqa: S608 -- table and tmp path are internal constants
+                    "SELECT ticker, name FROM tickers "
+                    f"WHERE ticker IN ({placeholders})"
+                    f") TO '{tmp}' (FORMAT PARQUET)",
+                    params,
+                )
+            except duckdb.CatalogException as err:
+                msg = f"tickers table not found in consumer DB: {consumer_path}"
+                raise ValueError(msg) from err
+        finally:
+            con.close()
+        df = pl.read_parquet(tmp)
+        return dict(
+            zip(
+                df["ticker"].to_list(),
+                df["name"].to_list(),
+                strict=True,
+            )
+        )
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def read_daily_bars(
@@ -245,9 +304,11 @@ def aggregate_daily_to_period(daily_bars: pl.DataFrame, *, every: str) -> pl.Dat
     if daily_bars.is_empty():
         return pl.DataFrame(schema=CLOUD_BARS_SCHEMA)
     if every == "1d":
-        return daily_bars.select(list(CLOUD_BARS_SCHEMA)).sort(
-            ["ticker", "date"]
-        ).cast(CLOUD_BARS_SCHEMA)
+        return (
+            daily_bars.select(list(CLOUD_BARS_SCHEMA))
+            .sort(["ticker", "date"])
+            .cast(CLOUD_BARS_SCHEMA)
+        )
 
     is_week_based = every in {"1w", "2w", "3w"}
     aggregated = (
@@ -292,9 +353,7 @@ def aggregate_daily_to_period(daily_bars: pl.DataFrame, *, every: str) -> pl.Dat
         min_date_raw = aggregated["date"].min()
         if min_date_raw is not None:
             min_date = cast("datetime.date", min_date_raw)
-            reference_monday = min_date - datetime.timedelta(
-                days=min_date.weekday()
-            )
+            reference_monday = min_date - datetime.timedelta(days=min_date.weekday())
             aggregated = (
                 aggregated.with_columns(
                     (
@@ -308,8 +367,7 @@ def aggregate_daily_to_period(daily_bars: pl.DataFrame, *, every: str) -> pl.Dat
                     (
                         pl.lit(reference_monday)
                         + pl.duration(days=pl.col("_slot") * offset_days)
-                    )
-                    .alias("date")
+                    ).alias("date")
                 )
                 .drop("_slot")
             )
@@ -703,13 +761,28 @@ def _total_style(value: float | None) -> str | None:
     return "red"
 
 
+def _truncated_name(name: str) -> Text:
+    """Render a ticker name, truncating to ``_NAME_MAX_LEN`` with an ellipsis.
+
+    Empty input renders as an empty styled cell. The cell inherits the
+    surrounding column's dim style.
+    """
+    if not name:
+        return Text("")
+    if len(name) <= _NAME_MAX_LEN:
+        return Text(name)
+    # Reserve one char for the ellipsis so the total width stays bounded.
+    return Text(name[: _NAME_MAX_LEN - 1] + _NAME_ELLIPSIS)
+
+
 def render_cloud_scorecard(
     scores: pl.DataFrame,
     *,
     benchmark: str,
     max_etfs: int | None = _DEFAULT_MAX_ETFS,
+    names: dict[str, str] | None = None,
 ) -> Table:
-    """Build a Rich scorecard: one row per ETF, 9 score columns + total.
+    """Build a Rich scorecard: one row per ETF, 9 score columns + total + name.
 
     Rows are sorted by ``total`` descending (nulls last), with ``ticker``
     ascending as a stable tie-breaker when totals are equal, and capped at
@@ -717,19 +790,26 @@ def render_cloud_scorecard(
     score (1.0 green .. 0.0 red) and formatted to 2 decimals, MA cells
     green/red for 1/0, null cells render as ``n/a`` in dim, and the total
     cell is green >= 7, yellow 4-6.99, red below.
+
+    The ``names`` dict (typically the output of :func:`read_ticker_names`)
+    adds a trailing "Name" column right of the total: the ETF's long
+    description, dim-styled, truncated to ``_NAME_MAX_LEN`` characters with
+    an ellipsis when it exceeds that. Tickers missing from ``names`` render
+    as an empty cell; pass ``None`` (the default) to omit the column
+    entirely.
     """
     table = Table(
         title=f"Ciovacco cloud scorecard vs {benchmark}",
         header_style="bold",
     )
     table.add_column("Ticker", style="bold")
-    for column in (
-        "1D-Cloud", "W-Cloud", "2W-Cloud", "3W-Cloud", "Mo-Cloud"
-    ):
+    for column in ("1D-Cloud", "W-Cloud", "2W-Cloud", "3W-Cloud", "Mo-Cloud"):
         table.add_column(column, justify="center")
     for column in ("200W MA", "200W slope", "300W MA", "300W slope"):
         table.add_column(column, justify="center")
     table.add_column("Total", justify="center")
+    if names is not None:
+        table.add_column("Name", style="dim", no_wrap=True)
 
     if scores.is_empty():
         return table
@@ -776,6 +856,8 @@ def render_cloud_scorecard(
                 style=_total_style(row.get("total")),  # ty: ignore[invalid-argument-type]
             )
         )
+        if names is not None:
+            cells.append(_truncated_name(names.get(row["ticker"], "")))
         table.add_row(*cells)
 
     return table

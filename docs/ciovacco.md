@@ -41,13 +41,13 @@ bars to resolve. It is read-only and does not require `MASSIVE_API_KEY`.
 The command prints a single Rich scorecard, one row per ETF:
 
 ```
-┌────────┬──────────┬─────────┬──────────┬──────────┬─────────┬────────┬───────────┬────────┬───────────┬───────┐
-│ Ticker ┆ 1D-Cloud ┆ W-Cloud ┆ 2W-Cloud ┆ 3W-Cloud ┆ Mo-Cloud ┆ 200W MA ┆ 200W slope ┆ 300W MA ┆ 300W slope ┆ Total │
-├────────┼──────────┼─────────┼──────────┼──────────┼─────────┼────────┼───────────┼────────┼───────────┼───────┤
-│ XLK    ┆   0.75   ┆  0.75   ┆   0.75   ┆   0.75   ┆  1.00   ┆   1    ┆     1      ┆   1    ┆     1      ┆ 8.25  │
-│ CIBR   ┆   1.00   ┆  1.00   ┆   1.00   ┆   1.00   ┆  1.00   ┆   1    ┆     0      ┆   1    ┆     1      ┆ 8.00  │
-│ IGV    ┆   0.50   ┆  0.50   ┆   0.50   ┆   0.50   ┆  0.00   ┆   0    ┆     0      ┆   0    ┆     0      ┆ 1.75  │
-└────────┴──────────┴─────────┴──────────┴──────────┴─────────┴────────┴───────────┴────────┴───────────┴───────┘
+┌────────┬──────────┬─────────┬──────────┬──────────┬─────────┬────────┬───────────┬────────┬───────────┬───────┬──────────────────────────────────────┐
+│ Ticker ┆ 1D-Cloud ┆ W-Cloud ┆ 2W-Cloud ┆ 3W-Cloud ┆ Mo-Cloud ┆ 200W MA ┆ 200W slope ┆ 300W MA ┆ 300W slope ┆ Total ┆ Name                                  │
+├────────┼──────────┼─────────┼──────────┼──────────┼─────────┼────────┼───────────┼────────┼───────────┼───────┼──────────────────────────────────────┤
+│ XLK    ┆   0.75   ┆  0.75   ┆   0.75   ┆   0.75   ┆  1.00   ┆   1    ┆     1      ┆   1    ┆     1      ┆ 8.25  ┆ Technology Select Sector SPDR Fund    │
+│ CIBR   ┆   1.00   ┆  1.00   ┆   1.00   ┆   1.00   ┆  1.00   ┆   1    ┆     0      ┆   1    ┆     1      ┆ 8.00  ┆ First Trust NASDAQ Cybersecurity ETF  │
+│ IGV    ┆   0.50   ┆  0.50   ┆   0.50   ┆   0.50   ┆   0.00   ┆   0    ┆     0      ┆   0    ┆     0      ┆ 1.75  ┆ iShares Expanded Tech-Software Sector │
+└────────┴──────────┴─────────┴──────────┴──────────┴─────────┴────────┴───────────┴────────┴───────────┴───────┴──────────────────────────────────────┘
 ```
 
 Columns:
@@ -64,6 +64,10 @@ Columns:
   (the MA at the current week is above the MA 26 weeks earlier); 0 otherwise.
 - **Total** — the sum of all 9 columns (max 9.0). Cells shown as `n/a`
   (insufficient history) count as 0 toward the total.
+- **Name** — the ETF's full description from the consumer-DB `tickers`
+  table, dim-styled, right of Total. Names longer than 50 characters are
+  truncated with an ellipsis. Tickers missing from the `tickers` table
+  render as an empty cell.
 
 ### Reading the table
 

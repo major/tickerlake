@@ -22,11 +22,13 @@ from tickerlake.cloud_score import (
     _above_ratio_expression,
     _compute_ma_scores,
     _slope_ratio_expression,
+    _truncated_name,
     aggregate_daily_to_period,
     compute_cloud_scores,
     compute_ichimoku,
     compute_ma_and_slope,
     read_daily_bars,
+    read_ticker_names,
     render_cloud_scorecard,
     score_ichimoku,
     score_ma,
@@ -241,6 +243,78 @@ def test_read_daily_bars_missing_table_raises_valueerror(tmp_path: Path):
         pytest.raises(ValueError, match="daily_bars"),
     ):
         read_daily_bars(consumer, tickers=["CIBR"], lookback_days=30)
+
+    fake.close.assert_called_once()
+
+
+# ---- read_ticker_names -----------------------------------------------------
+
+
+def test_read_ticker_names_returns_dict_of_uppercased_tickers(tmp_path: Path):
+    consumer = tmp_path / "tickerlake.duckdb"
+    consumer.touch()
+    rows = pl.DataFrame(
+        {
+            "ticker": ["XLK", "CIBR", "IGV"],
+            "name": [
+                "Technology Select Sector SPDR Fund",
+                "First Trust NASDAQ Cybersecurity ETF",
+                "iShares Expanded Tech-Software Sector ETF",
+            ],
+        }
+    )
+    fake = FakeConnection(rows)
+    with patch("tickerlake.cloud_score.duckdb.connect", return_value=fake):
+        result = read_ticker_names(consumer, tickers=["xlk", "cibr", "igv"])
+
+    assert len(fake.calls) == 1
+    sql, params = fake.calls[0]
+    assert "FROM tickers" in sql
+    assert "ticker IN (?, ?, ?)" in sql
+    assert params == ["XLK", "CIBR", "IGV"]
+    assert fake.closed
+    assert result == {
+        "XLK": "Technology Select Sector SPDR Fund",
+        "CIBR": "First Trust NASDAQ Cybersecurity ETF",
+        "IGV": "iShares Expanded Tech-Software Sector ETF",
+    }
+
+
+def test_read_ticker_names_omits_tickers_not_in_table(tmp_path: Path):
+    """Tickers missing from the tickers table are absent from the dict."""
+    consumer = tmp_path / "tickerlake.duckdb"
+    consumer.touch()
+    rows = pl.DataFrame(
+        {"ticker": ["XLK"], "name": ["Technology Select Sector SPDR Fund"]}
+    )
+    fake = FakeConnection(rows)
+    with patch("tickerlake.cloud_score.duckdb.connect", return_value=fake):
+        result = read_ticker_names(consumer, tickers=["XLK", "MISSING"])
+
+    assert set(result) == {"XLK"}
+
+
+def test_read_ticker_names_validates_tickers_empty(tmp_path: Path):
+    with pytest.raises(ValueError, match="tickers"):
+        read_ticker_names(tmp_path / "missing.duckdb", tickers=[])
+
+
+def test_read_ticker_names_validates_path_exists(tmp_path: Path):
+    with pytest.raises(ValueError, match="Consumer DB not found"):
+        read_ticker_names(tmp_path / "missing.duckdb", tickers=["AAPL"])
+
+
+def test_read_ticker_names_missing_table_raises_valueerror(tmp_path: Path):
+    consumer = tmp_path / "tickerlake.duckdb"
+    consumer.touch()
+    fake = MagicMock()
+    fake.execute.side_effect = duckdb.CatalogException("no such table: tickers")
+
+    with (
+        patch("tickerlake.cloud_score.duckdb.connect", return_value=fake),
+        pytest.raises(ValueError, match="tickers"),
+    ):
+        read_ticker_names(consumer, tickers=["XLK"])
 
     fake.close.assert_called_once()
 
@@ -901,6 +975,23 @@ def test_render_cloud_scorecard_returns_table_with_expected_columns():
     ]
 
 
+def test_render_cloud_scorecard_adds_name_column_when_names_provided():
+    table = render_cloud_scorecard(
+        _scorecard_frame(),
+        benchmark="SPY",
+        names={
+            "AAA": "Alpha ETF",
+            "BBB": "Beta ETF",
+            "CCC": "Gamma ETF",
+        },
+    )
+    assert len(table.columns) == 12
+    labels = [column.header for column in table.columns]
+    # Name sits right of Total, every other label is unchanged.
+    assert labels[-1] == "Name"
+    assert labels[-2] == "Total"
+
+
 def test_render_cloud_scorecard_sorts_by_total_descending():
     table = render_cloud_scorecard(_scorecard_frame(), benchmark="SPY")
     text = _rich_text(table)
@@ -997,6 +1088,55 @@ def test_render_cloud_scorecard_empty_input():
     text = _rich_text(table)
     assert "Ciovacco cloud scorecard vs SPY" in text
     assert "Ticker" in text
+
+
+def test_render_cloud_scorecard_name_column_renders_lookup():
+    """A ticker present in ``names`` shows the matching description in the Name cell."""
+    table = render_cloud_scorecard(
+        _scorecard_frame(),
+        benchmark="SPY",
+        names={"AAA": "Alpha ETF", "BBB": "Beta ETF", "CCC": "Gamma ETF"},
+    )
+    text = _rich_text(table)
+    aaa_line = next(line for line in text.split("\n") if "AAA" in line)
+    assert "Alpha ETF" in aaa_line
+    bbb_line = next(line for line in text.split("\n") if "BBB" in line)
+    assert "Beta ETF" in bbb_line
+
+
+def test_render_cloud_scorecard_name_column_missing_ticker_renders_empty():
+    """Tickers missing from ``names`` render an empty Name cell (not a KeyError)."""
+    table = render_cloud_scorecard(
+        _scorecard_frame(),
+        benchmark="SPY",
+        names={"AAA": "Alpha ETF"},  # BBB, CCC absent
+    )
+    # The call must not raise; the table is fully populated.
+    assert len(table.rows) == 3
+    text = _rich_text(table)
+    assert "Alpha ETF" in text
+
+
+def test_truncated_name_keeps_short_strings_unchanged():
+    assert _truncated_name("").plain == ""
+    assert _truncated_name("XLK").plain == "XLK"
+    assert _truncated_name("Technology Select Sector SPDR Fund").plain == (
+        "Technology Select Sector SPDR Fund"
+    )
+
+
+def test_truncated_name_truncates_with_ellipsis():
+    long = "A" * 100
+    out = _truncated_name(long).plain
+    assert len(out) == cloud_score._NAME_MAX_LEN
+    assert out.endswith(cloud_score._NAME_ELLIPSIS)
+    # First N-1 chars are the original prefix (with one slot for the ellipsis).
+    assert out == ("A" * (cloud_score._NAME_MAX_LEN - 1)) + cloud_score._NAME_ELLIPSIS
+
+
+def test_truncated_name_boundary_equals_max_len_unchanged():
+    boundary = "B" * cloud_score._NAME_MAX_LEN
+    assert _truncated_name(boundary).plain == boundary
 
 
 def test_total_style_buckets():
