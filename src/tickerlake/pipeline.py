@@ -305,6 +305,13 @@ def _require_api_key(config: Config) -> None:
         raise ValueError(msg)
 
 
+def _require_db_uri(config: Config) -> None:
+    """Raise a clear error when a database command lacks credentials."""
+    if not config.db_uri:
+        msg = "TICKERLAKE_DB_URI environment variable is required"
+        raise ValueError(msg)
+
+
 def pivots(config: Config, ticker: str, timeframe: str = "weekly", k: int = 4) -> None:
     """Log confirmed pivots for a ticker/timeframe without writing any data."""
     ticker = ticker.upper()

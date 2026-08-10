@@ -14,6 +14,8 @@ class Config:
         api_key: MASSIVE API key (loaded from MASSIVE_API_KEY env var when set;
             may be empty for read-only commands. Massive-backed commands enforce
             the requirement at their own boundary.)
+        db_uri: PostgreSQL URI (loaded from TICKERLAKE_DB_URI env var when set;
+            may be empty until a database command enforces the requirement.)
         output_dir: Directory for output files (defaults to current working directory)
         start_date: Start date for data collection (defaults to 10 years ago)
         end_date: End date for data collection (defaults to today)
@@ -22,6 +24,7 @@ class Config:
     """
 
     api_key: str = field(default="")
+    db_uri: str = field(default="")
     output_dir: Path = field(default_factory=Path.cwd)
     start_date: datetime.date = field(
         default_factory=lambda: (
@@ -41,4 +44,6 @@ class Config:
         """Validate and normalize configuration after initialization."""
         if not self.api_key:
             self.api_key = os.environ.get("MASSIVE_API_KEY", "")
+        if not self.db_uri:
+            self.db_uri = os.environ.get("TICKERLAKE_DB_URI", "")
         self.output_dir = Path(self.output_dir).resolve()
