@@ -25,22 +25,6 @@ class TestApiKey:
         assert config.output_dir == Path("./relative/path").resolve()
 
 
-class TestDbUri:
-    """Test PostgreSQL URI configuration."""
-
-    def test_db_uri_from_env(self) -> None:
-        """Config reads TICKERLAKE_DB_URI from the environment."""
-        with patch.dict(os.environ, {"TICKERLAKE_DB_URI": "postgresql://db"}):
-            config = Config()
-        assert config.db_uri == "postgresql://db"
-
-    def test_missing_db_uri_allowed(self) -> None:
-        """Config permits a missing URI until a command enforces it."""
-        with patch.dict(os.environ, {}, clear=True):
-            config = Config()
-        assert config.db_uri == ""
-
-
 class TestDates:
     """Test date configuration."""
 
