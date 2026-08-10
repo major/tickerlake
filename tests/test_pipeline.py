@@ -152,6 +152,26 @@ def test_find_ticker_pivots_invalid_timeframe_does_not_read_db(
     read_bars.assert_not_called()
 
 
+def test_require_db_uri_accepts_configured_uri() -> None:
+    """_require_db_uri() accepts an explicitly configured PostgreSQL URI."""
+    from tickerlake.config import Config
+    from tickerlake.pipeline import _require_db_uri
+
+    _require_db_uri(Config(db_uri="postgresql://db"))
+
+
+def test_require_db_uri_rejects_missing_uri() -> None:
+    """_require_db_uri() reports a missing PostgreSQL URI clearly."""
+    from tickerlake.config import Config
+    from tickerlake.pipeline import _require_db_uri
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        pytest.raises(ValueError, match="TICKERLAKE_DB_URI"),
+    ):
+        _require_db_uri(Config())
+
+
 @pytest.fixture
 def sample_bars():
     """Minimal bars DataFrame for pipeline tests."""
