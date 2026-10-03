@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from unittest.mock import MagicMock
 
 import polars as pl
+import pytest
 
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
 
@@ -91,8 +92,8 @@ EXPECTED_DAILY_AGGS_SCHEMA = {
 }
 
 
-def test_extract_daily_aggs_schema():
-    """Returned DataFrame must have exact column names and dtypes."""
+def test_extract_daily_aggs_returns_expected_bar_and_schema():
+    """Daily bars have the expected values, converted date, and exact schema."""
     client = MagicMock()
     # 1704153600000 ms = 2024-01-02 UTC
     client.fetch_daily_aggs.return_value = [
@@ -102,18 +103,19 @@ def test_extract_daily_aggs_schema():
     df = extract_daily_aggs(client, dates)
 
     assert df.schema == EXPECTED_DAILY_AGGS_SCHEMA
-
-
-def test_extract_daily_aggs_timestamp_conversion():
-    """Ms epoch timestamp must convert to pl.Date correctly."""
-    client = MagicMock()
-    # 1704153600000 ms = 2024-01-02 00:00:00 UTC
-    client.fetch_daily_aggs.return_value = [
-        _make_agg(SAMPLE_AGG),
+    assert df.to_dicts() == [
+        {
+            "date": datetime.date(2024, 1, 2),
+            "ticker": "AAPL",
+            "open": 185.0,
+            "high": 186.0,
+            "low": 184.0,
+            "close": 185.5,
+            "volume": 50_000_000.0,
+            "vwap": pytest.approx(185.2, abs=0.0001),
+            "transactions": 1000,
+        }
     ]
-    df = extract_daily_aggs(client, [datetime.date(2024, 1, 2)])
-
-    assert df["date"][0] == datetime.date(2024, 1, 2)
 
 
 def test_extract_daily_aggs_empty_response():
@@ -126,8 +128,8 @@ def test_extract_daily_aggs_empty_response():
     assert df.schema == EXPECTED_DAILY_AGGS_SCHEMA
 
 
-def test_extract_daily_aggs_multiple_dates():
-    """Multiple dates must be concatenated into a single DataFrame."""
+def test_extract_daily_aggs_returns_bars_from_each_date():
+    """Bars from multiple dates are concatenated with all values preserved."""
     client = MagicMock()
     client.fetch_daily_aggs.side_effect = [
         [_make_agg(SAMPLE_AGG)],
@@ -150,20 +152,31 @@ def test_extract_daily_aggs_multiple_dates():
     dates = [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)]
     df = extract_daily_aggs(client, dates)
 
-    expected_record_count = 2
-    expected_fetch_count = 2
-    assert len(df) == expected_record_count
-    assert client.fetch_daily_aggs.call_count == expected_fetch_count
-
-
-def test_extract_daily_aggs_progress_output():
-    """extract_daily_aggs runs without error for a single date."""
-    client = MagicMock()
-    client.fetch_daily_aggs.return_value = [
-        _make_agg(SAMPLE_AGG),
+    assert df.schema == EXPECTED_DAILY_AGGS_SCHEMA
+    assert df.to_dicts() == [
+        {
+            "date": datetime.date(2024, 1, 2),
+            "ticker": "AAPL",
+            "open": 185.0,
+            "high": 186.0,
+            "low": 184.0,
+            "close": 185.5,
+            "volume": 50_000_000.0,
+            "vwap": pytest.approx(185.2, abs=0.0001),
+            "transactions": 1000,
+        },
+        {
+            "date": datetime.date(2024, 1, 3),
+            "ticker": "AAPL",
+            "open": 186.0,
+            "high": 187.0,
+            "low": 185.0,
+            "close": 186.5,
+            "volume": 51_000_000.0,
+            "vwap": pytest.approx(186.2, abs=0.0001),
+            "transactions": 1100,
+        },
     ]
-    dates = [datetime.date(2024, 1, 2)]
-    extract_daily_aggs(client, dates)
 
 
 # ── Splits ────────────────────────────────────────────────────────────────────
@@ -179,8 +192,8 @@ EXPECTED_SPLITS_SCHEMA = {
 }
 
 
-def test_extract_splits_schema():
-    """Returned splits DataFrame must have exact column names and dtypes."""
+def test_extract_splits_returns_expected_rows_and_schema():
+    """Split rows retain their values and parse execution dates with exact schema."""
     client = MagicMock()
     client.fetch_splits.return_value = [
         _make_split(
@@ -197,26 +210,16 @@ def test_extract_splits_schema():
     df = extract_splits(client, datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
 
     assert df.schema == EXPECTED_SPLITS_SCHEMA
-
-
-def test_extract_splits_execution_date_parsing():
-    """String execution_date must be parsed to pl.Date."""
-    client = MagicMock()
-    client.fetch_splits.return_value = [
-        _make_split(
-            {
-                "ticker": "AAPL",
-                "execution_date": "2024-08-31",
-                "split_from": 1.0,
-                "split_to": 4.0,
-                "historical_adjustment_factor": 4.0,
-                "adjustment_type": "forward",
-            }
-        ),
+    assert df.to_dicts() == [
+        {
+            "ticker": "AAPL",
+            "execution_date": datetime.date(2024, 8, 31),
+            "split_from": 1.0,
+            "split_to": 4.0,
+            "adjustment_factor": 4.0,
+            "adjustment_type": "forward",
+        }
     ]
-    df = extract_splits(client, datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
-
-    assert df["execution_date"][0] == datetime.date(2024, 8, 31)
 
 
 def test_extract_splits_empty_response():
@@ -242,8 +245,8 @@ EXPECTED_TICKERS_SCHEMA = {
 }
 
 
-def test_extract_tickers_schema():
-    """Returned tickers DataFrame must have exact column names and dtypes."""
+def test_extract_tickers_returns_expected_rows_and_schema():
+    """Ticker rows retain all requested fields with the exact schema."""
     client = MagicMock()
     client.fetch_tickers.return_value = [
         _make_ticker(
@@ -260,6 +263,16 @@ def test_extract_tickers_schema():
     df = extract_tickers(client, ["CS"])
 
     assert df.schema == EXPECTED_TICKERS_SCHEMA
+    assert df.to_dicts() == [
+        {
+            "ticker": "AAPL",
+            "name": "Apple Inc.",
+            "type": "CS",
+            "primary_exchange": "XNAS",
+            "cik": "0000320193",
+            "active": True,
+        }
+    ]
 
 
 def test_extract_tickers_empty_response():
