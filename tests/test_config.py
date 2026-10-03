@@ -6,6 +6,8 @@ import types
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from tickerlake.config import Config
 
 
@@ -42,6 +44,48 @@ class TestApiKey:
 
 class TestDates:
     """Test date configuration."""
+
+    @pytest.mark.parametrize(
+        ("instant", "local_timezone", "expected_start", "expected_end"),
+        [
+            (
+                datetime.datetime(2026, 1, 1, 0, 30, tzinfo=datetime.UTC),
+                datetime.timezone(datetime.timedelta(hours=-5)),
+                datetime.date(2016, 1, 1),
+                datetime.date(2026, 1, 1),
+            ),
+            (
+                datetime.datetime(2026, 12, 31, 23, 30, tzinfo=datetime.UTC),
+                datetime.timezone(datetime.timedelta(hours=5)),
+                datetime.date(2016, 12, 31),
+                datetime.date(2026, 12, 31),
+            ),
+        ],
+    )
+    def test_default_dates_use_utc_instant(
+        self,
+        instant: datetime.datetime,
+        local_timezone: datetime.tzinfo,
+        expected_start: datetime.date,
+        expected_end: datetime.date,
+    ) -> None:
+        """Default dates use UTC's calendar date, not the local date."""
+
+        class _FakeDateTime(datetime.datetime):
+            @classmethod
+            def now(cls, tz: datetime.tzinfo | None = None) -> datetime.datetime:
+                return instant.astimezone(tz) if tz is not None else instant.astimezone(local_timezone)
+
+        fake_datetime = types.SimpleNamespace(
+            datetime=_FakeDateTime,
+            UTC=datetime.UTC,
+            date=datetime.date,
+        )
+        with patch("tickerlake.config.datetime", fake_datetime):
+            config = Config()
+
+        assert config.start_date == expected_start
+        assert config.end_date == expected_end
 
     def test_start_date_default(self) -> None:
         """start_date defaults to the same month and day 10 years before today.

@@ -42,6 +42,8 @@ pytest_add_cli_args_test_selection = ["tests/"]
 # Bound runaway mutants. Timeout = (full_suite_seconds + constant) * multiplier.
 timeout_constant = 1.0
 timeout_multiplier = 15.0
+# Avoid forking mutant workers directly from the threaded test parent.
+process_isolation = "forkserver"
 
 [tool.ruff]
 line-length = 120
