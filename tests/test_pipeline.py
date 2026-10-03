@@ -52,27 +52,45 @@ class _ApiTicker:
     active: bool
 
 
+@dataclass
+class _ApiSplit:
+    ticker: str
+    execution_date: str
+    split_from: float
+    split_to: float
+    historical_adjustment_factor: float
+    adjustment_type: str
+
+
 class _FakeMassiveClient:
     """API-boundary fake for a real backfill smoke scenario."""
 
     def __init__(self) -> None:
         self.bars_by_date: dict[datetime.date, list[_ApiBar]] = {}
+        self.splits: list[_ApiSplit] = []
         self.tickers: list[_ApiTicker] = []
+        self.calls: list[str] = []
 
     def fetch_daily_aggs(self, date: datetime.date) -> list[_ApiBar]:
+        self.calls.append("bars")
         return self.bars_by_date.get(date, [])
 
-    def fetch_splits(self, start_date: datetime.date, end_date: datetime.date) -> list[object]:
-        return []
+    def fetch_splits(self, start_date: datetime.date, end_date: datetime.date) -> list[_ApiSplit]:
+        self.calls.append("splits")
+        return [
+            split
+            for split in self.splits
+            if start_date <= datetime.date.fromisoformat(split.execution_date) <= end_date
+        ]
 
     def fetch_tickers(self, types: list[str]) -> list[_ApiTicker]:
+        self.calls.append("tickers")
         return [ticker for ticker in self.tickers if ticker.type in types]
 
 
 def _make_config(tmp_path: Path):
     """Build a Config pointing at tmp_path with a fake API key."""
     return Config(
-        api_key="test_key",
         api_key="test_key",
         output_dir=tmp_path,
         start_date=datetime.date(2024, 1, 1),
@@ -87,6 +105,151 @@ def fake_massive_client(monkeypatch):
     client = _FakeMassiveClient()
     monkeypatch.setattr(pipeline, "MassiveClient", lambda config: client)
     return client
+
+
+@pytest.fixture
+def api_bar():
+    def build(date: datetime.date, ticker: str, close: float, volume: int) -> _ApiBar:
+        timestamp = int(datetime.datetime.combine(date, datetime.time(), datetime.UTC).timestamp() * 1000)
+        return _ApiBar(
+            timestamp=timestamp,
+            ticker=ticker,
+            open=close,
+            high=close + 2,
+            low=close - 2,
+            close=close,
+            volume=volume,
+            vwap=close,
+            transactions=10,
+        )
+
+    return build
+
+
+@pytest.fixture
+def persisted_backfill(tmp_path: Path, fake_massive_client: _FakeMassiveClient, api_bar):
+    import duckdb
+
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    dates = [
+        datetime.date(2024, 1, day)
+        for day in (2, 3, 4, 5, 8, 9, 10, 11, 12, 16, 17, 18, 19, 22, 23, 24, 25, 26, 29, 30)
+    ]
+    for index, date in enumerate(dates):
+        raw_close = 400 + index
+        fake_massive_client.bars_by_date[date] = [
+            api_bar(date, "SPLT", raw_close, 1000),
+            api_bar(date, "HOLD", 50 + index, 2000),
+            api_bar(date, "GONE", 25 + index, 3000),
+        ]
+    fake_massive_client.splits = [_ApiSplit("SPLT", "2024-01-16", 1, 4, 0.25, "forward")]
+    fake_massive_client.tickers = [
+        _ApiTicker("SPLT", "Split Co", "CS", "XNAS", "0000000001", True),
+        _ApiTicker("HOLD", "Hold Co", "CS", "XNYS", "0000000002", True),
+    ]
+    pipeline.backfill(Config(api_key="test_key", output_dir=tmp_path, start_date=dates[0], end_date=dates[-1]))
+
+    def rows(filename: str, query: str) -> list[tuple]:
+        connection = duckdb.connect(str(tmp_path / filename), read_only=True)
+        try:
+            return connection.execute(query).fetchall()
+        finally:
+            connection.close()
+
+    return rows, dates
+
+
+def test_backfill_persists_split_adjusted_and_filtered_state(persisted_backfill):
+    rows, dates = persisted_backfill
+    last = dates[-1]
+
+    assert rows(
+        "raw.duckdb", "SELECT ticker, close, volume FROM raw_daily_bars WHERE date = DATE '2024-01-02' ORDER BY ticker"
+    ) == [("GONE", 25.0, 3000.0), ("HOLD", 50.0, 2000.0), ("SPLT", 400.0, 1000.0)]
+    assert rows("raw.duckdb", "SELECT ticker, execution_date, adjustment_factor FROM splits") == [
+        ("SPLT", datetime.date(2024, 1, 16), 0.25)
+    ]
+    assert rows(
+        "tickerlake.duckdb",
+        "SELECT ticker, close, volume FROM daily_bars WHERE date = DATE '2024-01-02' ORDER BY ticker",
+    ) == [("HOLD", 50.0, 2000.0), ("SPLT", 100.0, 4000.0)]
+    assert rows(
+        "tickerlake.duckdb", "SELECT ticker, close FROM daily_bars WHERE date = DATE '2024-01-30' ORDER BY ticker"
+    ) == [("HOLD", 69.0), ("SPLT", 419.0)]
+    assert rows("tickerlake.duckdb", "SELECT ticker, name FROM tickers ORDER BY ticker") == [
+        ("HOLD", "Hold Co"),
+        ("SPLT", "Split Co"),
+    ]
+
+    weekly = rows(
+        "tickerlake.duckdb",
+        "SELECT date, open, high, low, close, volume FROM weekly_bars WHERE ticker = 'SPLT' ORDER BY date",
+    )
+    assert weekly == [
+        (datetime.date(2024, 1, 1), 100.0, 101.25, 99.5, 100.75, 16000.0),
+        (datetime.date(2024, 1, 8), 101.0, 102.5, 100.5, 102.0, 20000.0),
+        (datetime.date(2024, 1, 15), 409.0, 414.0, 407.0, 412.0, 4000.0),
+        (datetime.date(2024, 1, 22), 413.0, 419.0, 411.0, 417.0, 5000.0),
+        (datetime.date(2024, 1, 29), 418.0, 421.0, 416.0, 419.0, 2000.0),
+    ]
+    assert rows("tickerlake.duckdb", "SELECT date, ticker FROM weekly_metrics ORDER BY ticker, date") == [
+        (datetime.date(2024, 1, 1), "HOLD"),
+        (datetime.date(2024, 1, 8), "HOLD"),
+        (datetime.date(2024, 1, 15), "HOLD"),
+        (datetime.date(2024, 1, 22), "HOLD"),
+        (datetime.date(2024, 1, 29), "HOLD"),
+        (datetime.date(2024, 1, 1), "SPLT"),
+        (datetime.date(2024, 1, 8), "SPLT"),
+        (datetime.date(2024, 1, 15), "SPLT"),
+        (datetime.date(2024, 1, 22), "SPLT"),
+        (datetime.date(2024, 1, 29), "SPLT"),
+    ]
+    assert rows(
+        "tickerlake.duckdb",
+        "SELECT COUNT(sma_20), COUNT(sma_50), COUNT(sma_200), COUNT(atr_14), "
+        "COUNT(atr_pct), COUNT(adr_pct), COUNT(volume_sma_20) FROM weekly_metrics",
+    ) == [(0, 0, 0, 0, 0, 0, 0)]
+    assert rows(
+        "tickerlake.duckdb", "SELECT date, open, high, low, close, volume FROM monthly_bars WHERE ticker = 'SPLT'"
+    ) == [(datetime.date(2024, 1, 30), 100.0, 421.0, 99.5, 419.0, 47000.0)]
+    assert rows("tickerlake.duckdb", "SELECT date, ticker FROM monthly_metrics ORDER BY ticker, date") == [
+        (datetime.date(2024, 1, 30), "HOLD"),
+        (datetime.date(2024, 1, 30), "SPLT"),
+    ]
+    assert rows(
+        "tickerlake.duckdb",
+        "SELECT COUNT(sma_20), COUNT(sma_50), COUNT(sma_200), COUNT(atr_14), "
+        "COUNT(atr_pct), COUNT(adr_pct), COUNT(volume_sma_20) FROM monthly_metrics",
+    ) == [(0, 0, 0, 0, 0, 0, 0)]
+    assert rows(
+        "tickerlake.duckdb",
+        "SELECT date, sma_20, atr_14, adr_pct, volume_sma_20 FROM daily_metrics WHERE ticker = 'HOLD' ORDER BY date DESC LIMIT 1",
+    ) == [(last, 59.5, 4.0, pytest.approx(0.0678691410), 2000.0)]
+    assert rows(
+        "tickerlake.duckdb",
+        "SELECT date, sma_20, atr_14, adr_pct, volume_sma_20 FROM daily_metrics WHERE ticker = 'SPLT' ORDER BY date DESC LIMIT 1",
+    ) == [(last, pytest.approx(273.15), pytest.approx(25.142857), pytest.approx(0.0097699473), 2350.0)]
+
+
+def test_backfill_weekend_has_no_files_or_api_data_calls(tmp_path, fake_massive_client: _FakeMassiveClient):
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    config = Config(
+        api_key="test_key",
+        output_dir=tmp_path,
+        start_date=datetime.date(2024, 1, 6),
+        end_date=datetime.date(2024, 1, 7),
+    )
+    pipeline.backfill(config)
+
+    assert list(tmp_path.iterdir()) == []
+    assert fake_massive_client.calls == []
+    assert fake_massive_client.bars_by_date == {}
+    assert fake_massive_client.splits == []
+    assert fake_massive_client.tickers == []
 
 
 def test_backfill_persists_api_data_through_real_pipeline(
@@ -278,55 +441,6 @@ def _wire_defaults(mocks, sample_bars, sample_splits, sample_tickers, sample_met
 # ═══════════════════════════════════════════════════════════════════════════════
 # Backfill
 # ═══════════════════════════════════════════════════════════════════════════════
-
-
-def test_backfill_calls_extract_in_order(pipeline_mocks, tmp_path, sample_frames):
-    """Backfill calls extract_daily_aggs, extract_splits, extract_tickers."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    backfill(_make_config(tmp_path))
-
-    pipeline_mocks["extract_daily_aggs"].assert_called_once()
-    pipeline_mocks["extract_splits"].assert_called_once()
-    pipeline_mocks["extract_tickers"].assert_called_once()
-
-
-def test_backfill_calls_transform_in_order(pipeline_mocks, tmp_path, sample_frames):
-    """Backfill calls adjust_splits, filter_tickers, compute_metrics."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    backfill(_make_config(tmp_path))
-
-    pipeline_mocks["adjust_splits"].assert_called_once()
-    assert pipeline_mocks["adjust_splits"].call_args[0][0] is sample_bars
-    assert pipeline_mocks["adjust_splits"].call_args[0][1] is sample_splits
-
-    pipeline_mocks["filter_tickers"].assert_called_once()
-    assert pipeline_mocks["filter_tickers"].call_args[0][1] is sample_tickers
-
-    assert pipeline_mocks["compute_metrics"].call_count == EXPECTED_METRIC_CALLS
-
-
-def test_backfill_calls_write_raw_db(pipeline_mocks, tmp_path, sample_frames):
-    """Backfill calls write_raw_db with the raw.duckdb path."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    config = _make_config(tmp_path)
-    backfill(config)
-
-    pipeline_mocks["write_raw_db"].assert_called_once()
-    assert pipeline_mocks["write_raw_db"].call_args[0][1] == config.output_dir / "raw.duckdb"
-
-
-def test_backfill_calls_write_consumer_db(pipeline_mocks, tmp_path, sample_frames):
-    """Backfill calls write_consumer_db with the tickerlake.duckdb path."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    config = _make_config(tmp_path)
-    backfill(config)
-
-    pipeline_mocks["write_consumer_db"].assert_called_once()
-    assert pipeline_mocks["write_consumer_db"].call_args[0][3] == config.output_dir / "tickerlake.duckdb"
 
 
 def test_backfill_no_trading_days(pipeline_mocks, tmp_path):
@@ -965,63 +1079,9 @@ def test_compact_missing_raw_db(pipeline_mocks, tmp_path, caplog):
     assert "No raw.duckdb found" in caplog.text
 
 
-def test_backfill_calls_aggregate_to_weekly(pipeline_mocks, tmp_path, sample_frames):
-    """Backfill calls aggregate_to_weekly with the filtered bars."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    backfill(_make_config(tmp_path))
-
-    pipeline_mocks["aggregate_to_weekly"].assert_called_once()
-    call_args = pipeline_mocks["aggregate_to_weekly"].call_args
-    assert call_args is not None
-    assert call_args[0][0] is sample_bars
-
-
-def test_backfill_calls_aggregate_to_monthly(pipeline_mocks, tmp_path, sample_frames):
-    """Backfill calls aggregate_to_monthly with the filtered bars."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    backfill(_make_config(tmp_path))
-
-    pipeline_mocks["aggregate_to_monthly"].assert_called_once()
-    call_args = pipeline_mocks["aggregate_to_monthly"].call_args
-    assert call_args is not None
-    assert call_args[0][0] is sample_bars
-
-
-def test_backfill_computes_weekly_metrics(pipeline_mocks, tmp_path, sample_frames):
-    """Backfill computes metrics for daily, weekly, and monthly bars."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    backfill(_make_config(tmp_path))
-
-    assert pipeline_mocks["compute_metrics"].call_count == EXPECTED_METRIC_CALLS
-
-
-def test_backfill_passes_weekly_to_consumer_db(
-    pipeline_mocks,
-    tmp_path,
-    sample_frames,
+def test_update_calls_aggregate_to_weekly(
+    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
 ):
-    """Backfill passes weekly bars and metrics to write_consumer_db."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(
-        pipeline_mocks,
-        sample_bars,
-        sample_splits,
-        sample_tickers,
-        sample_metrics,
-    )
-    backfill(_make_config(tmp_path))
-
-    call_kwargs = pipeline_mocks["write_consumer_db"].call_args.kwargs
-    assert "weekly_bars" in call_kwargs
-    assert "weekly_metrics" in call_kwargs
-    assert "monthly_bars" in call_kwargs
-    assert "monthly_metrics" in call_kwargs
-
-
-def test_update_calls_aggregate_to_weekly(pipeline_mocks, tmp_path, sample_frames):
     """Update calls aggregate_to_weekly with filtered bars."""
     sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
@@ -1054,20 +1114,6 @@ def test_update_passes_weekly_to_consumer_db(
     assert "weekly_metrics" in call_kwargs
     assert "monthly_bars" in call_kwargs
     assert "monthly_metrics" in call_kwargs
-
-
-def test_backfill_persists_splits(
-    pipeline_mocks,
-    tmp_path,
-    sample_frames,
-):
-    """Backfill calls write_splits with extracted splits and raw.duckdb path."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    config = _make_config(tmp_path)
-    backfill(config)
-
-    pipeline_mocks["write_splits"].assert_called_once_with(sample_splits, config.output_dir / "raw.duckdb")
 
 
 def test_update_persists_splits(
