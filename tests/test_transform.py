@@ -2,6 +2,7 @@
 
 import datetime
 import importlib
+import math
 from typing import TYPE_CHECKING
 
 import polars as pl
@@ -123,7 +124,9 @@ def test_period_aggregation_vwap_at_zero_and_unit_total_volume(
             for index, (date, volume, vwap) in enumerate(zip(dates, volumes, vwaps, strict=True))
         ]
     )
-    row = aggregate(bars).row(0, named=True)
+    row = aggregate(bars, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 12, 31)).row(
+        0, named=True
+    )
 
     assert row["date"] == expected_date
     assert row["open"] == pytest.approx(10.0)
@@ -182,7 +185,9 @@ class TestAggregateToWeekly:
                     }
                 )
 
-        result = aggregate_to_weekly(make_bars(rows))
+        result = aggregate_to_weekly(
+            make_bars(rows), collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 12, 31)
+        )
 
         assert len(result) == EXPECTED_WEEKLY_ROWS
         per_ticker_counts = result.group_by("ticker").len().sort("ticker")
@@ -250,7 +255,9 @@ class TestAggregateToWeekly:
             ]
         )
 
-        row = aggregate_to_weekly(bars).row(0, named=True)
+        row = aggregate_to_weekly(
+            bars, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 12, 31)
+        ).row(0, named=True)
 
         assert row["open"] == pytest.approx(100.0)
         assert row["high"] == pytest.approx(106.0)
@@ -315,7 +322,9 @@ class TestAggregateToWeekly:
             ]
         )
 
-        row = aggregate_to_weekly(bars).row(0, named=True)
+        row = aggregate_to_weekly(
+            bars, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 12, 31)
+        ).row(0, named=True)
 
         assert row["date"] == datetime.date(2024, 1, 8)
 
@@ -359,7 +368,9 @@ class TestAggregateToWeekly:
             ]
         )
 
-        row = aggregate_to_weekly(bars).row(0, named=True)
+        row = aggregate_to_weekly(
+            bars, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 12, 31)
+        ).row(0, named=True)
 
         assert row["date"] == datetime.date(2024, 1, 15)
         assert row["volume"] == pytest.approx(3300.0)
@@ -382,7 +393,9 @@ class TestAggregateToWeekly:
             ]
         )
 
-        row = aggregate_to_weekly(bars).row(0, named=True)
+        row = aggregate_to_weekly(
+            bars, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 12, 31)
+        ).row(0, named=True)
 
         assert row["open"] == pytest.approx(100.0)
         assert row["high"] == pytest.approx(105.0)
@@ -444,7 +457,9 @@ class TestAggregateToWeekly:
             ]
         )
 
-        result = aggregate_to_weekly(bars)
+        result = aggregate_to_weekly(
+            bars, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 12, 31)
+        )
         aapl_row = result.filter(pl.col("ticker") == "AAPL").row(0, named=True)
         msft_row = result.filter(pl.col("ticker") == "MSFT").row(0, named=True)
 
@@ -484,10 +499,12 @@ class TestAggregateToWeekly:
             ]
         )
 
-        result = aggregate_to_weekly(bars)
+        result = aggregate_to_weekly(
+            bars, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 12, 31)
+        )
 
-        assert result.columns == list(DAILY_AGGS_SCHEMA.keys())
-        assert result.dtypes == list(DAILY_AGGS_SCHEMA.values())
+        assert result.columns == list(transform.PERIOD_AGGS_SCHEMA.keys())
+        assert result.dtypes == list(transform.PERIOD_AGGS_SCHEMA.values())
 
 
 def test_aggregate_to_monthly_values_and_last_trading_day():
@@ -530,11 +547,11 @@ def test_aggregate_to_monthly_values_and_last_trading_day():
         ]
     )
 
-    result = aggregate_to_monthly(bars)
+    result = aggregate_to_monthly(bars, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 12, 31))
     january = result.row(0, named=True)
     expected_vwap = (100.5 * 1000.0 + 103.5 * 1100.0) / 2100.0
 
-    assert result.columns == list(DAILY_AGGS_SCHEMA.keys())
+    assert result.columns == list(transform.PERIOD_AGGS_SCHEMA.keys())
     assert january["date"] == datetime.date(2024, 1, 31)
     assert january["open"] == pytest.approx(100.0)
     assert january["high"] == pytest.approx(105.0)
@@ -549,13 +566,17 @@ def test_aggregate_to_period_empty_input_weekly_and_monthly():
     """Empty bars short-circuit to DAILY_AGGS_SCHEMA for both weekly and monthly."""
     empty_bars = pl.DataFrame(schema=BARS_SCHEMA)
 
-    weekly = aggregate_to_weekly(empty_bars)
-    monthly = aggregate_to_monthly(empty_bars)
+    weekly = aggregate_to_weekly(
+        empty_bars, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 12, 31)
+    )
+    monthly = aggregate_to_monthly(
+        empty_bars, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 12, 31)
+    )
 
     for result in (weekly, monthly):
         assert result.is_empty()
-        assert result.columns == list(DAILY_AGGS_SCHEMA.keys())
-        assert result.dtypes == list(DAILY_AGGS_SCHEMA.values())
+        assert result.columns == list(transform.PERIOD_AGGS_SCHEMA.keys())
+        assert result.dtypes == list(transform.PERIOD_AGGS_SCHEMA.values())
 
 
 class TestAggregateToMonthly:
@@ -601,7 +622,9 @@ class TestAggregateToMonthly:
             ]
         )
 
-        result = aggregate_to_monthly(bars)
+        result = aggregate_to_monthly(
+            bars, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 12, 31)
+        )
 
         assert result["date"].to_list() == [
             datetime.date(2024, 1, 31),
@@ -610,16 +633,20 @@ class TestAggregateToMonthly:
         assert result["volume"].to_list() == pytest.approx([2100.0, 1200.0])
         expected_january_vwap = ((100.7 * 1000.0) + (103.1 * 1100.0)) / 2100.0
         assert result["vwap"].to_list() == pytest.approx([expected_january_vwap, 100.2])
-        assert result.columns == list(DAILY_AGGS_SCHEMA.keys())
-        assert result.dtypes == list(DAILY_AGGS_SCHEMA.values())
+        assert result.columns == list(transform.PERIOD_AGGS_SCHEMA.keys())
+        assert result.dtypes == list(transform.PERIOD_AGGS_SCHEMA.values())
 
     def test_empty_input(self):
         """Return the expected schema for empty monthly input."""
-        result = aggregate_to_monthly(pl.DataFrame(schema=BARS_SCHEMA))
+        result = aggregate_to_monthly(
+            pl.DataFrame(schema=BARS_SCHEMA),
+            collection_start=datetime.date(2024, 1, 1),
+            target=datetime.date(2024, 12, 31),
+        )
 
         assert result.is_empty()
-        assert result.columns == list(DAILY_AGGS_SCHEMA.keys())
-        assert result.dtypes == list(DAILY_AGGS_SCHEMA.values())
+        assert result.columns == list(transform.PERIOD_AGGS_SCHEMA.keys())
+        assert result.dtypes == list(transform.PERIOD_AGGS_SCHEMA.values())
 
 
 def test_adjust_splits_basic(sample_bars_df: pl.DataFrame, sample_splits_df: pl.DataFrame):
@@ -722,7 +749,7 @@ def test_adjust_splits_no_split_unchanged():
 
     result = adjust_splits(bars, splits)
 
-    assert_frame_equal(result, bars)
+    assert_frame_equal(result, bars.with_columns(pl.col("volume").cast(pl.Float64)))
 
 
 def test_adjust_splits_aapl_4to1():
@@ -1009,7 +1036,7 @@ def test_adjust_splits_empty_splits(sample_bars_df: pl.DataFrame, sample_splits_
     """Preserve bars when the splits frame is empty."""
     result = adjust_splits(sample_bars_df, sample_splits_df.head(0))
 
-    assert_frame_equal(result, sample_bars_df)
+    assert_frame_equal(result, sample_bars_df.with_columns(pl.col("volume").cast(pl.Float64)))
 
 
 def test_filter_tickers_keeps_matching(sample_bars_df: pl.DataFrame, sample_tickers_df: pl.DataFrame):
@@ -1410,6 +1437,25 @@ def test_compute_metrics_volume_sma20_correct():
     row = result.filter(pl.col("date") == target_date).row(0, named=True)
 
     assert row["volume_sma_20"] == pytest.approx(10.5)
+
+
+def test_compute_metrics_volume_sma20_uses_float64_volume() -> None:
+    """Preserve precision for rolling volume means and expose them as Float64."""
+    volumes = [1_000_000_000.125 + index * 0.25 for index in range(20)]
+    bars = make_metric_bars({"AAPL": [100.0] * len(volumes)}).with_columns(
+        pl.Series("volume", volumes, dtype=pl.Float64)
+    )
+
+    result = compute_metrics(bars)
+    assert result.schema["volume_sma_20"] == pl.Float64
+    assert result["volume_sma_20"].item(-1) == pytest.approx(math.fsum(volumes) / 20, rel=1e-15)
+
+
+def test_compute_metrics_volume_sma20_rejects_rolling_overflow() -> None:
+    """Reject rolling calculations that overflow finite inputs to infinity."""
+    bars = make_metric_bars({"AAPL": [100.0] * 20}).with_columns(pl.Series("volume", [1e308] * 20, dtype=pl.Float64))
+    with pytest.raises(ValueError, match=r".*"):
+        compute_metrics(bars)
 
 
 def test_compute_metrics_volume_sma20_null_count():

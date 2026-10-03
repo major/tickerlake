@@ -247,11 +247,11 @@ def _rebuild_consumer_database(config: Config, client: MassiveClient, raw_path: 
     logger.info("Computing metrics (SMA-50, SMA-200, ATR-14, ATR%%)...")
     metrics = compute_metrics(bars)
     logger.info("Aggregating weekly bars...")
-    weekly_bars = aggregate_to_weekly(bars)
+    weekly_bars = aggregate_to_weekly(bars, collection_start=retained_start, target=config.end_date)
     logger.info("Computing weekly metrics...")
     weekly_metrics = compute_metrics(weekly_bars)
     logger.info("Aggregating monthly bars...")
-    monthly_bars = aggregate_to_monthly(bars)
+    monthly_bars = aggregate_to_monthly(bars, collection_start=retained_start, target=config.end_date)
     logger.info("Computing monthly metrics...")
     monthly_metrics = compute_metrics(monthly_bars)
 

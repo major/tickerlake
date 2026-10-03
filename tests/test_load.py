@@ -20,8 +20,14 @@ from tickerlake.load import (
     write_raw_db,
     write_splits,
 )
+from tickerlake.transform import compute_metrics
 
 EXPECTED_CONSUMER_TABLE_COUNT = 3
+
+
+def _period_bars(bars: pl.DataFrame) -> pl.DataFrame:
+    return bars.with_columns(pl.lit(False).alias("left_truncated"), pl.lit(False).alias("calendar_closed"))
+
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -52,7 +58,7 @@ def sample_metrics_df(sample_bars_df: pl.DataFrame) -> pl.DataFrame:
             "atr_14": pl.Float32,
             "atr_pct": pl.Float32,
             "adr_pct": pl.Float32,
-            "volume_sma_20": pl.Float32,
+            "volume_sma_20": pl.Float64,
         },
     )
 
@@ -72,9 +78,12 @@ def test_write_raw_db_creates_table(tmp_path: Path, sample_bars_df: pl.DataFrame
 
 
 def test_write_raw_db_schema(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
-    """Price columns are FLOAT, date is DATE, transactions is UINTEGER."""
+    """Price columns are FLOAT, volume is DOUBLE, transactions is BIGINT."""
     db_path = tmp_path / "raw.duckdb"
-    write_raw_db(sample_bars_df, db_path)
+    canonical_bars = sample_bars_df.with_columns(
+        pl.col("volume").cast(pl.Float64), pl.col("transactions").cast(pl.Int64)
+    )
+    write_raw_db(canonical_bars, db_path)
 
     con = duckdb.connect(str(db_path), read_only=True)
     schema = con.execute("DESCRIBE raw_daily_bars").fetchall()
@@ -87,9 +96,41 @@ def test_write_raw_db_schema(tmp_path: Path, sample_bars_df: pl.DataFrame) -> No
     assert schema_dict["high"] == "FLOAT"
     assert schema_dict["low"] == "FLOAT"
     assert schema_dict["close"] == "FLOAT"
-    assert schema_dict["volume"] == "FLOAT"
+    assert schema_dict["volume"] == "DOUBLE"
     assert schema_dict["vwap"] == "FLOAT"
-    assert schema_dict["transactions"] == "UINTEGER"
+    assert schema_dict["transactions"] == "BIGINT"
+
+
+def test_raw_and_consumer_round_trip_preserve_wide_numeric_values(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+) -> None:
+    """Persist large fractional volume and transaction counts without narrowing."""
+    bars = sample_bars_df.with_columns(
+        pl.Series("volume", [4_294_967_296.125] * len(sample_bars_df), dtype=pl.Float64),
+        pl.Series("transactions", [4_294_967_300] * len(sample_bars_df), dtype=pl.Int64),
+    )
+    metrics = compute_metrics(bars).with_columns(
+        pl.Series("volume_sma_20", [4_294_967_296.125] * len(sample_bars_df), dtype=pl.Float64)
+    )
+    raw_path = tmp_path / "raw.duckdb"
+    consumer_path = tmp_path / "consumer.duckdb"
+
+    write_raw_db(bars, raw_path)
+    write_consumer_db(bars, metrics, sample_tickers_df, consumer_path)
+
+    assert read_raw_db(raw_path)["volume"].to_list() == bars["volume"].to_list()
+    assert read_raw_db(raw_path)["transactions"].to_list() == bars["transactions"].to_list()
+    with duckdb.connect(str(consumer_path), read_only=True) as con:
+        assert con.execute("SELECT volume, transactions FROM daily_bars ORDER BY ticker, date").fetchall() == list(
+            zip(
+                bars.sort(["ticker", "date"])["volume"].to_list(),
+                bars.sort(["ticker", "date"])["transactions"].to_list(),
+                strict=True,
+            )
+        )
+        assert con.execute("SELECT DISTINCT volume_sma_20 FROM daily_metrics").fetchall() == [(4_294_967_296.125,)]
 
 
 def test_write_raw_db_sorted(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
@@ -127,6 +168,49 @@ def test_append_raw_db(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
     assert row is not None
     count = row[0]
     assert count == len(sample_bars_df) * 2
+
+
+def test_append_widens_legacy_raw_numeric_columns(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
+    """Appending canonical values upgrades old narrow raw storage types."""
+    db_path = tmp_path / "legacy.duckdb"
+    con = duckdb.connect(str(db_path))
+    con.execute("""CREATE TABLE raw_daily_bars AS SELECT
+        DATE '2024-01-01' AS date, 'OLD' AS ticker,
+        1.0::FLOAT AS open, 2.0::FLOAT AS high, 0.5::FLOAT AS low,
+        1.5::FLOAT AS close, 123.0::FLOAT AS volume, 1.25::FLOAT AS vwap,
+        42::UINTEGER AS transactions""")
+    con.close()
+
+    append_raw_db(sample_bars_df, db_path)
+
+    with duckdb.connect(str(db_path), read_only=True) as con:
+        types = {row[0]: row[1] for row in con.execute("DESCRIBE raw_daily_bars").fetchall()}
+        old_values = con.execute("SELECT volume, transactions FROM raw_daily_bars WHERE ticker = 'OLD'").fetchone()
+    assert types["volume"] == "DOUBLE"
+    assert types["transactions"] == "BIGINT"
+    assert old_values == (123.0, 42)
+
+
+def test_failed_legacy_append_rolls_back_numeric_widening(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
+    """A failed append does not persist schema widening without its rows."""
+    db_path = tmp_path / "legacy.duckdb"
+    con = duckdb.connect(str(db_path))
+    con.execute("""CREATE TABLE raw_daily_bars AS SELECT
+        DATE '2024-01-01' AS date, 'OLD' AS ticker,
+        1.0::FLOAT AS open, 2.0::FLOAT AS high, 0.5::FLOAT AS low,
+        1.5::FLOAT AS close, 123.0::FLOAT AS volume, 1.25::FLOAT AS vwap,
+        42::UINTEGER AS transactions""")
+    con.close()
+
+    with pytest.raises(duckdb.Error):
+        append_raw_db(sample_bars_df.drop("ticker"), db_path)
+
+    with duckdb.connect(str(db_path), read_only=True) as con:
+        types = {row[0]: row[1] for row in con.execute("DESCRIBE raw_daily_bars").fetchall()}
+        rows = con.execute("SELECT COUNT(*) FROM raw_daily_bars").fetchone()
+    assert types["volume"] == "FLOAT"
+    assert types["transactions"] == "UINTEGER"
+    assert rows == (1,)
 
 
 def test_read_raw_db(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
@@ -261,7 +345,7 @@ def test_write_consumer_db_schema(
     sample_metrics_df: pl.DataFrame,
     sample_tickers_df: pl.DataFrame,
 ) -> None:
-    """Price columns are FLOAT, date is DATE, transactions is UINTEGER in consumer db."""
+    """Consumer bars preserve wide volume and transaction types."""
     db_path = tmp_path / "tickerlake.duckdb"
     write_consumer_db(sample_bars_df, sample_metrics_df, sample_tickers_df, db_path)
 
@@ -274,7 +358,8 @@ def test_write_consumer_db_schema(
     # daily_bars schema
     assert bars_schema["date"] == "DATE"
     assert bars_schema["open"] == "FLOAT"
-    assert bars_schema["transactions"] == "UINTEGER"
+    assert bars_schema["volume"] == "DOUBLE"
+    assert bars_schema["transactions"] == "BIGINT"
 
     # daily_metrics schema
     assert metrics_schema["date"] == "DATE"
@@ -283,6 +368,7 @@ def test_write_consumer_db_schema(
     assert metrics_schema["sma_200"] == "FLOAT"
     assert metrics_schema["atr_14"] == "FLOAT"
     assert metrics_schema["atr_pct"] == "FLOAT"
+    assert metrics_schema["volume_sma_20"] == "DOUBLE"
 
     # tickers schema
     assert tickers_schema["ticker"] == "VARCHAR"
@@ -325,11 +411,11 @@ def test_write_consumer_db_validates_optional_weekly_schema(
 ) -> None:
     """Optional weekly tables are schema-validated when provided."""
     db_path = tmp_path / "tickerlake.duckdb"
-    bad_weekly_metrics = sample_metrics_df.with_columns(pl.col("volume_sma_20").cast(pl.Float64))
+    bad_weekly_metrics = sample_metrics_df.with_columns(pl.col("volume_sma_20").cast(pl.Float32))
 
     with pytest.raises(
         ValueError,
-        match=r"weekly_metrics.*volume_sma_20: expected Float32, got Float64",
+        match=r"weekly_metrics.*volume_sma_20: expected Float64, got Float32",
     ):
         write_consumer_db(
             sample_bars_df,
@@ -532,15 +618,19 @@ def test_write_consumer_db_persists_weekly_tables(
 ) -> None:
     """Weekly bars and metrics persist with their values and schemas."""
     db_path = tmp_path / "tickerlake.duckdb"
-    weekly_bars = sample_bars_df.with_columns(
-        (pl.col("open") + 50).alias("open"),
-        (pl.col("high") + 50).alias("high"),
-        (pl.col("low") + 50).alias("low"),
-        (pl.col("close") + 50).alias("close"),
-        (pl.col("vwap") + 50).alias("vwap"),
-        (pl.col("volume") + 500).alias("volume"),
-        (pl.col("transactions") + 50).alias("transactions"),
-    ).reverse()
+    weekly_bars = (
+        _period_bars(sample_bars_df)
+        .with_columns(
+            (pl.col("open") + 50).alias("open"),
+            (pl.col("high") + 50).alias("high"),
+            (pl.col("low") + 50).alias("low"),
+            (pl.col("close") + 50).alias("close"),
+            (pl.col("vwap") + 50).alias("vwap"),
+            (pl.col("volume") + 500).alias("volume"),
+            (pl.col("transactions") + 50).alias("transactions"),
+        )
+        .reverse()
+    )
     weekly_metrics = sample_metrics_df.with_columns(
         pl.Series("sma_20", [20.0, 50.0, 21.0, 51.0, 22.0, 52.0], dtype=pl.Float32)
     ).reverse()
@@ -577,15 +667,19 @@ def test_write_consumer_db_persists_monthly_tables(
 ) -> None:
     """Monthly bars and metrics persist with their values and schemas."""
     db_path = tmp_path / "tickerlake.duckdb"
-    monthly_bars = sample_bars_df.with_columns(
-        (pl.col("open") + 100).alias("open"),
-        (pl.col("high") + 100).alias("high"),
-        (pl.col("low") + 100).alias("low"),
-        (pl.col("close") + 100).alias("close"),
-        (pl.col("vwap") + 100).alias("vwap"),
-        (pl.col("volume") + 1_000).alias("volume"),
-        (pl.col("transactions") + 100).alias("transactions"),
-    ).reverse()
+    monthly_bars = (
+        _period_bars(sample_bars_df)
+        .with_columns(
+            (pl.col("open") + 100).alias("open"),
+            (pl.col("high") + 100).alias("high"),
+            (pl.col("low") + 100).alias("low"),
+            (pl.col("close") + 100).alias("close"),
+            (pl.col("vwap") + 100).alias("vwap"),
+            (pl.col("volume") + 1_000).alias("volume"),
+            (pl.col("transactions") + 100).alias("transactions"),
+        )
+        .reverse()
+    )
     monthly_metrics = sample_metrics_df.with_columns(
         pl.Series("sma_20", [120.0, 150.0, 121.0, 151.0, 122.0, 152.0], dtype=pl.Float32)
     ).reverse()
@@ -640,20 +734,20 @@ def test_write_consumer_db_weekly_bars_schema(
     sample_metrics_df: pl.DataFrame,
     sample_tickers_df: pl.DataFrame,
 ) -> None:
-    """weekly_bars has same columns as daily_bars."""
+    """Weekly bars add period-boundary flags to the daily bar columns."""
     db_path = tmp_path / "tickerlake.duckdb"
     write_consumer_db(
         sample_bars_df,
         sample_metrics_df,
         sample_tickers_df,
         db_path,
-        weekly_bars=sample_bars_df,
+        weekly_bars=_period_bars(sample_bars_df),
     )
     con = duckdb.connect(str(db_path), read_only=True)
     daily_cols = {row[0] for row in con.execute("DESCRIBE daily_bars").fetchall()}
     weekly_cols = {row[0] for row in con.execute("DESCRIBE weekly_bars").fetchall()}
     con.close()
-    assert daily_cols == weekly_cols
+    assert weekly_cols == daily_cols | {"left_truncated", "calendar_closed"}
 
 
 def test_write_consumer_db_weekly_bars_sorted(
@@ -669,7 +763,7 @@ def test_write_consumer_db_weekly_bars_sorted(
         sample_metrics_df,
         sample_tickers_df,
         db_path,
-        weekly_bars=sample_bars_df,
+        weekly_bars=_period_bars(sample_bars_df),
     )
     con = duckdb.connect(str(db_path), read_only=True)
     rows = con.execute("SELECT ticker, date FROM weekly_bars").fetchall()

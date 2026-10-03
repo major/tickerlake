@@ -9,6 +9,7 @@ import duckdb
 import polars as pl
 
 from tickerlake.extract import DAILY_AGGS_SCHEMA, TICKERS_SCHEMA
+from tickerlake.transform import PERIOD_AGGS_SCHEMA
 
 if TYPE_CHECKING:
     import datetime
@@ -23,7 +24,7 @@ _METRICS_SCHEMA = {
     "atr_14": pl.Float32,
     "atr_pct": pl.Float32,
     "adr_pct": pl.Float32,
-    "volume_sma_20": pl.Float32,
+    "volume_sma_20": pl.Float64,
 }
 
 
@@ -82,6 +83,8 @@ def write_raw_db(bars: pl.DataFrame, path: Path) -> None:
     with _tmp_parquet(bars) as tmp:
         con = duckdb.connect(str(path))
         try:
+            # Replacement creates types from parquet, so it also upgrades legacy
+            # schemas without narrowing current volume or transaction values.
             con.execute(f"CREATE OR REPLACE TABLE raw_daily_bars AS {_read_parquet_sql('ticker, date')}", [str(tmp)])
             con.execute("CHECKPOINT")
         finally:
@@ -93,7 +96,14 @@ def append_raw_db(new_bars: pl.DataFrame, path: Path) -> None:
     with _tmp_parquet(new_bars) as tmp:
         con = duckdb.connect(str(path))
         try:
-            con.execute(f"INSERT INTO raw_daily_bars {_read_parquet_sql('ticker, date')}", [str(tmp)])
+            con.execute("BEGIN TRANSACTION")
+            try:
+                _ensure_raw_numeric_types(con)
+                con.execute(f"INSERT INTO raw_daily_bars {_read_parquet_sql('ticker, date')}", [str(tmp)])
+                con.execute("COMMIT")
+            except Exception:
+                con.execute("ROLLBACK")
+                raise
             con.execute("CHECKPOINT")
         finally:
             con.close()
@@ -106,6 +116,7 @@ def replace_raw_dates(new_bars: pl.DataFrame, path: Path, dates_to_delete: set[d
         try:
             con.execute("BEGIN TRANSACTION")
             try:
+                _ensure_raw_numeric_types(con)
                 if dates_to_delete:
                     con.execute("DELETE FROM raw_daily_bars WHERE date IN ?", [sorted(dates_to_delete)])
                 con.execute(f"INSERT INTO raw_daily_bars {_read_parquet_sql('ticker, date')}", [str(tmp)])
@@ -131,6 +142,24 @@ def delete_raw_dates(path: Path, dates: set[datetime.date]) -> None:
         pass
     finally:
         con.close()
+
+
+def _ensure_raw_numeric_types(con: duckdb.DuckDBPyConnection) -> None:
+    """Widen legacy raw numeric columns before inserting canonical values.
+
+    Old raw databases stored volume as FLOAT and transactions as UINTEGER. Those
+    types cannot represent the current input contract. Casting old values into
+    the wider types preserves their stored value, although precision already
+    lost in FLOAT cannot be recovered.
+    """
+    try:
+        columns = {row[0]: row[1] for row in con.execute("DESCRIBE raw_daily_bars").fetchall()}
+    except duckdb.CatalogException:
+        return
+    if columns.get("volume") == "FLOAT":
+        con.execute("ALTER TABLE raw_daily_bars ALTER COLUMN volume TYPE DOUBLE")
+    if columns.get("transactions") == "UINTEGER":
+        con.execute("ALTER TABLE raw_daily_bars ALTER COLUMN transactions TYPE BIGINT")
 
 
 def read_raw_db(path: Path) -> pl.DataFrame:
@@ -181,11 +210,11 @@ def write_consumer_db(  # noqa: PLR0913 -- optional tables preserve the existing
     _validate_schema("daily_metrics", metrics, _METRICS_SCHEMA)
     _validate_schema("tickers", tickers, TICKERS_SCHEMA)
     if weekly_bars is not None:
-        _validate_schema("weekly_bars", weekly_bars, DAILY_AGGS_SCHEMA)
+        _validate_schema("weekly_bars", weekly_bars, PERIOD_AGGS_SCHEMA)
     if weekly_metrics is not None:
         _validate_schema("weekly_metrics", weekly_metrics, _METRICS_SCHEMA)
     if monthly_bars is not None:
-        _validate_schema("monthly_bars", monthly_bars, DAILY_AGGS_SCHEMA)
+        _validate_schema("monthly_bars", monthly_bars, PERIOD_AGGS_SCHEMA)
     if monthly_metrics is not None:
         _validate_schema("monthly_metrics", monthly_metrics, _METRICS_SCHEMA)
 
