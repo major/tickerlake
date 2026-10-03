@@ -32,4 +32,3 @@ CI runs lint, format-check, complexity, and test-cov separately. There is no con
 - Tests, including `make test`, `make test-cov`, and `make check`, must run in a temporary Podman container per user policy. Do not run them directly on the host.
 - Focused test example: `uv run pytest tests/test_transform.py -k test_name` (use the corresponding test file and selector).
 - `uv run ty check src/` is available as a separate check; it is not part of `make check` or CI's listed steps.
-- Ruff selects `E4`, `E7`, `E9`, `F`, and `I`; do not assume broader lint rules.
