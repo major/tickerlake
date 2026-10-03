@@ -177,6 +177,226 @@ def cached_backfill(tmp_path: Path, fake_massive_client: _FakeMassiveClient, api
     return dates, set_bars, run, bars, fake_massive_client
 
 
+@pytest.fixture
+def update_history(tmp_path: Path, fake_massive_client: _FakeMassiveClient, api_bar):
+    import duckdb
+
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    dates = [
+        datetime.date(2023, 12, day)
+        for day in (1, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 18, 19, 20, 21, 22, 26, 27, 28, 29)
+    ] + [datetime.date(2024, 1, day) for day in (2, 3, 4, 5, 8, 9)]
+
+    def set_bars(date: datetime.date, revision: int) -> None:
+        index = dates.index(date) if date in dates else 26 + (date.day - 10)
+        fake_massive_client.bars_by_date[date] = [
+            api_bar(date, "AAA", 100 + index + revision, 1000 + revision),
+            api_bar(date, "BBB", 200 + index + revision, 2000 + revision),
+        ]
+
+    for date in dates:
+        set_bars(date, 0)
+    fake_massive_client.tickers = [
+        _ApiTicker("AAA", "A", "CS", "XNAS", "0000000001", True),
+        _ApiTicker("BBB", "B", "CS", "XNYS", "0000000002", True),
+    ]
+
+    def run(end_date: datetime.date) -> None:
+        pipeline.update(
+            Config(
+                api_key="test_key",
+                output_dir=tmp_path,
+                start_date=dates[0],
+                end_date=end_date,
+            )
+        )
+
+    def backfill(end_date: datetime.date) -> None:
+        pipeline.backfill(
+            Config(
+                api_key="test_key",
+                output_dir=tmp_path,
+                start_date=dates[0],
+                end_date=end_date,
+            )
+        )
+
+    def rows(filename: str, query: str) -> list[tuple]:
+        connection = duckdb.connect(str(tmp_path / filename), read_only=True)
+        try:
+            return connection.execute(query).fetchall()
+        finally:
+            connection.close()
+
+    return dates, set_bars, run, backfill, rows, fake_massive_client
+
+
+def test_update_refreshes_recent_bars_and_rebuilds_split_adjusted_history(update_history):
+    dates, set_bars, run, _, rows, client = update_history
+    client.bars_by_date[dates[1]] = []
+    run(dates[-1])
+    client.requested_dates.clear()
+
+    for date in dates[:-5]:
+        set_bars(date, 99)
+    for date in dates[-5:]:
+        set_bars(date, 10)
+    new_dates = [datetime.date(2024, 1, 10), datetime.date(2024, 1, 11)]
+    for date in new_dates:
+        set_bars(date, 20)
+    client.splits = [_ApiSplit("AAA", "2024-01-02", 1, 4, 0.25, "forward")]
+    run(new_dates[-1])
+
+    expected_raw = []
+    for index, date in enumerate(dates):
+        if date == dates[1]:
+            continue
+        revision = 10 if date in dates[-5:] else 0
+        expected_raw.extend(
+            [
+                (date, "AAA", float(100 + index + revision), float(1000 + revision)),
+                (date, "BBB", float(200 + index + revision), float(2000 + revision)),
+            ]
+        )
+    for index, date in enumerate(new_dates, start=26):
+        expected_raw.extend(
+            [(date, "AAA", float(100 + index + 20), 1020.0), (date, "BBB", float(200 + index + 20), 2020.0)]
+        )
+    assert (
+        rows("raw.duckdb", "SELECT date, ticker, close, volume FROM raw_daily_bars ORDER BY date, ticker")
+        == expected_raw
+    )
+    assert rows("raw.duckdb", "SELECT ticker, execution_date, adjustment_factor FROM splits") == [
+        ("AAA", datetime.date(2024, 1, 2), 0.25)
+    ]
+
+    daily = rows("tickerlake.duckdb", "SELECT date, ticker, close, volume FROM daily_bars ORDER BY date, ticker")
+    expected_daily = []
+    for date, ticker, close, volume in expected_raw:
+        if ticker == "AAA" and date < datetime.date(2024, 1, 2):
+            close /= 4
+            volume *= 4
+        expected_daily.append((date, ticker, close, volume))
+    assert daily == expected_daily
+    assert len({(date, ticker) for date, ticker, _, _ in daily}) == len(daily)
+    assert set(client.requested_dates) == set(dates[-5:]) | set(new_dates)
+
+    assert rows(
+        "tickerlake.duckdb",
+        "SELECT sma_20, atr_14, volume_sma_20 FROM daily_metrics WHERE ticker = 'AAA' ORDER BY date DESC LIMIT 1",
+    ) == [(pytest.approx(70.925), pytest.approx(10.3035717), 2804.5)]
+    assert rows(
+        "tickerlake.duckdb",
+        "SELECT date, ticker, open, high, low, close, volume FROM weekly_bars "
+        "WHERE date = DATE '2024-01-08' ORDER BY ticker",
+    ) == [
+        (datetime.date(2024, 1, 8), "AAA", 134.0, 149.0, 132.0, 147.0, 4060.0),
+        (datetime.date(2024, 1, 8), "BBB", 234.0, 249.0, 232.0, 247.0, 8060.0),
+    ]
+    assert rows(
+        "tickerlake.duckdb",
+        "SELECT date, ticker, close, volume FROM monthly_bars WHERE date = DATE '2024-01-11' ORDER BY ticker",
+    ) == [
+        (datetime.date(2024, 1, 11), "AAA", 147.0, 8090.0),
+        (datetime.date(2024, 1, 11), "BBB", 247.0, 16090.0),
+    ]
+    assert rows(
+        "tickerlake.duckdb",
+        "SELECT date, ticker FROM weekly_metrics WHERE date = DATE '2024-01-08' ORDER BY ticker",
+    ) == [(datetime.date(2024, 1, 8), "AAA"), (datetime.date(2024, 1, 8), "BBB")]
+    assert rows(
+        "tickerlake.duckdb",
+        "SELECT date, ticker FROM monthly_metrics WHERE date = DATE '2024-01-11' ORDER BY ticker",
+    ) == [(datetime.date(2024, 1, 11), "AAA"), (datetime.date(2024, 1, 11), "BBB")]
+
+
+@pytest.mark.parametrize("empty_raw_table", [False, True])
+def test_update_backfills_when_raw_database_is_missing_or_empty(
+    tmp_path: Path, fake_massive_client: _FakeMassiveClient, api_bar, empty_raw_table: bool
+):
+    import duckdb
+
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    dates = [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)]
+    fake_massive_client.bars_by_date = {
+        date: [api_bar(date, "AAA", 100 + index, 1000)] for index, date in enumerate(dates)
+    }
+    fake_massive_client.tickers = [_ApiTicker("AAA", "A", "CS", "XNAS", "0000000001", True)]
+    raw_path = tmp_path / "raw.duckdb"
+    if empty_raw_table:
+        from tickerlake.extract import DAILY_AGGS_SCHEMA
+        from tickerlake.load import write_raw_db
+
+        write_raw_db(pl.DataFrame(schema=DAILY_AGGS_SCHEMA), raw_path)
+
+    pipeline.update(Config(api_key="test_key", output_dir=tmp_path, start_date=dates[0], end_date=dates[-1]))
+
+    connection = duckdb.connect(str(raw_path), read_only=True)
+    try:
+        assert connection.execute("SELECT date, ticker, close FROM raw_daily_bars ORDER BY date").fetchall() == [
+            (dates[0], "AAA", 100.0),
+            (dates[1], "AAA", 101.0),
+        ]
+    finally:
+        connection.close()
+    assert set(fake_massive_client.requested_dates) == set(dates)
+
+    fake_massive_client.requested_dates.clear()
+    fake_massive_client.bars_by_date = {
+        date: [api_bar(date, "AAA", 110 + index, 1010)] for index, date in enumerate(dates)
+    }
+    pipeline.update(Config(api_key="test_key", output_dir=tmp_path, start_date=dates[0], end_date=dates[-1]))
+
+    connection = duckdb.connect(str(raw_path), read_only=True)
+    try:
+        assert connection.execute("SELECT date, ticker, close FROM raw_daily_bars ORDER BY date").fetchall() == [
+            (dates[0], "AAA", 110.0),
+            (dates[1], "AAA", 111.0),
+        ]
+    finally:
+        connection.close()
+    assert set(fake_massive_client.requested_dates) == set(dates)
+
+
+@pytest.mark.parametrize("command", ["backfill", "update"])
+def test_api_commands_require_key_before_files_or_api_calls(
+    tmp_path: Path, fake_massive_client: _FakeMassiveClient, monkeypatch, command: str
+):
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+    config = Config(api_key="", output_dir=tmp_path)
+
+    with pytest.raises(ValueError, match="MASSIVE_API_KEY"):
+        getattr(pipeline, command)(config)
+
+    assert list(tmp_path.iterdir()) == []
+    assert fake_massive_client.calls == []
+
+
+def test_update_does_not_fill_an_older_gap_until_backfill(update_history):
+    """Characterize a current update limitation, not a desired guarantee."""
+    dates, set_bars, run, backfill, rows, client = update_history
+    gap = dates[5]
+    client.bars_by_date[gap] = []
+    run(dates[-1])
+
+    assert rows("raw.duckdb", "SELECT COUNT(*) FROM raw_daily_bars WHERE date = DATE '2023-12-08'") == [(0,)]
+    set_bars(gap, 0)
+    client.requested_dates.clear()
+    run(datetime.date(2024, 1, 10))
+    assert rows("raw.duckdb", "SELECT COUNT(*) FROM raw_daily_bars WHERE date = DATE '2023-12-08'") == [(0,)]
+    assert gap not in client.requested_dates
+
+    backfill(datetime.date(2024, 1, 10))
+    assert rows("raw.duckdb", "SELECT COUNT(*) FROM raw_daily_bars WHERE date = DATE '2023-12-08'") == [(2,)]
+
+
 def test_backfill_refreshes_five_cached_sessions_and_preserves_other_dates(cached_backfill):
     dates, set_bars, run, bars, client = cached_backfill
     start = datetime.date(2024, 1, 2)
@@ -200,7 +420,7 @@ def test_backfill_refreshes_five_cached_sessions_and_preserves_other_dates(cache
             [(date, "AAA", 100.0 + revision, 1000.0 + revision), (date, "BBB", 200.0 + revision, 2000.0 + revision)]
         )
     assert state == expected
-    assert client.requested_dates == dates[2:7] + [new_date]
+    assert set(client.requested_dates) == set(dates[2:7]) | {new_date}
     assert len({(date, ticker) for date, ticker, _, _ in state}) == len(state)
 
 
@@ -245,7 +465,7 @@ def test_backfill_does_not_delete_cached_dates_when_all_refreshes_fail(cached_ba
     expected.extend([(new_date, "AAA", 120.0, 1020.0), (new_date, "BBB", 220.0, 2020.0)])
     expected.sort(key=lambda row: (row[0], row[1]))
     assert bars() == expected
-    assert client.requested_dates == cached_refresh_dates + [new_date]
+    assert set(client.requested_dates) == set(cached_refresh_dates) | {new_date}
 
 
 def test_backfill_refreshes_all_cached_dates_when_fewer_than_five_exist(cached_backfill):
@@ -258,7 +478,7 @@ def test_backfill_refreshes_all_cached_dates_when_fewer_than_five_exist(cached_b
 
     run(three_dates[0], three_dates[-1])
 
-    assert client.requested_dates == three_dates
+    assert set(client.requested_dates) == set(three_dates)
     assert bars() == [
         (date, ticker, close, volume)
         for date in three_dates
@@ -598,227 +818,6 @@ def test_backfill_no_trading_days(pipeline_mocks, tmp_path):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def test_update_delegates_to_backfill(pipeline_mocks, tmp_path, sample_frames):
-    """Update delegates to _run_backfill when raw.duckdb exists with data."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    trading_days = [
-        datetime.date(2024, 1, 2),
-        datetime.date(2024, 1, 3),
-        datetime.date(2024, 1, 4),
-        datetime.date(2024, 1, 5),
-        datetime.date(2024, 1, 8),
-    ]
-    pipeline_mocks["get_existing_dates"].return_value = set(trading_days)
-    pipeline_mocks["get_trading_days"].return_value = trading_days
-
-    (tmp_path / "raw.duckdb").touch()
-    update(_make_config(tmp_path))
-
-    # Should call extract_daily_aggs (via _run_backfill)
-    pipeline_mocks["extract_daily_aggs"].assert_called_once()
-
-
-def test_update_refetches_revision_window(pipeline_mocks, tmp_path, sample_frames):
-    """Update re-fetches the trailing _REVISION_WINDOW_DAYS cached dates."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    trading_days = [
-        datetime.date(2024, 1, 2),
-        datetime.date(2024, 1, 3),
-        datetime.date(2024, 1, 4),
-        datetime.date(2024, 1, 5),
-        datetime.date(2024, 1, 8),
-        datetime.date(2024, 1, 9),
-    ]
-    pipeline_mocks["get_existing_dates"].return_value = set(trading_days)
-    pipeline_mocks["get_trading_days"].return_value = trading_days
-
-    (tmp_path / "raw.duckdb").touch()
-    update(_make_config(tmp_path))
-
-    # Should call get_trading_days with the start of the revision window
-    # (min of last 5 cached dates = 2024-01-03)
-    call_args = pipeline_mocks["get_trading_days"].call_args
-    assert call_args[0][0] == datetime.date(2024, 1, 3)
-
-
-def test_update_deletes_and_refetches_revision_window(pipeline_mocks, tmp_path, sample_frames):
-    """Update deletes and re-fetches the trailing revision window dates."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    trading_days = [
-        datetime.date(2024, 1, 2),
-        datetime.date(2024, 1, 3),
-        datetime.date(2024, 1, 4),
-        datetime.date(2024, 1, 5),
-        datetime.date(2024, 1, 8),
-    ]
-    pipeline_mocks["get_existing_dates"].return_value = set(trading_days)
-    pipeline_mocks["get_trading_days"].return_value = trading_days
-    # Mock extract_daily_aggs to return bars with all the trading days
-    pipeline_mocks["extract_daily_aggs"].return_value = sample_bars
-
-    (tmp_path / "raw.duckdb").touch()
-    config = _make_config(tmp_path)
-    update(config)
-
-    # Should call delete_raw_dates with the revision window dates that are in
-    # the fetched data
-    pipeline_mocks["delete_raw_dates"].assert_called_once_with(
-        config.output_dir / "raw.duckdb", {datetime.date(2024, 1, 2)}
-    )
-    # Should call append_raw_db
-    pipeline_mocks["append_raw_db"].assert_called_once()
-    assert pipeline_mocks["append_raw_db"].call_args[0][1] == config.output_dir / "raw.duckdb"
-
-
-def test_update_empty_raw_db_falls_back_to_backfill(pipeline_mocks, tmp_path, sample_frames):
-    """If raw.duckdb exists but is empty, update falls back to backfill."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    pipeline_mocks["get_existing_dates"].return_value = set()
-
-    (tmp_path / "raw.duckdb").touch()
-    update(_make_config(tmp_path))
-
-    # Should call write_raw_db (backfill path)
-    pipeline_mocks["write_raw_db"].assert_called_once()
-
-
-def test_update_falls_back_to_backfill(
-    pipeline_mocks,
-    tmp_path,
-    sample_frames,
-):
-    """If raw.duckdb doesn't exist, update falls back to backfill logic."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    update(_make_config(tmp_path))
-
-    pipeline_mocks["write_raw_db"].assert_called_once()
-
-
-def test_update_fewer_than_window_refetches_all(pipeline_mocks, tmp_path, sample_frames):
-    """Update with fewer than _REVISION_WINDOW_DAYS cached dates refetches all."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    # Only 2 cached dates (less than 5)
-    cached_dates = {datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)}
-    pipeline_mocks["get_existing_dates"].return_value = cached_dates
-    pipeline_mocks["get_trading_days"].return_value = list(cached_dates)
-    pipeline_mocks["extract_daily_aggs"].return_value = sample_bars
-
-    (tmp_path / "raw.duckdb").touch()
-    update(_make_config(tmp_path))
-
-    # Should call get_trading_days with the min of all cached dates
-    call_args = pipeline_mocks["get_trading_days"].call_args
-    assert call_args[0][0] == datetime.date(2024, 1, 2)
-
-
-def test_update_api_failure_does_not_delete(pipeline_mocks, tmp_path, sample_frames):
-    """Update does NOT delete dates if API fails to return them."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    trading_days = [
-        datetime.date(2024, 1, 2),
-        datetime.date(2024, 1, 3),
-        datetime.date(2024, 1, 4),
-        datetime.date(2024, 1, 5),
-        datetime.date(2024, 1, 8),
-    ]
-    pipeline_mocks["get_existing_dates"].return_value = set(trading_days)
-    pipeline_mocks["get_trading_days"].return_value = trading_days
-
-    # Build a bars DataFrame spanning the revision window dates, but deliberately
-    # omit 2024-01-05 to simulate API failure for that date
-    partial_bars = pl.DataFrame(
-        {
-            "date": [
-                datetime.date(2024, 1, 2),
-                datetime.date(2024, 1, 2),
-                datetime.date(2024, 1, 3),
-                datetime.date(2024, 1, 3),
-                datetime.date(2024, 1, 4),
-                datetime.date(2024, 1, 4),
-                datetime.date(2024, 1, 8),
-                datetime.date(2024, 1, 8),
-            ],
-            "ticker": ["AAPL", "MSFT", "AAPL", "MSFT", "AAPL", "MSFT", "AAPL", "MSFT"],
-            "open": [150.0, 380.0, 151.0, 381.0, 152.0, 382.0, 155.0, 385.0],
-            "high": [152.0, 382.0, 153.0, 383.0, 154.0, 384.0, 157.0, 387.0],
-            "low": [149.0, 379.0, 150.0, 380.0, 151.0, 381.0, 154.0, 384.0],
-            "close": [151.5, 381.5, 152.5, 382.5, 153.5, 383.5, 156.5, 386.5],
-            "volume": [
-                1_000_000.0,
-                1_200_000.0,
-                1_100_000.0,
-                1_300_000.0,
-                1_050_000.0,
-                1_250_000.0,
-                1_075_000.0,
-                1_275_000.0,
-            ],
-            "vwap": [151.2, 381.2, 152.2, 382.2, 153.2, 383.2, 156.2, 386.2],
-            "transactions": [5000, 6000, 5500, 6500, 5250, 6250, 5375, 6375],
-        }
-    ).cast(
-        {
-            "date": pl.Date,
-            "open": pl.Float32,
-            "high": pl.Float32,
-            "low": pl.Float32,
-            "close": pl.Float32,
-            "volume": pl.Float32,
-            "vwap": pl.Float32,
-            "transactions": pl.UInt32,
-        }
-    )
-    pipeline_mocks["extract_daily_aggs"].return_value = partial_bars
-
-    (tmp_path / "raw.duckdb").touch()
-    update(_make_config(tmp_path))
-
-    # delete_raw_dates should be called with only the dates that are both in the
-    # fetched data AND already cached (i.e., all dates except 2024-01-05)
-    pipeline_mocks["delete_raw_dates"].assert_called_once_with(
-        tmp_path / "raw.duckdb",
-        {
-            datetime.date(2024, 1, 2),
-            datetime.date(2024, 1, 3),
-            datetime.date(2024, 1, 4),
-            datetime.date(2024, 1, 8),
-        },
-    )
-
-
-def test_update_calls_extract_splits_with_config_dates(pipeline_mocks, tmp_path, sample_frames):
-    """Update calls extract_splits with config dates, not narrowed bars_start."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    trading_days = [
-        datetime.date(2024, 1, 2),
-        datetime.date(2024, 1, 3),
-        datetime.date(2024, 1, 4),
-        datetime.date(2024, 1, 5),
-        datetime.date(2024, 1, 8),
-    ]
-    pipeline_mocks["get_existing_dates"].return_value = set(trading_days)
-    pipeline_mocks["get_trading_days"].return_value = trading_days
-    pipeline_mocks["extract_daily_aggs"].return_value = sample_bars
-
-    (tmp_path / "raw.duckdb").touch()
-    config = _make_config(tmp_path)
-    update(config)
-
-    # extract_splits should be called with config.start_date and config.end_date
-    # (signature: extract_splits(client, start_date, end_date))
-    call_args = pipeline_mocks["extract_splits"].call_args
-    assert call_args[0][1] == config.start_date
-    assert call_args[0][2] == config.end_date
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Info
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1086,58 +1085,6 @@ def test_compact_missing_raw_db(pipeline_mocks, tmp_path, caplog):
         compact(config)
 
     assert "No raw.duckdb found" in caplog.text
-
-
-def test_update_calls_aggregate_to_weekly(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
-    """Update calls aggregate_to_weekly with filtered bars."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    (tmp_path / "raw.duckdb").touch()
-    update(_make_config(tmp_path))
-
-    pipeline_mocks["aggregate_to_weekly"].assert_called_once()
-    pipeline_mocks["aggregate_to_monthly"].assert_called_once()
-
-
-def test_update_passes_weekly_to_consumer_db(
-    pipeline_mocks,
-    tmp_path,
-    sample_frames,
-):
-    """Update passes weekly bars and metrics to write_consumer_db."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(
-        pipeline_mocks,
-        sample_bars,
-        sample_splits,
-        sample_tickers,
-        sample_metrics,
-    )
-    (tmp_path / "raw.duckdb").touch()
-    update(_make_config(tmp_path))
-
-    call_kwargs = pipeline_mocks["write_consumer_db"].call_args.kwargs
-    assert "weekly_bars" in call_kwargs
-    assert "weekly_metrics" in call_kwargs
-    assert "monthly_bars" in call_kwargs
-    assert "monthly_metrics" in call_kwargs
-
-
-def test_update_persists_splits(
-    pipeline_mocks,
-    tmp_path,
-    sample_frames,
-):
-    """Update calls write_splits with extracted splits and raw.duckdb path."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    (tmp_path / "raw.duckdb").touch()
-    config = _make_config(tmp_path)
-    update(config)
-
-    pipeline_mocks["write_splits"].assert_called_once_with(sample_splits, config.output_dir / "raw.duckdb")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
