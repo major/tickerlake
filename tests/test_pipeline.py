@@ -70,9 +70,14 @@ class _FakeMassiveClient:
         self.splits: list[_ApiSplit] = []
         self.tickers: list[_ApiTicker] = []
         self.calls: list[str] = []
+        self.requested_dates: list[datetime.date] = []
+        self.failed_dates: set[datetime.date] = set()
 
     def fetch_daily_aggs(self, date: datetime.date) -> list[_ApiBar]:
         self.calls.append("bars")
+        self.requested_dates.append(date)
+        if date in self.failed_dates:
+            raise RuntimeError("simulated network failure")
         return self.bars_by_date.get(date, [])
 
     def fetch_splits(self, start_date: datetime.date, end_date: datetime.date) -> list[_ApiSplit]:
@@ -124,6 +129,141 @@ def api_bar():
         )
 
     return build
+
+
+@pytest.fixture
+def cached_backfill(tmp_path: Path, fake_massive_client: _FakeMassiveClient, api_bar):
+    import duckdb
+
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    dates = [
+        datetime.date(2023, 12, 29),
+        datetime.date(2024, 1, 2),
+        datetime.date(2024, 1, 3),
+        datetime.date(2024, 1, 4),
+        datetime.date(2024, 1, 5),
+        datetime.date(2024, 1, 8),
+        datetime.date(2024, 1, 9),
+        datetime.date(2024, 1, 12),
+    ]
+
+    def set_bars(date: datetime.date, revision: int) -> None:
+        fake_massive_client.bars_by_date[date] = [
+            api_bar(date, "AAA", 100 + revision, 1000 + revision),
+            api_bar(date, "BBB", 200 + revision, 2000 + revision),
+        ]
+
+    for date in dates:
+        set_bars(date, 0)
+    fake_massive_client.tickers = [
+        _ApiTicker("AAA", "A", "CS", "XNAS", "0000000001", True),
+        _ApiTicker("BBB", "B", "CS", "XNYS", "0000000002", True),
+    ]
+
+    def run(start_date: datetime.date, end_date: datetime.date) -> None:
+        pipeline.backfill(Config(api_key="test_key", output_dir=tmp_path, start_date=start_date, end_date=end_date))
+
+    def bars() -> list[tuple]:
+        connection = duckdb.connect(str(tmp_path / "raw.duckdb"), read_only=True)
+        try:
+            return connection.execute(
+                "SELECT date, ticker, close, volume FROM raw_daily_bars ORDER BY date, ticker"
+            ).fetchall()
+        finally:
+            connection.close()
+
+    return dates, set_bars, run, bars, fake_massive_client
+
+
+def test_backfill_refreshes_five_cached_sessions_and_preserves_other_dates(cached_backfill):
+    dates, set_bars, run, bars, client = cached_backfill
+    start = datetime.date(2024, 1, 2)
+    end = datetime.date(2024, 1, 10)
+    run(dates[0], dates[-1])
+    client.requested_dates.clear()
+
+    for date in dates[2:7]:
+        set_bars(date, 10)
+    new_date = datetime.date(2024, 1, 10)
+    set_bars(new_date, 20)
+    run(start, end)
+
+    state = bars()
+    expected = []
+    for date in (dates[0], dates[1], *dates[2:7], new_date, dates[7]):
+        revision = 0 if date in (dates[0], dates[1], dates[7]) else 10
+        if date == new_date:
+            revision = 20
+        expected.extend(
+            [(date, "AAA", 100.0 + revision, 1000.0 + revision), (date, "BBB", 200.0 + revision, 2000.0 + revision)]
+        )
+    assert state == expected
+    assert client.requested_dates == dates[2:7] + [new_date]
+    assert len({(date, ticker) for date, ticker, _, _ in state}) == len(state)
+
+
+def test_backfill_keeps_failed_or_empty_refreshes_and_updates_successful_dates(cached_backfill):
+    dates, set_bars, run, bars, client = cached_backfill
+    run(dates[0], dates[-1])
+    client.requested_dates.clear()
+
+    for date in dates[2:7]:
+        set_bars(date, 10)
+    client.failed_dates.add(dates[2])
+    client.bars_by_date[dates[3]] = []
+    new_date = datetime.date(2024, 1, 10)
+    set_bars(new_date, 20)
+    run(datetime.date(2024, 1, 2), new_date)
+
+    state = bars()
+    by_date_ticker = {(date, ticker): (close, volume) for date, ticker, close, volume in state}
+    assert by_date_ticker[(dates[2], "AAA")] == (100.0, 1000.0)
+    assert by_date_ticker[(dates[3], "BBB")] == (200.0, 2000.0)
+    for date in (dates[4], dates[5], dates[6]):
+        assert by_date_ticker[(date, "AAA")] == (110.0, 1010.0)
+        assert by_date_ticker[(date, "BBB")] == (210.0, 2010.0)
+    assert by_date_ticker[(new_date, "AAA")] == (120.0, 1020.0)
+    assert by_date_ticker[(new_date, "BBB")] == (220.0, 2020.0)
+    assert len({(date, ticker) for date, ticker, _, _ in state}) == len(state)
+
+
+def test_backfill_does_not_delete_cached_dates_when_all_refreshes_fail(cached_backfill):
+    dates, set_bars, run, bars, client = cached_backfill
+    run(dates[0], dates[-1])
+    original = bars()
+    client.requested_dates.clear()
+
+    cached_refresh_dates = dates[2:7]
+    client.failed_dates.update(cached_refresh_dates)
+    new_date = datetime.date(2024, 1, 10)
+    set_bars(new_date, 20)
+    run(datetime.date(2024, 1, 2), new_date)
+
+    expected = original.copy()
+    expected.extend([(new_date, "AAA", 120.0, 1020.0), (new_date, "BBB", 220.0, 2020.0)])
+    expected.sort(key=lambda row: (row[0], row[1]))
+    assert bars() == expected
+    assert client.requested_dates == cached_refresh_dates + [new_date]
+
+
+def test_backfill_refreshes_all_cached_dates_when_fewer_than_five_exist(cached_backfill):
+    dates, set_bars, run, bars, client = cached_backfill
+    three_dates = dates[1:4]
+    run(three_dates[0], three_dates[-1])
+    client.requested_dates.clear()
+    for date in three_dates:
+        set_bars(date, 10)
+
+    run(three_dates[0], three_dates[-1])
+
+    assert client.requested_dates == three_dates
+    assert bars() == [
+        (date, ticker, close, volume)
+        for date in three_dates
+        for ticker, close, volume in (("AAA", 110.0, 1010.0), ("BBB", 210.0, 2010.0))
+    ]
 
 
 @pytest.fixture
@@ -451,103 +591,6 @@ def test_backfill_no_trading_days(pipeline_mocks, tmp_path):
     pipeline_mocks["extract_daily_aggs"].assert_not_called()
     pipeline_mocks["extract_splits"].assert_not_called()
     pipeline_mocks["extract_tickers"].assert_not_called()
-
-
-def test_backfill_skips_cached_dates(pipeline_mocks, tmp_path, sample_frames):
-    """Backfill refetches the latest cached day and any missing dates in range."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    pipeline_mocks["get_trading_days"].return_value = [
-        datetime.date(2024, 1, 2),
-        datetime.date(2024, 1, 3),
-    ]
-    pipeline_mocks["get_existing_dates"].return_value = {datetime.date(2024, 1, 2)}
-    # Mock extract_daily_aggs to return bars with both dates
-    pipeline_mocks["extract_daily_aggs"].return_value = sample_bars
-
-    backfill(_make_config(tmp_path))
-
-    call_args = pipeline_mocks["extract_daily_aggs"].call_args
-    assert call_args[0][1] == [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)]
-    # delete_raw_dates should be called with the intersection of fetched_dates
-    # and existing_dates
-    pipeline_mocks["delete_raw_dates"].assert_called_once_with(tmp_path / "raw.duckdb", {datetime.date(2024, 1, 2)})
-    pipeline_mocks["append_raw_db"].assert_called_once()
-    pipeline_mocks["write_raw_db"].assert_not_called()
-
-
-def test_backfill_refetches_latest_five_cached_days(pipeline_mocks, tmp_path, sample_frames):
-    """Backfill drops and refetches the latest five cached trading days."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    trading_days = [
-        datetime.date(2024, 1, 2),
-        datetime.date(2024, 1, 3),
-        datetime.date(2024, 1, 4),
-        datetime.date(2024, 1, 5),
-        datetime.date(2024, 1, 8),
-        datetime.date(2024, 1, 9),
-    ]
-    pipeline_mocks["get_trading_days"].return_value = trading_days
-    pipeline_mocks["get_existing_dates"].return_value = set(trading_days)
-    # Mock extract_daily_aggs to return bars with dates in the refresh window
-    # (last 5 trading days: 2024-01-03 through 2024-01-09)
-    bars_with_refresh_dates = sample_bars.with_columns(pl.lit(datetime.date(2024, 1, 3)).alias("date"))
-    pipeline_mocks["extract_daily_aggs"].return_value = bars_with_refresh_dates
-
-    backfill(_make_config(tmp_path))
-
-    # delete_raw_dates should be called with dates that are in both fetched_dates
-    # and existing_dates
-    pipeline_mocks["delete_raw_dates"].assert_called_once_with(tmp_path / "raw.duckdb", {datetime.date(2024, 1, 3)})
-    pipeline_mocks["extract_daily_aggs"].assert_called_once()
-    assert pipeline_mocks["extract_daily_aggs"].call_args[0][1] == trading_days[-5:]
-    pipeline_mocks["write_raw_db"].assert_not_called()
-    pipeline_mocks["append_raw_db"].assert_called_once()
-    pipeline_mocks["read_raw_db"].assert_called_once()
-    pipeline_mocks["write_consumer_db"].assert_called_once()
-
-
-def test_backfill_cached_count_only_uses_requested_range(
-    pipeline_mocks,
-    tmp_path,
-    sample_frames,
-    caplog,
-):
-    """Backfill logs cached counts using only trading days in the requested range."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    trading_days = [
-        datetime.date(2024, 1, 2),
-        datetime.date(2024, 1, 3),
-        datetime.date(2024, 1, 4),
-    ]
-    pipeline_mocks["get_trading_days"].return_value = trading_days
-    pipeline_mocks["get_existing_dates"].return_value = {
-        datetime.date(2023, 12, 29),
-        *trading_days,
-        datetime.date(2024, 2, 1),
-    }
-
-    with caplog.at_level("INFO"):
-        backfill(_make_config(tmp_path))
-
-    # Cached count should be 3 (intersection of existing and requested).
-    # Fetch count should be 3 (all of them are in the refresh window since there
-    # are only 3 total).
-    assert "Backfill: 2024-01-01 to 2024-01-31 (3 trading days, 3 cached, 3 to fetch)" in caplog.text
-
-
-def test_backfill_no_cache(pipeline_mocks, tmp_path, sample_frames):
-    """Backfill fetches all dates and calls write_raw_db when no cache exists."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-
-    backfill(_make_config(tmp_path))
-
-    pipeline_mocks["extract_daily_aggs"].assert_called_once()
-    pipeline_mocks["write_raw_db"].assert_called_once()
-    pipeline_mocks["append_raw_db"].assert_not_called()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1008,40 +1051,6 @@ def test_verify_split_adjustment_early_exit_at_sample_size():
 
     # Should verify exactly _SPOT_CHECK_SAMPLE_SIZE tickers and exit early
     _verify_split_adjustment(raw, adjusted, splits)
-
-
-def test_backfill_refetches_cached_date_in_revision_window(
-    pipeline_mocks,
-    tmp_path,
-    sample_frames,
-):
-    """Backfill re-fetches a cached date that falls inside the revision window."""
-    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
-    _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
-    # Single trading day, already cached. With only one cached date, the
-    # trailing revision window (_REVISION_WINDOW_DAYS) always includes it,
-    # so fetch_dates is non-empty even though nothing is "missing".
-    trading_day = datetime.date(2024, 1, 2)
-    pipeline_mocks["get_trading_days"].return_value = [trading_day]
-    pipeline_mocks["get_existing_dates"].return_value = {trading_day}
-    pipeline_mocks["extract_daily_aggs"].return_value = pl.DataFrame(
-        schema={
-            "date": pl.Date,
-            "ticker": pl.Utf8,
-            "open": pl.Float32,
-            "high": pl.Float32,
-            "low": pl.Float32,
-            "close": pl.Float32,
-            "volume": pl.Float32,
-            "vwap": pl.Float32,
-            "transactions": pl.UInt32,
-        }
-    )
-
-    backfill(_make_config(tmp_path))
-
-    # The revision window forces a re-fetch of the single cached date.
-    pipeline_mocks["extract_daily_aggs"].assert_called_once()
 
 
 def test_compact_logs_before_and_after_sizes(
