@@ -35,6 +35,11 @@ dev = [
     "vulture>=2.15",
 ]
 
+[tool.mutmut]
+source_paths = ["src/tickerlake"]
+pytest_add_cli_args = ["-o", "addopts="]
+pytest_add_cli_args_test_selection = ["tests/"]
+
 [tool.ruff]
 line-length = 120
 src = [

@@ -21,7 +21,7 @@ sync:
 	uv run tickerlake sync --verbose
 
 mutmut:
-	uv run mutmut run
+	uv run mutmut run --max-children 2
 
 mutmut-results:
 	uv run mutmut results
