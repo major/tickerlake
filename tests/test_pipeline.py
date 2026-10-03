@@ -874,23 +874,34 @@ def test_info_reports_persisted_database_contents(
 ) -> None:
     """Info reports counts and date ranges from real persisted databases."""
     first = datetime.date(2024, 1, 2)
-    last = datetime.date(2024, 1, 3)
+    middle = datetime.date(2024, 1, 3)
+    last = datetime.date(2024, 1, 4)
     fake_massive_client.bars_by_date = {
-        first: [api_bar(first, "AAA", 10.0, 100)],
-        last: [api_bar(last, "AAA", 11.0, 100)],
+        first: [api_bar(first, "AAA", 10.0, 100), api_bar(first, "UNKNOWN", 20.0, 200)],
+        middle: [],
+        last: [api_bar(last, "AAA", 11.0, 100), api_bar(last, "BBB", 30.0, 300)],
     }
-    fake_massive_client.tickers = [_ApiTicker("AAA", "Example Co", "CS", "XNAS", "0000000001", True)]
+    fake_massive_client.tickers = [
+        _ApiTicker("AAA", "Example Co", "CS", "XNAS", "0000000001", True),
+        _ApiTicker("BBB", "Second Co", "CS", "XNYS", "0000000002", True),
+    ]
     config = Config(api_key="test_key", output_dir=tmp_path, start_date=first, end_date=last)
     pipeline.backfill(config)
 
+    caplog.clear()
     with caplog.at_level(logging.INFO):
         pipeline.info(config)
 
-    assert "raw.duckdb" in caplog.text
-    assert "tickerlake.duckdb" in caplog.text
-    assert "raw_daily_bars" in caplog.text
-    assert "daily_bars" in caplog.text
-    assert "  daily_bars: 2 rows" in caplog.text
+    messages = [record.getMessage() for record in caplog.records]
+    raw_section = messages.index(f"raw.duckdb: {tmp_path / 'raw.duckdb'}")
+    consumer_section = messages.index(f"tickerlake.duckdb: {tmp_path / 'tickerlake.duckdb'}")
+    assert raw_section < consumer_section
+    raw_messages = [message.strip() for message in messages[raw_section + 1 : consumer_section]]
+    raw_bars_index = raw_messages.index("raw_daily_bars: 4 rows")
+    assert raw_messages[raw_bars_index + 1] == f"dates: {first} to {last}"
+    consumer_messages = [message.strip() for message in messages[consumer_section + 1 :]]
+    daily_bars_index = consumer_messages.index("daily_bars: 3 rows")
+    assert consumer_messages[daily_bars_index + 1] == f"dates: {first} to {last}"
 
 
 def test_compact_preserves_raw_bars(tmp_path: Path, fake_massive_client: _FakeMassiveClient, api_bar) -> None:
