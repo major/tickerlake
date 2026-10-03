@@ -1,268 +1,198 @@
-"""Tests for the tickerlake CLI."""
+"""Tests for tickerlake's command-line entry point: parsing and dispatch."""
 
 import datetime
-from unittest.mock import patch
+import logging
+from pathlib import Path
 
 import pytest
 
-from tickerlake import main
+from tickerlake import main, pipeline
 from tickerlake.config import Config
 
-
-class TestHelpAndSubcommands:
-    """Test help output and subcommand discovery."""
-
-    def test_help_shows_subcommands(self, monkeypatch):
-        """Verify --help output contains all three subcommands."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        monkeypatch.setattr("sys.argv", ["tickerlake", "--help"])
-        with pytest.raises(SystemExit) as exc_info:
-            main()
-        assert exc_info.value.code == 0
-
-    def test_no_subcommand_shows_error(self, monkeypatch, capsys):
-        """Verify running with no subcommand exits with error."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        monkeypatch.setattr("sys.argv", ["tickerlake"])
-        with pytest.raises(SystemExit) as exc_info:
-            main()
-        assert exc_info.value.code != 0
+# argparse exits with this code for usage errors (unknown/missing arguments).
+_USAGE_ERROR_EXIT_CODE = 2
 
 
-class TestBackfillSubcommand:
-    """Test backfill subcommand and its options."""
+class _RecordingPipeline:
+    """In-memory stand-in for the pipeline entry points.
 
-    def test_backfill_subcommand_calls_pipeline(self, monkeypatch, tmp_path):
-        """Verify backfill subcommand invokes pipeline.backfill."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        with patch("tickerlake.pipeline.backfill") as mock_backfill:
-            monkeypatch.setattr("sys.argv", ["tickerlake", "backfill", "--output-dir", str(tmp_path)])
-            main()
-            mock_backfill.assert_called_once()
-            config = mock_backfill.call_args[0][0]
-            assert isinstance(config, Config)
-            assert config.output_dir == tmp_path
+    Records every ``(command_name, config)`` pair it is called with so tests can
+    assert on the real ``Config`` objects the CLI forwarded, without touching
+    the network or the filesystem.
+    """
 
-    def test_backfill_custom_start_date(self, monkeypatch, tmp_path):
-        """Verify --start-date option sets config.start_date."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        with patch("tickerlake.pipeline.backfill") as mock_backfill:
-            monkeypatch.setattr(
-                "sys.argv",
-                [
-                    "tickerlake",
-                    "backfill",
-                    "--start-date",
-                    "2023-01-01",
-                    "--output-dir",
-                    str(tmp_path),
-                ],
-            )
-            main()
-            config = mock_backfill.call_args[0][0]
-            assert config.start_date == datetime.date(2023, 1, 1)
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Config]] = []
 
-    def test_backfill_custom_end_date(self, monkeypatch, tmp_path):
-        """Verify --end-date option sets config.end_date."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        with patch("tickerlake.pipeline.backfill") as mock_backfill:
-            monkeypatch.setattr(
-                "sys.argv",
-                [
-                    "tickerlake",
-                    "backfill",
-                    "--end-date",
-                    "2024-12-31",
-                    "--output-dir",
-                    str(tmp_path),
-                ],
-            )
-            main()
-            config = mock_backfill.call_args[0][0]
-            assert config.end_date == datetime.date(2024, 12, 31)
+    def backfill(self, config: Config) -> None:
+        """Record a backfill dispatch."""
+        self.calls.append(("backfill", config))
 
-    def test_backfill_custom_output_dir(self, monkeypatch, tmp_path):
-        """Verify --output-dir option sets config.output_dir."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        with patch("tickerlake.pipeline.backfill") as mock_backfill:
-            monkeypatch.setattr(
-                "sys.argv",
-                ["tickerlake", "backfill", "--output-dir", str(tmp_path)],
-            )
-            main()
-            config = mock_backfill.call_args[0][0]
-            assert config.output_dir == tmp_path
+    def update(self, config: Config) -> None:
+        """Record an update dispatch."""
+        self.calls.append(("update", config))
 
-    def test_backfill_invalid_start_date_format(self, monkeypatch):
-        """Verify invalid --start-date format exits with error."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        monkeypatch.setattr(
-            "sys.argv",
-            ["tickerlake", "backfill", "--start-date", "not-a-date"],
-        )
-        with pytest.raises(SystemExit) as exc_info:
-            main()
-        assert exc_info.value.code != 0
+    def info(self, config: Config) -> None:
+        """Record an info dispatch."""
+        self.calls.append(("info", config))
 
-    def test_backfill_invalid_end_date_format(self, monkeypatch):
-        """Verify invalid --end-date format exits with error."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        monkeypatch.setattr(
-            "sys.argv",
-            ["tickerlake", "backfill", "--end-date", "2024/12/31"],
-        )
-        with pytest.raises(SystemExit) as exc_info:
-            main()
-        assert exc_info.value.code != 0
+    def compact(self, config: Config) -> None:
+        """Record a compact dispatch."""
+        self.calls.append(("compact", config))
 
 
-class TestUpdateSubcommand:
-    """Test update subcommand and its options."""
+@pytest.fixture
+def fake_pipeline(monkeypatch: pytest.MonkeyPatch) -> _RecordingPipeline:
+    """Replace the four pipeline entry points with a recording double.
 
-    def test_update_subcommand_calls_pipeline(self, monkeypatch, tmp_path):
-        """Verify update subcommand invokes pipeline.update."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        with patch("tickerlake.pipeline.update") as mock_update:
-            monkeypatch.setattr("sys.argv", ["tickerlake", "update", "--output-dir", str(tmp_path)])
-            main()
-            mock_update.assert_called_once()
-            config = mock_update.call_args[0][0]
-            assert isinstance(config, Config)
-            assert config.output_dir == tmp_path
-
-    def test_update_custom_output_dir(self, monkeypatch, tmp_path):
-        """Verify --output-dir option sets config.output_dir for update."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        with patch("tickerlake.pipeline.update") as mock_update:
-            monkeypatch.setattr(
-                "sys.argv",
-                ["tickerlake", "update", "--output-dir", str(tmp_path)],
-            )
-            main()
-            config = mock_update.call_args[0][0]
-            assert config.output_dir == tmp_path
+    ``tickerlake.main`` looks each entry point up on the ``pipeline`` module at
+    call time, so patching the attributes on the real module object is enough.
+    """
+    recorder = _RecordingPipeline()
+    for name in ("backfill", "update", "info", "compact"):
+        monkeypatch.setattr(pipeline, name, getattr(recorder, name))
+    return recorder
 
 
-class TestInfoSubcommand:
-    """Test info subcommand and its options."""
-
-    def test_info_subcommand_calls_pipeline(self, monkeypatch, tmp_path):
-        """Verify info subcommand invokes pipeline.info."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        with patch("tickerlake.pipeline.info") as mock_info:
-            monkeypatch.setattr("sys.argv", ["tickerlake", "info", "--output-dir", str(tmp_path)])
-            main()
-            mock_info.assert_called_once()
-            config = mock_info.call_args[0][0]
-            assert isinstance(config, Config)
-            assert config.output_dir == tmp_path
-
-    def test_info_custom_output_dir(self, monkeypatch, tmp_path):
-        """Verify --output-dir option sets config.output_dir for info."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        with patch("tickerlake.pipeline.info") as mock_info:
-            monkeypatch.setattr(
-                "sys.argv",
-                ["tickerlake", "info", "--output-dir", str(tmp_path)],
-            )
-            main()
-            config = mock_info.call_args[0][0]
-            assert config.output_dir == tmp_path
+def _run_cli(monkeypatch: pytest.MonkeyPatch, *argv: str) -> None:
+    """Run the CLI entry point with ``argv`` as if typed at the shell."""
+    monkeypatch.setattr("sys.argv", ["tickerlake", *argv])
+    main()
 
 
-class TestCompactSubcommand:
-    """Test compact subcommand and its options."""
+def test_help_lists_every_subcommand(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    """The top-level help text advertises every supported subcommand."""
+    with pytest.raises(SystemExit) as exc_info:
+        _run_cli(monkeypatch, "--help")
 
-    def test_compact_subcommand_calls_pipeline(self, monkeypatch, tmp_path):
-        """Verify compact subcommand invokes pipeline.compact."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        with patch("tickerlake.pipeline.compact") as mock_compact:
-            monkeypatch.setattr("sys.argv", ["tickerlake", "compact", "--output-dir", str(tmp_path)])
-            main()
-            mock_compact.assert_called_once()
-            config = mock_compact.call_args[0][0]
-            assert isinstance(config, Config)
-            assert config.output_dir == tmp_path
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    for command in ("backfill", "update", "info", "compact"):
+        assert command in captured.out
 
 
-class TestConfigDefaults:
-    """Test that Config defaults are applied when CLI options are omitted."""
+def test_missing_command_exits_with_usage_error(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    """Running with no subcommand is a usage error, not a silent success."""
+    with pytest.raises(SystemExit) as exc_info:
+        _run_cli(monkeypatch)
 
-    def test_backfill_uses_config_defaults(self, monkeypatch):
-        """Verify backfill without date options uses Config defaults."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        with patch("tickerlake.pipeline.backfill") as mock_backfill:
-            monkeypatch.setattr(
-                "sys.argv",
-                ["tickerlake", "backfill"],
-            )
-            main()
-            config = mock_backfill.call_args[0][0]
-            # Config defaults: start_date is 1 year ago, end_date is today
-            assert config.start_date is not None
-            assert config.end_date is not None
-            assert config.start_date < config.end_date
+    assert exc_info.value.code == _USAGE_ERROR_EXIT_CODE
+    captured = capsys.readouterr()
+    assert "required" in captured.err
 
-    def test_update_uses_config_defaults(self, monkeypatch):
-        """Verify update without options uses Config defaults."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        with patch("tickerlake.pipeline.update") as mock_update:
-            monkeypatch.setattr(
-                "sys.argv",
-                ["tickerlake", "update"],
-            )
-            main()
-            config = mock_update.call_args[0][0]
-            assert isinstance(config, Config)
 
-    def test_info_uses_config_defaults(self, monkeypatch):
-        """Verify info without options uses Config defaults."""
-        monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        with patch("tickerlake.pipeline.info") as mock_info:
-            monkeypatch.setattr(
-                "sys.argv",
-                ["tickerlake", "info"],
-            )
-            main()
-            config = mock_info.call_args[0][0]
-            assert isinstance(config, Config)
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--start-date", "not-a-date"),
+        ("--end-date", "2024/12/31"),
+        ("--start-date", "2024-13-40"),
+    ],
+)
+def test_invalid_date_option_exits_before_running_etl(
+    option: str,
+    value: str,
+    fake_pipeline: _RecordingPipeline,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    """A malformed date fails parsing and never reaches the pipeline."""
+    with pytest.raises(SystemExit) as exc_info:
+        _run_cli(monkeypatch, "backfill", option, value)
 
-    def test_backfill_without_api_key_exits_cleanly(self, monkeypatch, capsys):
-        """Verify Massive commands require MASSIVE_API_KEY at dispatch."""
-        monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
-        monkeypatch.setattr("sys.argv", ["tickerlake", "backfill"])
-
-        with pytest.raises(SystemExit) as exc_info:
-            main()
-
-        captured = capsys.readouterr()
-        assert exc_info.value.code != 0
-        assert "MASSIVE_API_KEY environment variable is required" in captured.err
-        assert "Traceback" not in captured.err
-
-    def test_update_without_api_key_exits_cleanly(self, monkeypatch, capsys):
-        """Verify update requires MASSIVE_API_KEY at dispatch."""
-        monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
-        monkeypatch.setattr("sys.argv", ["tickerlake", "update"])
-
-        with pytest.raises(SystemExit) as exc_info:
-            main()
-
-        captured = capsys.readouterr()
-        assert exc_info.value.code != 0
-        assert "MASSIVE_API_KEY environment variable is required" in captured.err
-        assert "Traceback" not in captured.err
+    assert exc_info.value.code == _USAGE_ERROR_EXIT_CODE
+    captured = capsys.readouterr()
+    assert "Invalid date format" in captured.err
+    assert fake_pipeline.calls == []
 
 
 @pytest.mark.parametrize("command", ["etf-race", "ciovacco", "ciovacco-stocks", "pivots", "fib-zones"])
-def test_removed_report_commands_are_rejected(command, monkeypatch, capsys):
+def test_removed_report_commands_are_rejected(command: str, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     """Removed report commands are not accepted by the CLI."""
-    monkeypatch.setattr("sys.argv", ["tickerlake", command])
+    with pytest.raises(SystemExit) as exc_info:
+        _run_cli(monkeypatch, command)
+
+    assert exc_info.value.code == _USAGE_ERROR_EXIT_CODE
+    captured = capsys.readouterr()
+    assert f"invalid choice: '{command}'" in captured.err
+
+
+def test_backfill_forwards_every_option_to_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_pipeline: _RecordingPipeline
+) -> None:
+    """Every backfill option is forwarded into the Config handed to the pipeline."""
+    _run_cli(
+        monkeypatch,
+        "backfill",
+        "--start-date",
+        "2023-01-01",
+        "--end-date",
+        "2024-12-31",
+        "--output-dir",
+        str(tmp_path),
+    )
+
+    expected = Config(
+        start_date=datetime.date(2023, 1, 1),
+        end_date=datetime.date(2024, 12, 31),
+        output_dir=tmp_path,
+    )
+    assert fake_pipeline.calls == [("backfill", expected)]
+
+
+def test_backfill_without_options_uses_config_defaults(
+    monkeypatch: pytest.MonkeyPatch, fake_pipeline: _RecordingPipeline
+) -> None:
+    """Bare backfill builds a Config identical to the dataclass defaults."""
+    _run_cli(monkeypatch, "backfill")
+
+    assert fake_pipeline.calls == [("backfill", Config())]
+    _, config = fake_pipeline.calls[0]
+    assert config.output_dir == Path.cwd()
+
+
+def test_update_forwards_output_dir_to_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_pipeline: _RecordingPipeline
+) -> None:
+    """Update forwards --output-dir into the Config handed to the pipeline."""
+    _run_cli(monkeypatch, "update", "--output-dir", str(tmp_path))
+
+    assert fake_pipeline.calls == [("update", Config(output_dir=tmp_path))]
+
+
+def test_info_reports_missing_databases_without_api_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog
+) -> None:
+    """Info needs no API key and reports each missing database by path."""
+    monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+
+    with caplog.at_level(logging.INFO):
+        _run_cli(monkeypatch, "info", "--output-dir", str(tmp_path))
+
+    assert f"raw.duckdb: not found ({tmp_path / 'raw.duckdb'})" in caplog.text
+    assert f"tickerlake.duckdb: not found ({tmp_path / 'tickerlake.duckdb'})" in caplog.text
+
+
+def test_compact_without_raw_db_warns_and_succeeds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog) -> None:
+    """Compact needs no API key and warns without failing when raw.duckdb is absent."""
+    monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+
+    with caplog.at_level(logging.WARNING):
+        _run_cli(monkeypatch, "compact", "--output-dir", str(tmp_path))
+
+    assert "No raw.duckdb found" in caplog.text
+    assert str(tmp_path) in caplog.text
+
+
+@pytest.mark.parametrize("command", ["backfill", "update"])
+def test_api_commands_without_key_exit_with_usage_error(command: str, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    """Massive-backed commands surface a missing key as a clean usage error."""
+    monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
 
     with pytest.raises(SystemExit) as exc_info:
-        main()
+        _run_cli(monkeypatch, command)
 
+    assert exc_info.value.code == _USAGE_ERROR_EXIT_CODE
     captured = capsys.readouterr()
-    argparse_invalid_choice_exit_code = 2
-    assert exc_info.value.code == argparse_invalid_choice_exit_code
-    assert f"invalid choice: '{command}'" in captured.err
+    assert "MASSIVE_API_KEY environment variable is required" in captured.err
+    assert "Traceback" not in captured.err
