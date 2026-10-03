@@ -2,10 +2,14 @@
 
 import datetime
 import importlib
+from typing import TYPE_CHECKING
 
 import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 transform = importlib.import_module("tickerlake.transform")
 extract = importlib.import_module("tickerlake.extract")
@@ -76,6 +80,62 @@ def make_metric_bars(
                 }
             )
     return make_bars(rows)
+
+
+@pytest.mark.parametrize(
+    ("aggregate", "expected_date"),
+    [
+        (aggregate_to_weekly, datetime.date(2024, 1, 8)),
+        (aggregate_to_monthly, datetime.date(2024, 1, 9)),
+    ],
+    ids=["weekly", "monthly"],
+)
+@pytest.mark.parametrize(
+    ("volumes", "vwaps", "expected_vwap"),
+    [
+        ([0.0, 0.0], [91.0, 109.0], None),
+        ([0.0, 1.0], [17.0, 103.0], 103.0),
+    ],
+    ids=["all-zero-volume", "single-unit-volume"],
+)
+def test_period_aggregation_vwap_at_zero_and_unit_total_volume(
+    aggregate: Callable[[pl.DataFrame], pl.DataFrame],
+    expected_date: datetime.date,
+    volumes: list[float],
+    vwaps: list[float],
+    expected_vwap: float | None,
+) -> None:
+    """Weekly and monthly VWAP handle zero and unit total volume correctly."""
+    dates = [datetime.date(2024, 1, 8), datetime.date(2024, 1, 9)]
+    bars = make_bars(
+        [
+            {
+                "date": date,
+                "ticker": "AAPL",
+                "open": 10.0 + index,
+                "high": 12.0 + index,
+                "low": 9.0 + index,
+                "close": 11.0 + index,
+                "volume": volume,
+                "vwap": vwap,
+                "transactions": 3 + index,
+            }
+            for index, (date, volume, vwap) in enumerate(zip(dates, volumes, vwaps, strict=True))
+        ]
+    )
+    row = aggregate(bars).row(0, named=True)
+
+    assert row["date"] == expected_date
+    assert row["open"] == pytest.approx(10.0)
+    assert row["high"] == pytest.approx(13.0)
+    assert row["low"] == pytest.approx(9.0)
+    assert row["close"] == pytest.approx(12.0)
+    assert row["volume"] == pytest.approx(sum(volumes))
+    if expected_vwap is None:
+        assert row["vwap"] is None
+    else:
+        assert row["vwap"] == pytest.approx(expected_vwap)
+    assert row["transactions"] == sum(3 + index for index in range(len(dates)))
 
 
 class TestAggregateToWeekly:

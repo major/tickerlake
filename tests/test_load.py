@@ -524,52 +524,94 @@ def test_write_consumer_db_backward_compat(
     assert "tickers" in tables
 
 
-def test_write_consumer_db_weekly_tables_created(
+def test_write_consumer_db_persists_weekly_tables(
     tmp_path: Path,
     sample_bars_df: pl.DataFrame,
     sample_metrics_df: pl.DataFrame,
     sample_tickers_df: pl.DataFrame,
 ) -> None:
-    """Weekly tables exist when weekly params are provided."""
+    """Weekly bars and metrics persist with their values and schemas."""
     db_path = tmp_path / "tickerlake.duckdb"
+    weekly_bars = sample_bars_df.with_columns(
+        (pl.col("open") + 50).alias("open"),
+        (pl.col("high") + 50).alias("high"),
+        (pl.col("low") + 50).alias("low"),
+        (pl.col("close") + 50).alias("close"),
+        (pl.col("vwap") + 50).alias("vwap"),
+        (pl.col("volume") + 500).alias("volume"),
+        (pl.col("transactions") + 50).alias("transactions"),
+    ).reverse()
+    weekly_metrics = sample_metrics_df.with_columns(
+        pl.Series("sma_20", [20.0, 50.0, 21.0, 51.0, 22.0, 52.0], dtype=pl.Float32)
+    ).reverse()
     write_consumer_db(
         sample_bars_df,
         sample_metrics_df,
         sample_tickers_df,
         db_path,
-        weekly_bars=sample_bars_df,
-        weekly_metrics=sample_metrics_df,
-    )
-    con = duckdb.connect(str(db_path), read_only=True)
-    tables = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
-    con.close()
-    assert "weekly_bars" in tables
-    assert "weekly_metrics" in tables
-
-
-def test_write_consumer_db_monthly_tables_created(
-    tmp_path: Path,
-    sample_bars_df: pl.DataFrame,
-    sample_metrics_df: pl.DataFrame,
-    sample_tickers_df: pl.DataFrame,
-) -> None:
-    """Monthly tables exist when monthly params are provided."""
-    db_path = tmp_path / "tickerlake.duckdb"
-    write_consumer_db(
-        sample_bars_df,
-        sample_metrics_df,
-        sample_tickers_df,
-        db_path,
-        monthly_bars=sample_bars_df,
-        monthly_metrics=sample_metrics_df,
+        weekly_bars=weekly_bars,
+        weekly_metrics=weekly_metrics,
     )
     con = duckdb.connect(str(db_path), read_only=True)
     try:
         tables = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
+        bars_path = tmp_path / "weekly_bars.parquet"
+        metrics_path = tmp_path / "weekly_metrics.parquet"
+        con.execute("COPY weekly_bars TO ? (FORMAT PARQUET)", [str(bars_path)])
+        con.execute("COPY weekly_metrics TO ? (FORMAT PARQUET)", [str(metrics_path)])
+        actual_bars = pl.read_parquet(bars_path).sort(["ticker", "date"])
+        actual_metrics = pl.read_parquet(metrics_path).sort(["ticker", "date"])
+    finally:
+        con.close()
+    assert "weekly_bars" in tables
+    assert "weekly_metrics" in tables
+    assert_frame_equal(actual_bars, weekly_bars.sort(["ticker", "date"]))
+    assert_frame_equal(actual_metrics, weekly_metrics.sort(["ticker", "date"]))
+
+
+def test_write_consumer_db_persists_monthly_tables(
+    tmp_path: Path,
+    sample_bars_df: pl.DataFrame,
+    sample_metrics_df: pl.DataFrame,
+    sample_tickers_df: pl.DataFrame,
+) -> None:
+    """Monthly bars and metrics persist with their values and schemas."""
+    db_path = tmp_path / "tickerlake.duckdb"
+    monthly_bars = sample_bars_df.with_columns(
+        (pl.col("open") + 100).alias("open"),
+        (pl.col("high") + 100).alias("high"),
+        (pl.col("low") + 100).alias("low"),
+        (pl.col("close") + 100).alias("close"),
+        (pl.col("vwap") + 100).alias("vwap"),
+        (pl.col("volume") + 1_000).alias("volume"),
+        (pl.col("transactions") + 100).alias("transactions"),
+    ).reverse()
+    monthly_metrics = sample_metrics_df.with_columns(
+        pl.Series("sma_20", [120.0, 150.0, 121.0, 151.0, 122.0, 152.0], dtype=pl.Float32)
+    ).reverse()
+    write_consumer_db(
+        sample_bars_df,
+        sample_metrics_df,
+        sample_tickers_df,
+        db_path,
+        monthly_bars=monthly_bars,
+        monthly_metrics=monthly_metrics,
+    )
+    con = duckdb.connect(str(db_path), read_only=True)
+    try:
+        tables = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
+        bars_path = tmp_path / "monthly_bars.parquet"
+        metrics_path = tmp_path / "monthly_metrics.parquet"
+        con.execute("COPY monthly_bars TO ? (FORMAT PARQUET)", [str(bars_path)])
+        con.execute("COPY monthly_metrics TO ? (FORMAT PARQUET)", [str(metrics_path)])
+        actual_bars = pl.read_parquet(bars_path).sort(["ticker", "date"])
+        actual_metrics = pl.read_parquet(metrics_path).sort(["ticker", "date"])
     finally:
         con.close()
     assert "monthly_bars" in tables
     assert "monthly_metrics" in tables
+    assert_frame_equal(actual_bars, monthly_bars.sort(["ticker", "date"]))
+    assert_frame_equal(actual_metrics, monthly_metrics.sort(["ticker", "date"]))
 
 
 def test_write_consumer_db_weekly_tables_optional(
