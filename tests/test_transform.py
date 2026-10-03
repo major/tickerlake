@@ -1217,6 +1217,19 @@ def test_compute_atr_basic():
     assert row["atr_14"] == pytest.approx(4.0, abs=1e-4)
 
 
+def test_compute_atr_includes_downward_gap_from_previous_close():
+    """A downward gap contributes the prior close to True Range."""
+    ohlc = [(100.0, 102.0, 98.0, 100.0)] * 13
+    ohlc.append((80.0, 82.0, 78.0, 80.0))
+    bars = make_ohlc_bars({"AAPL": ohlc})
+
+    result = compute_metrics(bars)
+    row = result.filter(pl.col("date") == datetime.date(2024, 1, 14)).row(0, named=True)
+
+    assert row["atr_14"] == pytest.approx(74.0 / 14.0, abs=1e-4)
+    assert row["atr_pct"] == pytest.approx((74.0 / 14.0) / 80.0, abs=1e-4)
+
+
 def test_compute_atr_null_count():
     """ATR(14) produces exactly 13 nulls per ticker (rolling_mean needs 14 values)."""
     ohlc = [(100.0, 102.0, 98.0, 100.0)] * 30
