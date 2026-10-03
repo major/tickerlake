@@ -1,6 +1,7 @@
 """Tests for tickerlake.extract — raw API data → polars DataFrames."""
 
 import datetime
+from dataclasses import dataclass
 from unittest.mock import MagicMock
 
 import polars as pl
@@ -10,28 +11,43 @@ from tickerlake.extract import extract_daily_aggs, extract_splits, extract_ticke
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def make_mock_agg(record):
-    """Build a mock GroupedDailyAgg object."""
-    agg = MagicMock()
-    for field, value in record.items():
-        setattr(agg, field, value)
-    return agg
+@dataclass
+class DailyAgg:
+    """Concrete record matching the daily aggregate fields used by extraction."""
+
+    ticker: str
+    timestamp: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    vwap: float
+    transactions: int
 
 
-def make_mock_split(record):
-    """Build a mock StockSplit object."""
-    s = MagicMock()
-    for field, value in record.items():
-        setattr(s, field, value)
-    return s
+@dataclass
+class StockSplit:
+    """Concrete record matching the split fields used by extraction."""
+
+    ticker: str
+    execution_date: str
+    split_from: float
+    split_to: float
+    historical_adjustment_factor: float
+    adjustment_type: str
 
 
-def make_mock_ticker(record):
-    """Build a mock Ticker object."""
-    t = MagicMock()
-    for field, value in record.items():
-        setattr(t, field, value)
-    return t
+@dataclass
+class Ticker:
+    """Concrete record matching the ticker fields used by extraction."""
+
+    ticker: str
+    name: str
+    type: str
+    primary_exchange: str
+    cik: str
+    active: bool
 
 
 SAMPLE_AGG = {
@@ -45,6 +61,18 @@ SAMPLE_AGG = {
     "vwap": 185.2,
     "transactions": 1000,
 }
+
+
+def _make_agg(record):
+    return DailyAgg(**record)
+
+
+def _make_split(record):
+    return StockSplit(**record)
+
+
+def _make_ticker(record):
+    return Ticker(**record)
 
 
 # ── Daily aggs ────────────────────────────────────────────────────────────────
@@ -68,7 +96,7 @@ def test_extract_daily_aggs_schema():
     client = MagicMock()
     # 1704153600000 ms = 2024-01-02 UTC
     client.fetch_daily_aggs.return_value = [
-        make_mock_agg(SAMPLE_AGG),
+        _make_agg(SAMPLE_AGG),
     ]
     dates = [datetime.date(2024, 1, 2)]
     df = extract_daily_aggs(client, dates)
@@ -81,7 +109,7 @@ def test_extract_daily_aggs_timestamp_conversion():
     client = MagicMock()
     # 1704153600000 ms = 2024-01-02 00:00:00 UTC
     client.fetch_daily_aggs.return_value = [
-        make_mock_agg(SAMPLE_AGG),
+        _make_agg(SAMPLE_AGG),
     ]
     df = extract_daily_aggs(client, [datetime.date(2024, 1, 2)])
 
@@ -102,9 +130,9 @@ def test_extract_daily_aggs_multiple_dates():
     """Multiple dates must be concatenated into a single DataFrame."""
     client = MagicMock()
     client.fetch_daily_aggs.side_effect = [
-        [make_mock_agg(SAMPLE_AGG)],
+        [_make_agg(SAMPLE_AGG)],
         [
-            make_mock_agg(
+            _make_agg(
                 {
                     **SAMPLE_AGG,
                     "timestamp": 1704240000000,
@@ -132,7 +160,7 @@ def test_extract_daily_aggs_progress_output():
     """extract_daily_aggs runs without error for a single date."""
     client = MagicMock()
     client.fetch_daily_aggs.return_value = [
-        make_mock_agg(SAMPLE_AGG),
+        _make_agg(SAMPLE_AGG),
     ]
     dates = [datetime.date(2024, 1, 2)]
     extract_daily_aggs(client, dates)
@@ -155,7 +183,7 @@ def test_extract_splits_schema():
     """Returned splits DataFrame must have exact column names and dtypes."""
     client = MagicMock()
     client.fetch_splits.return_value = [
-        make_mock_split(
+        _make_split(
             {
                 "ticker": "AAPL",
                 "execution_date": "2024-08-31",
@@ -175,7 +203,7 @@ def test_extract_splits_execution_date_parsing():
     """String execution_date must be parsed to pl.Date."""
     client = MagicMock()
     client.fetch_splits.return_value = [
-        make_mock_split(
+        _make_split(
             {
                 "ticker": "AAPL",
                 "execution_date": "2024-08-31",
@@ -218,7 +246,7 @@ def test_extract_tickers_schema():
     """Returned tickers DataFrame must have exact column names and dtypes."""
     client = MagicMock()
     client.fetch_tickers.return_value = [
-        make_mock_ticker(
+        _make_ticker(
             {
                 "ticker": "AAPL",
                 "name": "Apple Inc.",
@@ -262,7 +290,7 @@ def test_extract_daily_aggs_skips_failed_date():
     client.fetch_daily_aggs.side_effect = [
         Exception("API error"),
         [
-            make_mock_agg(
+            _make_agg(
                 {
                     **SAMPLE_AGG,
                     "timestamp": 1704240000000,
