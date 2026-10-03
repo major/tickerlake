@@ -2,8 +2,10 @@
 
 import datetime
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from tickerlake import main, pipeline
@@ -149,6 +151,105 @@ def test_backfill_without_options_uses_config_defaults(
     assert fake_pipeline.calls == [("backfill", Config())]
     _, config = fake_pipeline.calls[0]
     assert config.output_dir == Path.cwd()
+
+
+def test_backfill_cli_persists_requested_range_in_selected_output_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CLI options drive a real backfill, with only Massive replaced."""
+
+    @dataclass
+    class Bar:
+        timestamp: int
+        ticker: str
+        open: float
+        high: float
+        low: float
+        close: float
+        volume: float
+        vwap: float
+        transactions: int
+
+    @dataclass
+    class Ticker:
+        ticker: str
+        name: str
+        type: str
+        primary_exchange: str
+        cik: str
+        active: bool
+
+    class FakeMassiveClient:
+        def __init__(self, config: Config) -> None:
+            assert config.api_key == "cli-test-key"
+            self.requested_dates: list[datetime.date] = []
+
+        def fetch_daily_aggs(self, date: datetime.date) -> list[Bar]:
+            self.requested_dates.append(date)
+            if date != datetime.date(2024, 1, 3):
+                return []
+            return [
+                Bar(
+                    timestamp=int(datetime.datetime(2024, 1, 3, tzinfo=datetime.UTC).timestamp() * 1000),
+                    ticker="XYZ",
+                    open=10.0,
+                    high=12.0,
+                    low=9.0,
+                    close=11.0,
+                    volume=500.0,
+                    vwap=10.5,
+                    transactions=7,
+                )
+            ]
+
+        def fetch_splits(self, start_date: datetime.date, end_date: datetime.date) -> list:
+            return []
+
+        def fetch_tickers(self, types: list[str]) -> list[Ticker]:
+            return [Ticker("XYZ", "Example Corp", "CS", "XNAS", "0000000001", True)]
+
+    output_dir = tmp_path / "cli-output"
+    output_dir.mkdir()
+    client: FakeMassiveClient | None = None
+
+    def make_client(config: Config) -> FakeMassiveClient:
+        nonlocal client
+        client = FakeMassiveClient(config)
+        return client
+
+    monkeypatch.setenv("MASSIVE_API_KEY", "cli-test-key")
+    monkeypatch.setattr(pipeline, "MassiveClient", make_client)
+    _run_cli(
+        monkeypatch,
+        "backfill",
+        "--start-date",
+        "2024-01-03",
+        "--end-date",
+        "2024-01-03",
+        "--output-dir",
+        str(output_dir),
+    )
+
+    def rows(database: str, query: str) -> list[tuple]:
+        connection = duckdb.connect(str(output_dir / database), read_only=True)
+        try:
+            return connection.execute(query).fetchall()
+        finally:
+            connection.close()
+
+    date = datetime.date(2024, 1, 3)
+    assert client is not None
+    assert set(client.requested_dates) == {date}
+    raw_bars = rows(
+        "raw.duckdb",
+        "SELECT date, ticker, open, high, low, close, volume, vwap, transactions FROM raw_daily_bars",
+    )
+    assert raw_bars == [(date, "XYZ", 10.0, 12.0, 9.0, 11.0, 500.0, 10.5, 7)]
+    assert rows("tickerlake.duckdb", "SELECT date, ticker, close, volume FROM daily_bars") == [
+        (date, "XYZ", 11.0, 500.0)
+    ]
+    assert rows("tickerlake.duckdb", "SELECT ticker, name FROM tickers") == [("XYZ", "Example Corp")]
+    assert not (tmp_path / "raw.duckdb").exists()
 
 
 def test_update_forwards_output_dir_to_config(

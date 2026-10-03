@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import duckdb
 import polars as pl
 import pytest
+from polars.testing import assert_frame_equal
 
 from tickerlake.load import (
     append_raw_db,
@@ -135,9 +136,10 @@ def test_read_raw_db(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
 
     result = read_raw_db(db_path)
 
-    assert isinstance(result, pl.DataFrame)
-    assert len(result) == len(sample_bars_df)
-    assert set(result.columns) == set(sample_bars_df.columns)
+    assert_frame_equal(
+        result.sort(["ticker", "date"]),
+        sample_bars_df.sort(["ticker", "date"]),
+    )
 
 
 def test_get_existing_dates_returns_correct_dates(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
@@ -694,9 +696,10 @@ def test_read_splits_round_trip(tmp_path: Path, sample_splits_df: pl.DataFrame) 
 
     result = read_splits(db_path)
 
-    assert isinstance(result, pl.DataFrame)
-    assert len(result) == len(sample_splits_df)
-    assert set(result.columns) == set(sample_splits_df.columns)
+    assert_frame_equal(
+        result.sort(["ticker", "execution_date"]),
+        sample_splits_df.sort(["ticker", "execution_date"]),
+    )
 
 
 def test_delete_then_append_no_duplicates(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
