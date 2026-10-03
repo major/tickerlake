@@ -10,7 +10,7 @@
 
 ## Setup and configuration
 - Install dependencies with `uv sync` (or CI's locked form: `uv sync --locked`).
-- `MASSIVE_API_KEY` is required for `backfill`, `update`, and `compact`; `info` does not require it.
+- `MASSIVE_API_KEY` is required for `backfill` and `update`; `info` and `compact` do not require it.
 - Database output defaults to the current working directory. Use `--output-dir DIR` to isolate output.
 
 ## Make targets
