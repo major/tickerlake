@@ -1,12 +1,29 @@
 """Tests for tickerlake.pipeline — backfill, update, and info orchestration."""
 
 import datetime
+import logging
 import os
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import DEFAULT, patch
 
 import polars as pl
 import pytest
+
+from tickerlake.config import Config
+from tickerlake.load import write_raw_db
+from tickerlake.pipeline import (
+    _verify_split_adjustment,
+    backfill,
+    compact,
+    info,
+    update,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+EXPECTED_METRIC_CALLS = 3
+EXPECTED_DB_INFO_CALLS = 2
 
 _PIPELINE = "tickerlake.pipeline"
 
@@ -14,8 +31,6 @@ _PIPELINE = "tickerlake.pipeline"
 def _make_config(tmp_path: Path):
     """Build a Config pointing at tmp_path with a fake API key."""
     os.environ["MASSIVE_API_KEY"] = "test_key"
-    from tickerlake.config import Config
-
     return Config(
         output_dir=tmp_path,
         start_date=datetime.date(2024, 1, 1),
@@ -119,8 +134,14 @@ def sample_metrics():
 
 
 @pytest.fixture
+def sample_frames(sample_bars, sample_splits, sample_tickers, sample_metrics):
+    """Group sample frames used by orchestration tests."""
+    return sample_bars, sample_splits, sample_tickers, sample_metrics
+
+
+@pytest.fixture
 def pipeline_mocks():
-    """Patch all pipeline dependencies via patch.multiple, yielding a name-keyed dict."""  # noqa: E501
+    """Patch all pipeline dependencies via patch.multiple, yielding a name-keyed dict."""
     with patch.multiple(
         _PIPELINE,
         get_trading_days=DEFAULT,
@@ -166,12 +187,9 @@ def _wire_defaults(mocks, sample_bars, sample_splits, sample_tickers, sample_met
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def test_backfill_calls_extract_in_order(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_backfill_calls_extract_in_order(pipeline_mocks, tmp_path, sample_frames):
     """Backfill calls extract_daily_aggs, extract_splits, extract_tickers."""
-    from tickerlake.pipeline import backfill
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     backfill(_make_config(tmp_path))
 
@@ -180,12 +198,9 @@ def test_backfill_calls_extract_in_order(
     pipeline_mocks["extract_tickers"].assert_called_once()
 
 
-def test_backfill_calls_transform_in_order(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_backfill_calls_transform_in_order(pipeline_mocks, tmp_path, sample_frames):
     """Backfill calls adjust_splits, filter_tickers, compute_metrics."""
-    from tickerlake.pipeline import backfill
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     backfill(_make_config(tmp_path))
 
@@ -196,15 +211,12 @@ def test_backfill_calls_transform_in_order(
     pipeline_mocks["filter_tickers"].assert_called_once()
     assert pipeline_mocks["filter_tickers"].call_args[0][1] is sample_tickers
 
-    assert pipeline_mocks["compute_metrics"].call_count == 3
+    assert pipeline_mocks["compute_metrics"].call_count == EXPECTED_METRIC_CALLS
 
 
-def test_backfill_calls_write_raw_db(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_backfill_calls_write_raw_db(pipeline_mocks, tmp_path, sample_frames):
     """Backfill calls write_raw_db with the raw.duckdb path."""
-    from tickerlake.pipeline import backfill
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     config = _make_config(tmp_path)
     backfill(config)
@@ -213,12 +225,9 @@ def test_backfill_calls_write_raw_db(
     assert pipeline_mocks["write_raw_db"].call_args[0][1] == config.output_dir / "raw.duckdb"
 
 
-def test_backfill_calls_write_consumer_db(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_backfill_calls_write_consumer_db(pipeline_mocks, tmp_path, sample_frames):
     """Backfill calls write_consumer_db with the tickerlake.duckdb path."""
-    from tickerlake.pipeline import backfill
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     config = _make_config(tmp_path)
     backfill(config)
@@ -229,8 +238,6 @@ def test_backfill_calls_write_consumer_db(
 
 def test_backfill_no_trading_days(pipeline_mocks, tmp_path):
     """If no trading days in range, logs warning and skips extract."""
-    from tickerlake.pipeline import backfill
-
     pipeline_mocks["get_trading_days"].return_value = []
     backfill(_make_config(tmp_path))
 
@@ -239,12 +246,9 @@ def test_backfill_no_trading_days(pipeline_mocks, tmp_path):
     pipeline_mocks["extract_tickers"].assert_not_called()
 
 
-def test_backfill_skips_cached_dates(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_backfill_skips_cached_dates(pipeline_mocks, tmp_path, sample_frames):
     """Backfill refetches the latest cached day and any missing dates in range."""
-    from tickerlake.pipeline import backfill
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     pipeline_mocks["get_trading_days"].return_value = [
         datetime.date(2024, 1, 2),
@@ -265,12 +269,9 @@ def test_backfill_skips_cached_dates(
     pipeline_mocks["write_raw_db"].assert_not_called()
 
 
-def test_backfill_refetches_latest_five_cached_days(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_backfill_refetches_latest_five_cached_days(pipeline_mocks, tmp_path, sample_frames):
     """Backfill drops and refetches the latest five cached trading days."""
-    from tickerlake.pipeline import backfill
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     trading_days = [
         datetime.date(2024, 1, 2),
@@ -303,15 +304,11 @@ def test_backfill_refetches_latest_five_cached_days(
 def test_backfill_cached_count_only_uses_requested_range(
     pipeline_mocks,
     tmp_path,
-    sample_bars,
-    sample_splits,
-    sample_tickers,
-    sample_metrics,
+    sample_frames,
     caplog,
 ):
     """Backfill logs cached counts using only trading days in the requested range."""
-    from tickerlake.pipeline import backfill
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     trading_days = [
         datetime.date(2024, 1, 2),
@@ -334,10 +331,9 @@ def test_backfill_cached_count_only_uses_requested_range(
     assert "Backfill: 2024-01-01 to 2024-01-31 (3 trading days, 3 cached, 3 to fetch)" in caplog.text
 
 
-def test_backfill_no_cache(pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics):
+def test_backfill_no_cache(pipeline_mocks, tmp_path, sample_frames):
     """Backfill fetches all dates and calls write_raw_db when no cache exists."""
-    from tickerlake.pipeline import backfill
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
 
     backfill(_make_config(tmp_path))
@@ -352,12 +348,9 @@ def test_backfill_no_cache(pipeline_mocks, tmp_path, sample_bars, sample_splits,
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def test_update_delegates_to_backfill(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_update_delegates_to_backfill(pipeline_mocks, tmp_path, sample_frames):
     """Update delegates to _run_backfill when raw.duckdb exists with data."""
-    from tickerlake.pipeline import update
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     trading_days = [
         datetime.date(2024, 1, 2),
@@ -376,12 +369,9 @@ def test_update_delegates_to_backfill(
     pipeline_mocks["extract_daily_aggs"].assert_called_once()
 
 
-def test_update_refetches_revision_window(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_update_refetches_revision_window(pipeline_mocks, tmp_path, sample_frames):
     """Update re-fetches the trailing _REVISION_WINDOW_DAYS cached dates."""
-    from tickerlake.pipeline import update
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     trading_days = [
         datetime.date(2024, 1, 2),
@@ -403,12 +393,9 @@ def test_update_refetches_revision_window(
     assert call_args[0][0] == datetime.date(2024, 1, 3)
 
 
-def test_update_deletes_and_refetches_revision_window(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_update_deletes_and_refetches_revision_window(pipeline_mocks, tmp_path, sample_frames):
     """Update deletes and re-fetches the trailing revision window dates."""
-    from tickerlake.pipeline import update
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     trading_days = [
         datetime.date(2024, 1, 2),
@@ -436,12 +423,9 @@ def test_update_deletes_and_refetches_revision_window(
     assert pipeline_mocks["append_raw_db"].call_args[0][1] == config.output_dir / "raw.duckdb"
 
 
-def test_update_empty_raw_db_falls_back_to_backfill(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_update_empty_raw_db_falls_back_to_backfill(pipeline_mocks, tmp_path, sample_frames):
     """If raw.duckdb exists but is empty, update falls back to backfill."""
-    from tickerlake.pipeline import update
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     pipeline_mocks["get_existing_dates"].return_value = set()
 
@@ -455,26 +439,19 @@ def test_update_empty_raw_db_falls_back_to_backfill(
 def test_update_falls_back_to_backfill(
     pipeline_mocks,
     tmp_path,
-    sample_bars,
-    sample_splits,
-    sample_tickers,
-    sample_metrics,
+    sample_frames,
 ):
     """If raw.duckdb doesn't exist, update falls back to backfill logic."""
-    from tickerlake.pipeline import update
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     update(_make_config(tmp_path))
 
     pipeline_mocks["write_raw_db"].assert_called_once()
 
 
-def test_update_fewer_than_window_refetches_all(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_update_fewer_than_window_refetches_all(pipeline_mocks, tmp_path, sample_frames):
     """Update with fewer than _REVISION_WINDOW_DAYS cached dates refetches all."""
-    from tickerlake.pipeline import update
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     # Only 2 cached dates (less than 5)
     cached_dates = {datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)}
@@ -490,12 +467,9 @@ def test_update_fewer_than_window_refetches_all(
     assert call_args[0][0] == datetime.date(2024, 1, 2)
 
 
-def test_update_api_failure_does_not_delete(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_update_api_failure_does_not_delete(pipeline_mocks, tmp_path, sample_frames):
     """Update does NOT delete dates if API fails to return them."""
-    from tickerlake.pipeline import update
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     trading_days = [
         datetime.date(2024, 1, 2),
@@ -569,12 +543,9 @@ def test_update_api_failure_does_not_delete(
     )
 
 
-def test_update_calls_extract_splits_with_config_dates(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_update_calls_extract_splits_with_config_dates(pipeline_mocks, tmp_path, sample_frames):
     """Update calls extract_splits with config dates, not narrowed bars_start."""
-    from tickerlake.pipeline import update
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     trading_days = [
         datetime.date(2024, 1, 2),
@@ -605,8 +576,6 @@ def test_update_calls_extract_splits_with_config_dates(
 
 def test_info_calls_get_db_info(pipeline_mocks, tmp_path):
     """Info calls get_db_info for each existing DB file and logs results."""
-    from tickerlake.pipeline import info
-
     pipeline_mocks["get_db_info"].return_value = {
         "tables": ["raw_daily_bars"],
         "row_counts": {"raw_daily_bars": 100},
@@ -618,13 +587,11 @@ def test_info_calls_get_db_info(pipeline_mocks, tmp_path):
     (tmp_path / "tickerlake.duckdb").touch()
     info(_make_config(tmp_path))
 
-    assert pipeline_mocks["get_db_info"].call_count == 2
+    assert pipeline_mocks["get_db_info"].call_count == EXPECTED_DB_INFO_CALLS
 
 
 def test_info_missing_db(tmp_path):
     """Info logs 'not found' if DuckDB files don't exist."""
-    from tickerlake.pipeline import info
-
     info(_make_config(tmp_path))
 
 
@@ -635,8 +602,6 @@ def test_info_missing_db(tmp_path):
 
 def test_verify_split_adjustment_passes():
     """Spot check passes when adjusted/raw ratio matches split factor."""
-    from tickerlake.pipeline import _verify_split_adjustment
-
     raw = pl.DataFrame(
         {
             "date": [datetime.date(2024, 1, 10)],
@@ -658,8 +623,6 @@ def test_verify_split_adjustment_passes():
 
 def test_verify_split_adjustment_fails():
     """Spot check raises ValueError when adjusted prices don't match factor."""
-    from tickerlake.pipeline import _verify_split_adjustment
-
     raw = pl.DataFrame(
         {
             "date": [datetime.date(2024, 1, 10)],
@@ -682,8 +645,6 @@ def test_verify_split_adjustment_fails():
 
 def test_verify_split_adjustment_empty_splits():
     """Spot check is a no-op when splits DataFrame is empty."""
-    from tickerlake.pipeline import _verify_split_adjustment
-
     raw = pl.DataFrame(
         {
             "date": [datetime.date(2024, 1, 10)],
@@ -704,8 +665,6 @@ def test_verify_split_adjustment_empty_splits():
 
 def test_verify_split_adjustment_skips_small_splits():
     """Spot check skips splits with factor >= 0.5 (less than 2:1)."""
-    from tickerlake.pipeline import _verify_split_adjustment
-
     raw = pl.DataFrame(
         {
             "date": [datetime.date(2024, 1, 10)],
@@ -725,9 +684,7 @@ def test_verify_split_adjustment_skips_small_splits():
 
 
 def test_verify_split_adjustment_skips_extreme_splits():
-    """Spot check skips splits with factor < 0.02 (OTC noise, same-day offsetting splits)."""  # noqa: E501
-    from tickerlake.pipeline import _verify_split_adjustment
-
+    """Spot check skips splits with factor < 0.02 (OTC noise, same-day offsetting splits)."""
     raw = pl.DataFrame(
         {
             "date": [datetime.date(2024, 1, 10)],
@@ -748,8 +705,6 @@ def test_verify_split_adjustment_skips_extreme_splits():
 
 def test_verify_split_adjustment_skips_duplicate_ticker():
     """Spot check skips second split for same ticker (if ticker in seen: continue)."""
-    from tickerlake.pipeline import _verify_split_adjustment
-
     raw = pl.DataFrame(
         {
             "date": [datetime.date(2024, 1, 10), datetime.date(2024, 1, 10)],
@@ -773,8 +728,6 @@ def test_verify_split_adjustment_skips_duplicate_ticker():
 
 def test_verify_split_adjustment_skips_no_pre_split_bars():
     """Spot check skips split when ticker has no bars before execution_date."""
-    from tickerlake.pipeline import _verify_split_adjustment
-
     raw = pl.DataFrame(
         {
             "date": [datetime.date(2024, 1, 20)],
@@ -798,8 +751,6 @@ def test_verify_split_adjustment_skips_no_pre_split_bars():
 
 def test_verify_split_adjustment_skips_missing_adjusted_row():
     """Spot check skips when adjusted_bars missing row at check_date."""
-    from tickerlake.pipeline import _verify_split_adjustment
-
     raw = pl.DataFrame(
         {
             "date": [datetime.date(2024, 1, 10)],
@@ -829,8 +780,6 @@ def test_verify_split_adjustment_skips_missing_adjusted_row():
 
 def test_verify_split_adjustment_early_exit_at_sample_size():
     """Spot check exits early after verifying _SPOT_CHECK_SAMPLE_SIZE tickers."""
-    from tickerlake.pipeline import _verify_split_adjustment
-
     # Create 6 tickers with bars and splits (more than _SPOT_CHECK_SAMPLE_SIZE=5)
     tickers = ["AAPL", "MSFT", "GOOG", "AMZN", "TSLA", "META"]
     raw_rows = [{"date": datetime.date(2024, 1, 10), "ticker": ticker, "close": 400.0} for ticker in tickers]
@@ -857,14 +806,10 @@ def test_verify_split_adjustment_early_exit_at_sample_size():
 def test_backfill_refetches_cached_date_in_revision_window(
     pipeline_mocks,
     tmp_path,
-    sample_bars,
-    sample_splits,
-    sample_tickers,
-    sample_metrics,
+    sample_frames,
 ):
     """Backfill re-fetches a cached date that falls inside the revision window."""
-    from tickerlake.pipeline import backfill
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     # Single trading day, already cached. With only one cached date, the
     # trailing revision window (_REVISION_WINDOW_DAYS) always includes it,
@@ -895,24 +840,16 @@ def test_backfill_refetches_cached_date_in_revision_window(
 def test_compact_logs_before_and_after_sizes(
     pipeline_mocks,
     tmp_path,
-    sample_bars,
-    sample_splits,
-    sample_tickers,
-    sample_metrics,
+    sample_frames,
     caplog,
 ):
     """Compact logs file size before and after compaction."""
-    import logging
-
-    from tickerlake.pipeline import compact
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     config = _make_config(tmp_path)
     raw_path = config.output_dir / "raw.duckdb"
 
     # Create a real temp DuckDB file with some data
-    from tickerlake.load import write_raw_db
-
     write_raw_db(sample_bars, raw_path)
 
     with caplog.at_level(logging.INFO):
@@ -927,10 +864,6 @@ def test_compact_logs_before_and_after_sizes(
 
 def test_compact_missing_raw_db(pipeline_mocks, tmp_path, caplog):
     """Compact logs warning and returns when raw.duckdb doesn't exist."""
-    import logging
-
-    from tickerlake.pipeline import compact
-
     config = _make_config(tmp_path)
 
     with caplog.at_level(logging.WARNING):
@@ -939,12 +872,9 @@ def test_compact_missing_raw_db(pipeline_mocks, tmp_path, caplog):
     assert "No raw.duckdb found" in caplog.text
 
 
-def test_backfill_calls_aggregate_to_weekly(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_backfill_calls_aggregate_to_weekly(pipeline_mocks, tmp_path, sample_frames):
     """Backfill calls aggregate_to_weekly with the filtered bars."""
-    from tickerlake.pipeline import backfill
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     backfill(_make_config(tmp_path))
 
@@ -954,12 +884,9 @@ def test_backfill_calls_aggregate_to_weekly(
     assert call_args[0][0] is sample_bars
 
 
-def test_backfill_calls_aggregate_to_monthly(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_backfill_calls_aggregate_to_monthly(pipeline_mocks, tmp_path, sample_frames):
     """Backfill calls aggregate_to_monthly with the filtered bars."""
-    from tickerlake.pipeline import backfill
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     backfill(_make_config(tmp_path))
 
@@ -969,29 +896,22 @@ def test_backfill_calls_aggregate_to_monthly(
     assert call_args[0][0] is sample_bars
 
 
-def test_backfill_computes_weekly_metrics(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_backfill_computes_weekly_metrics(pipeline_mocks, tmp_path, sample_frames):
     """Backfill computes metrics for daily, weekly, and monthly bars."""
-    from tickerlake.pipeline import backfill
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     backfill(_make_config(tmp_path))
 
-    assert pipeline_mocks["compute_metrics"].call_count == 3
+    assert pipeline_mocks["compute_metrics"].call_count == EXPECTED_METRIC_CALLS
 
 
 def test_backfill_passes_weekly_to_consumer_db(
     pipeline_mocks,
     tmp_path,
-    sample_bars,
-    sample_splits,
-    sample_tickers,
-    sample_metrics,
+    sample_frames,
 ):
     """Backfill passes weekly bars and metrics to write_consumer_db."""
-    from tickerlake.pipeline import backfill
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(
         pipeline_mocks,
         sample_bars,
@@ -1008,12 +928,9 @@ def test_backfill_passes_weekly_to_consumer_db(
     assert "monthly_metrics" in call_kwargs
 
 
-def test_update_calls_aggregate_to_weekly(
-    pipeline_mocks, tmp_path, sample_bars, sample_splits, sample_tickers, sample_metrics
-):
+def test_update_calls_aggregate_to_weekly(pipeline_mocks, tmp_path, sample_frames):
     """Update calls aggregate_to_weekly with filtered bars."""
-    from tickerlake.pipeline import update
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     (tmp_path / "raw.duckdb").touch()
     update(_make_config(tmp_path))
@@ -1025,14 +942,10 @@ def test_update_calls_aggregate_to_weekly(
 def test_update_passes_weekly_to_consumer_db(
     pipeline_mocks,
     tmp_path,
-    sample_bars,
-    sample_splits,
-    sample_tickers,
-    sample_metrics,
+    sample_frames,
 ):
     """Update passes weekly bars and metrics to write_consumer_db."""
-    from tickerlake.pipeline import update
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(
         pipeline_mocks,
         sample_bars,
@@ -1053,14 +966,10 @@ def test_update_passes_weekly_to_consumer_db(
 def test_backfill_persists_splits(
     pipeline_mocks,
     tmp_path,
-    sample_bars,
-    sample_splits,
-    sample_tickers,
-    sample_metrics,
+    sample_frames,
 ):
     """Backfill calls write_splits with extracted splits and raw.duckdb path."""
-    from tickerlake.pipeline import backfill
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     config = _make_config(tmp_path)
     backfill(config)
@@ -1071,14 +980,10 @@ def test_backfill_persists_splits(
 def test_update_persists_splits(
     pipeline_mocks,
     tmp_path,
-    sample_bars,
-    sample_splits,
-    sample_tickers,
-    sample_metrics,
+    sample_frames,
 ):
     """Update calls write_splits with extracted splits and raw.duckdb path."""
-    from tickerlake.pipeline import update
-
+    sample_bars, sample_splits, sample_tickers, sample_metrics = sample_frames
     _wire_defaults(pipeline_mocks, sample_bars, sample_splits, sample_tickers, sample_metrics)
     (tmp_path / "raw.duckdb").touch()
     config = _make_config(tmp_path)

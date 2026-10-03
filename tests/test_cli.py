@@ -263,5 +263,6 @@ def test_removed_report_commands_are_rejected(command, monkeypatch, capsys):
         main()
 
     captured = capsys.readouterr()
-    assert exc_info.value.code == 2
+    argparse_invalid_choice_exit_code = 2
+    assert exc_info.value.code == argparse_invalid_choice_exit_code
     assert f"invalid choice: '{command}'" in captured.err

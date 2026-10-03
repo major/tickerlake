@@ -125,10 +125,12 @@ def extract_daily_aggs(client: MassiveClient, dates: list[datetime.date]) -> pl.
 
 
 def extract_splits(client: MassiveClient, start_date: datetime.date, end_date: datetime.date) -> pl.DataFrame:
+    """Extract split records for the requested date range."""
     splits = client.fetch_splits(start_date, end_date)
     return _rows_to_df([_split_to_row(s) for s in splits], SPLITS_SCHEMA)
 
 
 def extract_tickers(client: MassiveClient, types: list[str]) -> pl.DataFrame:
+    """Extract ticker records for the requested ticker types."""
     tickers = client.fetch_tickers(types)
     return _rows_to_df([_ticker_to_row(t) for t in tickers], TICKERS_SCHEMA)

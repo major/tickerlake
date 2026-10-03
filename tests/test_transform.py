@@ -1,3 +1,5 @@
+"""Behavioral tests for bar transformations and technical metrics."""
+
 import datetime
 import importlib
 
@@ -10,8 +12,6 @@ extract = importlib.import_module("tickerlake.extract")
 adjust_splits = transform.adjust_splits
 compute_metrics = transform.compute_metrics
 filter_tickers = transform.filter_tickers
-_compute_atr = transform._compute_atr
-_compute_adr_pct = transform._compute_adr_pct
 aggregate_to_weekly = transform.aggregate_to_weekly
 aggregate_to_monthly = transform.aggregate_to_monthly
 DAILY_AGGS_SCHEMA = extract.DAILY_AGGS_SCHEMA
@@ -29,6 +29,11 @@ BARS_SCHEMA = {
     "transactions": pl.UInt32,
 }
 
+EXPECTED_WEEKLY_ROWS = 6
+EXPECTED_TRANSACTIONS = 60
+EXPECTED_SINGLE_DAY_TRANSACTIONS = 10
+EXPECTED_MONTH_TRANSACTIONS = 21
+
 SPLITS_SCHEMA = {
     "ticker": pl.Utf8,
     "execution_date": pl.Date,
@@ -40,10 +45,12 @@ SPLITS_SCHEMA = {
 
 
 def make_bars(rows: list[dict]) -> pl.DataFrame:
+    """Build a typed bars frame from row dictionaries."""
     return pl.DataFrame(rows, schema=BARS_SCHEMA)
 
 
 def make_splits(rows: list[dict]) -> pl.DataFrame:
+    """Build a typed splits frame from row dictionaries."""
     return pl.DataFrame(rows, schema=SPLITS_SCHEMA)
 
 
@@ -51,6 +58,7 @@ def make_metric_bars(
     ticker_to_closes: dict[str, list[float]],
     start_date: datetime.date = datetime.date(2024, 1, 1),
 ) -> pl.DataFrame:
+    """Build sample bars with close prices for each ticker."""
     rows = []
     for ticker, closes in ticker_to_closes.items():
         for index, close in enumerate(closes):
@@ -71,7 +79,10 @@ def make_metric_bars(
 
 
 class TestAggregateToWeekly:
+    """Weekly aggregation behavior and schema guarantees."""
+
     def test_basic_aggregation(self):
+        """Aggregate daily bars by ticker and week."""
         rows = []
         for ticker, base in [("AAPL", 100.0), ("MSFT", 200.0)]:
             week_1_dates = [
@@ -113,11 +124,12 @@ class TestAggregateToWeekly:
 
         result = aggregate_to_weekly(make_bars(rows))
 
-        assert len(result) == 6
+        assert len(result) == EXPECTED_WEEKLY_ROWS
         per_ticker_counts = result.group_by("ticker").len().sort("ticker")
         assert per_ticker_counts["len"].to_list() == [3, 3]
 
     def test_ohlcv_rollup_values(self):
+        """Roll up OHLCV values and compute volume-weighted VWAP."""
         bars = make_bars(
             [
                 {
@@ -189,10 +201,11 @@ class TestAggregateToWeekly:
             (100.7 * 1000.0) + (103.1 * 1100.0) + (100.2 * 1200.0) + (101.5 * 1300.0) + (102.8 * 1400.0)
         ) / 6000.0
         assert row["vwap"] == pytest.approx(expected_vwap)
-        assert row["transactions"] == 60
+        assert row["transactions"] == EXPECTED_TRANSACTIONS
         assert row["date"] == datetime.date(2024, 1, 8)
 
     def test_date_is_week_start_monday(self):
+        """Label each weekly aggregate with Monday's date."""
         bars = make_bars(
             [
                 {
@@ -247,6 +260,7 @@ class TestAggregateToWeekly:
         assert row["date"] == datetime.date(2024, 1, 8)
 
     def test_partial_midweek_start_labeled_monday(self):
+        """Label a partial week with its calendar Monday."""
         bars = make_bars(
             [
                 {
@@ -291,6 +305,7 @@ class TestAggregateToWeekly:
         assert row["volume"] == pytest.approx(3300.0)
 
     def test_single_day_week(self):
+        """Preserve values for a week with one trading day."""
         bars = make_bars(
             [
                 {
@@ -315,10 +330,11 @@ class TestAggregateToWeekly:
         assert row["close"] == pytest.approx(104.0)
         assert row["volume"] == pytest.approx(1000.0)
         assert row["vwap"] == pytest.approx(103.0)
-        assert row["transactions"] == 10
+        assert row["transactions"] == EXPECTED_SINGLE_DAY_TRANSACTIONS
         assert row["date"] == datetime.date(2024, 1, 8)
 
     def test_per_ticker_isolation(self):
+        """Aggregate each ticker independently."""
         bars = make_bars(
             [
                 {
@@ -380,6 +396,7 @@ class TestAggregateToWeekly:
         assert msft_row["volume"] == pytest.approx(4100.0)
 
     def test_output_schema_matches_daily(self):
+        """Keep weekly output columns and types aligned with daily bars."""
         bars = make_bars(
             [
                 {
@@ -414,6 +431,7 @@ class TestAggregateToWeekly:
 
 
 def test_aggregate_to_monthly_values_and_last_trading_day():
+    """Aggregate monthly values and retain the last trading date."""
     bars = make_bars(
         [
             {
@@ -464,7 +482,7 @@ def test_aggregate_to_monthly_values_and_last_trading_day():
     assert january["close"] == pytest.approx(104.0)
     assert january["volume"] == pytest.approx(2100.0)
     assert january["vwap"] == pytest.approx(expected_vwap)
-    assert january["transactions"] == 21
+    assert january["transactions"] == EXPECTED_MONTH_TRANSACTIONS
 
 
 def test_aggregate_to_period_empty_input_weekly_and_monthly():
@@ -481,7 +499,10 @@ def test_aggregate_to_period_empty_input_weekly_and_monthly():
 
 
 class TestAggregateToMonthly:
+    """Monthly aggregation behavior and schema guarantees."""
+
     def test_groups_by_calendar_month_with_actual_last_trading_day(self):
+        """Group by month and retain the final observed trading date."""
         bars = make_bars(
             [
                 {
@@ -533,6 +554,7 @@ class TestAggregateToMonthly:
         assert result.dtypes == list(DAILY_AGGS_SCHEMA.values())
 
     def test_empty_input(self):
+        """Return the expected schema for empty monthly input."""
         result = aggregate_to_monthly(pl.DataFrame(schema=BARS_SCHEMA))
 
         assert result.is_empty()
@@ -541,6 +563,7 @@ class TestAggregateToMonthly:
 
 
 def test_adjust_splits_basic(sample_bars_df: pl.DataFrame, sample_splits_df: pl.DataFrame):
+    """Adjust historical OHLCV values for stock splits."""
     result = adjust_splits(sample_bars_df, sample_splits_df)
 
     aapl_row = result.filter((pl.col("ticker") == "AAPL") & (pl.col("date") == datetime.date(2024, 1, 1))).row(
@@ -554,6 +577,7 @@ def test_adjust_splits_basic(sample_bars_df: pl.DataFrame, sample_splits_df: pl.
 
 
 def test_adjust_splits_same_day_not_adjusted():
+    """Leave bars on the split execution date unchanged."""
     bars = make_bars(
         [
             {
@@ -607,6 +631,7 @@ def test_adjust_splits_same_day_not_adjusted():
 
 
 def test_adjust_splits_no_split_unchanged():
+    """Leave bars unchanged when there are no applicable splits."""
     bars = make_bars(
         [
             {
@@ -641,6 +666,7 @@ def test_adjust_splits_no_split_unchanged():
 
 
 def test_adjust_splits_aapl_4to1():
+    """Apply a four-for-one split to historical bars."""
     bars = make_bars(
         [
             {
@@ -676,6 +702,7 @@ def test_adjust_splits_aapl_4to1():
 
 
 def test_adjust_splits_reverse_split():
+    """Apply a reverse split to historical bars."""
     bars = make_bars(
         [
             {
@@ -711,6 +738,7 @@ def test_adjust_splits_reverse_split():
 
 
 def test_adjust_splits_vwap_adjusted():
+    """Adjust VWAP with other historical prices."""
     bars = make_bars(
         [
             {
@@ -745,6 +773,7 @@ def test_adjust_splits_vwap_adjusted():
 
 
 def test_adjust_splits_multiple_tickers():
+    """Apply each ticker's split only to its own bars."""
     bars = make_bars(
         [
             {
@@ -917,12 +946,14 @@ def test_adjust_splits_multi_split_spot_check(ticker, splits_data, checks):
 
 
 def test_adjust_splits_empty_splits(sample_bars_df: pl.DataFrame, sample_splits_df: pl.DataFrame):
+    """Preserve bars when the splits frame is empty."""
     result = adjust_splits(sample_bars_df, sample_splits_df.head(0))
 
     assert_frame_equal(result, sample_bars_df)
 
 
 def test_filter_tickers_keeps_matching(sample_bars_df: pl.DataFrame, sample_tickers_df: pl.DataFrame):
+    """Keep bars for tickers present in metadata."""
     result = filter_tickers(sample_bars_df, sample_tickers_df)
 
     assert set(result["ticker"].unique()) == {"AAPL", "MSFT"}
@@ -930,6 +961,7 @@ def test_filter_tickers_keeps_matching(sample_bars_df: pl.DataFrame, sample_tick
 
 
 def test_filter_tickers_removes_unknown(sample_tickers_df: pl.DataFrame):
+    """Remove bars for tickers absent from metadata."""
     bars = make_bars(
         [
             {
@@ -963,6 +995,7 @@ def test_filter_tickers_removes_unknown(sample_tickers_df: pl.DataFrame):
 
 
 def test_compute_metrics_sma20_correct():
+    """Compute the 20-bar simple moving average."""
     bars = make_metric_bars({"AAPL": [float(i) for i in range(1, 31)]})
 
     result = compute_metrics(bars)
@@ -972,6 +1005,7 @@ def test_compute_metrics_sma20_correct():
 
 
 def test_compute_metrics_sma50_correct():
+    """Compute the 50-bar simple moving average."""
     bars = make_metric_bars({"AAPL": [float(i) for i in range(1, 61)]})
 
     result = compute_metrics(bars)
@@ -981,6 +1015,7 @@ def test_compute_metrics_sma50_correct():
 
 
 def test_compute_metrics_sma200_correct():
+    """Compute the 200-bar simple moving average."""
     bars = make_metric_bars({"AAPL": [float(i) for i in range(1, 251)]})
 
     result = compute_metrics(bars)
@@ -990,6 +1025,7 @@ def test_compute_metrics_sma200_correct():
 
 
 def test_compute_metrics_sma20_null_count():
+    """Check the 20-bar moving-average warmup nulls."""
     bars = make_metric_bars(
         {
             "AAPL": [100.0] * 250,
@@ -1004,6 +1040,7 @@ def test_compute_metrics_sma20_null_count():
 
 
 def test_compute_metrics_sma50_null_count():
+    """Check the 50-bar moving-average warmup nulls."""
     bars = make_metric_bars(
         {
             "AAPL": [100.0] * 250,
@@ -1018,6 +1055,7 @@ def test_compute_metrics_sma50_null_count():
 
 
 def test_compute_metrics_sma200_null_count():
+    """Check the 200-bar moving-average warmup nulls."""
     bars = make_metric_bars(
         {
             "AAPL": [100.0] * 250,
@@ -1032,6 +1070,7 @@ def test_compute_metrics_sma200_null_count():
 
 
 def test_compute_metrics_per_ticker():
+    """Compute moving averages independently per ticker."""
     bars = make_metric_bars(
         {
             "AAPL": [10.0] * 60,
@@ -1054,6 +1093,7 @@ def test_compute_metrics_per_ticker():
 
 
 def test_compute_metrics_output_columns():
+    """Return metric columns in a stable order."""
     bars = make_metric_bars({"AAPL": [100.0] * 250})
 
     result = compute_metrics(bars)
@@ -1109,7 +1149,7 @@ def test_compute_atr_basic():
     ohlc = [(100.0, 102.0, 98.0, 100.0)] * 20
     bars = make_ohlc_bars({"AAPL": ohlc})
 
-    result = _compute_atr(bars)
+    result = compute_metrics(bars)
 
     # Row 13 (0-indexed) is the 14th bar — first non-null ATR
     # date = 2024-01-01 + 13 days = 2024-01-14
@@ -1122,7 +1162,7 @@ def test_compute_atr_null_count():
     ohlc = [(100.0, 102.0, 98.0, 100.0)] * 30
     bars = make_ohlc_bars({"AAPL": ohlc, "MSFT": ohlc})
 
-    result = _compute_atr(bars)
+    result = compute_metrics(bars)
     null_counts = result.group_by("ticker").agg(pl.col("atr_14").null_count().alias("nulls"))
 
     assert null_counts.sort("ticker")["nulls"].to_list() == [13, 13]
@@ -1136,7 +1176,7 @@ def test_compute_atr_per_ticker_isolation():
     msft_ohlc = [(100.0, 101.0, 99.0, 100.0)] * 20
     bars = make_ohlc_bars({"AAPL": aapl_ohlc, "MSFT": msft_ohlc})
 
-    result = _compute_atr(bars)
+    result = compute_metrics(bars)
 
     aapl_row = result.filter((pl.col("ticker") == "AAPL") & (pl.col("date") == datetime.date(2024, 1, 14))).row(
         0, named=True
@@ -1154,7 +1194,7 @@ def test_compute_atr_flat_price():
     ohlc = [(100.0, 100.0, 100.0, 100.0)] * 20
     bars = make_ohlc_bars({"AAPL": ohlc})
 
-    result = _compute_atr(bars)
+    result = compute_metrics(bars)
 
     # After warmup, every ATR value should be 0.0
     non_null = result.filter(pl.col("atr_14").is_not_null())
@@ -1232,7 +1272,7 @@ def test_compute_metrics_atr_pct_correct():
 
 
 def test_compute_metrics_atr_pct_null_count():
-    """atr_pct inherits ATR(14)'s 13-row warmup — exactly 13 leading nulls per ticker."""  # noqa: E501
+    """atr_pct inherits ATR(14)'s 13-row warmup — exactly 13 leading nulls per ticker."""
     ohlc = [(100.0, 102.0, 98.0, 100.0)] * 30
     bars = make_ohlc_bars({"AAPL": ohlc, "MSFT": ohlc})
 
@@ -1300,7 +1340,7 @@ def test_compute_metrics_volume_sma20_correct():
 
 
 def test_compute_metrics_volume_sma20_null_count():
-    """volume_sma_20 has exactly 19 leading nulls per ticker (rolling_mean(20) warmup)."""  # noqa: E501
+    """volume_sma_20 has exactly 19 leading nulls per ticker (rolling_mean(20) warmup)."""
     bars = make_metric_bars(
         {
             "AAPL": [100.0] * 250,
@@ -1346,20 +1386,20 @@ def test_compute_metrics_volume_sma20_per_ticker():
 
 
 def test_compute_adr_pct_basic():
-    """ADR%(20) equals SMA20((high-low)/close). With constant spread=4, close=100: ADR%=0.04."""  # noqa: E501
+    """ADR%(20) equals SMA20((high-low)/close). With constant spread=4, close=100: ADR%=0.04."""
     ohlc = [(100.0, 102.0, 98.0, 100.0)] * 25
     bars = make_ohlc_bars({"AAPL": ohlc})
-    result = _compute_adr_pct(bars)
+    result = compute_metrics(bars)
     # Row 19 (0-indexed) = 20th bar = first non-null ADR%
     row = result.filter(pl.col("date") == datetime.date(2024, 1, 20)).row(0, named=True)
     assert row["adr_pct"] == pytest.approx(0.04, abs=1e-4)
 
 
 def test_compute_adr_pct_warmup_nulls():
-    """ADR%(20) has exactly 19 leading nulls per ticker (rolling_mean(20) needs 20 values)."""  # noqa: E501
+    """ADR%(20) has exactly 19 leading nulls per ticker (rolling_mean(20) needs 20 values)."""
     ohlc = [(100.0, 102.0, 98.0, 100.0)] * 30
     bars = make_ohlc_bars({"AAPL": ohlc, "MSFT": ohlc})
-    result = _compute_adr_pct(bars)
+    result = compute_metrics(bars)
     null_counts = result.group_by("ticker").agg(pl.col("adr_pct").null_count().alias("nulls"))
     assert null_counts.sort("ticker")["nulls"].to_list() == [19, 19]
 
@@ -1369,7 +1409,7 @@ def test_compute_adr_pct_per_ticker_isolation():
     aapl_ohlc = [(100.0, 102.0, 98.0, 100.0)] * 25  # spread=4 → ADR%=0.04
     msft_ohlc = [(100.0, 105.0, 95.0, 100.0)] * 25  # spread=10 → ADR%=0.10
     bars = make_ohlc_bars({"AAPL": aapl_ohlc, "MSFT": msft_ohlc})
-    result = _compute_adr_pct(bars)
+    result = compute_metrics(bars)
     target_date = datetime.date(2024, 1, 20)
     aapl_row = result.filter((pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)).row(0, named=True)
     msft_row = result.filter((pl.col("ticker") == "MSFT") & (pl.col("date") == target_date)).row(0, named=True)
@@ -1381,18 +1421,18 @@ def test_compute_adr_pct_flat_price():
     """When high == low, daily range = 0, so ADR% = 0.0 after warmup (not null)."""
     ohlc = [(100.0, 100.0, 100.0, 100.0)] * 25
     bars = make_ohlc_bars({"AAPL": ohlc})
-    result = _compute_adr_pct(bars)
+    result = compute_metrics(bars)
     non_null = result.filter(pl.col("adr_pct").is_not_null())
     assert len(non_null) > 0
     assert non_null["adr_pct"].to_list() == pytest.approx([0.0] * len(non_null), abs=1e-6)
 
 
 def test_compute_adr_pct_output_columns():
-    """Result has exactly 3 columns: [date, ticker, adr_pct]."""
+    """Metrics output includes ADR percentage alongside other metrics."""
     ohlc = [(100.0, 102.0, 98.0, 100.0)] * 25
     bars = make_ohlc_bars({"AAPL": ohlc})
-    result = _compute_adr_pct(bars)
-    assert result.columns == ["date", "ticker", "adr_pct"]
+    result = compute_metrics(bars)
+    assert "adr_pct" in result.columns
 
 
 def test_compute_metrics_adr_pct_value():

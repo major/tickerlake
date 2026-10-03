@@ -39,7 +39,8 @@ class TestGetTradingDays:
             datetime.date(2024, 1, 2),
             datetime.date(2024, 1, 31),
         )
-        assert len(result) == 21
+        expected_trading_days = 21
+        assert len(result) == expected_trading_days
 
     def test_returns_date_objects(self) -> None:
         """Returns list of datetime.date, not pd.Timestamp."""

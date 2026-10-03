@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import polars as pl
@@ -32,6 +31,7 @@ from tickerlake.transform import (
 
 if TYPE_CHECKING:
     import datetime
+    from pathlib import Path
 
     from tickerlake.config import Config
 
@@ -151,6 +151,11 @@ def _run_backfill(config: Config, *, bars_start: datetime.date | None = None) ->
     else:
         logger.info("All dates cached, skipping extraction.")
 
+    _rebuild_consumer_database(config, client, raw_path, consumer_path)
+
+
+def _rebuild_consumer_database(config: Config, client: MassiveClient, raw_path: Path, consumer_path: Path) -> None:
+    """Rebuild the consumer database from raw bars and current reference data."""
     logger.info("Loading raw bars for transform...")
     all_bars = read_raw_db(raw_path)
 
@@ -203,7 +208,7 @@ def backfill(config: Config) -> None:
 
 
 def update(config: Config) -> None:
-    """Incrementally update raw.duckdb with new trading days, then rebuild consumer db."""  # noqa: E501
+    """Incrementally update raw.duckdb with new trading days, then rebuild consumer db."""
     _require_api_key(config)
     raw_path = config.output_dir / "raw.duckdb"
 

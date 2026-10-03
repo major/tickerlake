@@ -20,6 +20,8 @@ from tickerlake.load import (
     write_splits,
 )
 
+EXPECTED_CONSUMER_TABLE_COUNT = 3
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -160,7 +162,7 @@ def test_get_existing_dates_missing_file(tmp_path: Path) -> None:
 
 
 def test_get_existing_dates_missing_table(tmp_path: Path) -> None:
-    """get_existing_dates() returns empty set when raw_daily_bars table doesn't exist."""  # noqa: E501
+    """get_existing_dates() returns empty set when raw_daily_bars table doesn't exist."""
     db_path = tmp_path / "empty.duckdb"
     # Create an empty DuckDB file with no tables
     con = duckdb.connect(str(db_path))
@@ -257,7 +259,7 @@ def test_write_consumer_db_schema(
     sample_metrics_df: pl.DataFrame,
     sample_tickers_df: pl.DataFrame,
 ) -> None:
-    """Price columns are FLOAT, date is DATE, transactions is UINTEGER in consumer db."""  # noqa: E501
+    """Price columns are FLOAT, date is DATE, transactions is UINTEGER in consumer db."""
     db_path = tmp_path / "tickerlake.duckdb"
     write_consumer_db(sample_bars_df, sample_metrics_df, sample_tickers_df, db_path)
 
@@ -488,7 +490,7 @@ def test_write_consumer_db_hvcs_none_no_table(
     con.close()
 
     assert "daily_hvcs" not in tables
-    assert len(tables) == 3
+    assert len(tables) == EXPECTED_CONSUMER_TABLE_COUNT
 
 
 def test_write_consumer_db_backward_compat(
@@ -497,7 +499,7 @@ def test_write_consumer_db_backward_compat(
     sample_metrics_df: pl.DataFrame,
     sample_tickers_df: pl.DataFrame,
 ) -> None:
-    """Existing positional call write_consumer_db(bars, metrics, tickers, path) still works."""  # noqa: E501
+    """Existing positional call write_consumer_db(bars, metrics, tickers, path) still works."""
     db_path = tmp_path / "tickerlake.duckdb"
     write_consumer_db(sample_bars_df, sample_metrics_df, sample_tickers_df, db_path)
 
@@ -575,7 +577,7 @@ def test_write_consumer_db_weekly_tables_optional(
     assert "monthly_bars" not in tables
     assert "monthly_metrics" not in tables
     assert "weekly_hvcs" not in tables
-    assert len(tables) == 3  # daily_bars, daily_metrics, tickers
+    assert len(tables) == EXPECTED_CONSUMER_TABLE_COUNT  # daily_bars, daily_metrics, tickers
 
 
 def test_write_consumer_db_weekly_bars_schema(

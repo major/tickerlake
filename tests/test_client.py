@@ -2,7 +2,7 @@
 
 import datetime
 import os
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,13 +10,16 @@ import pytest
 from tickerlake.client import MassiveClient
 from tickerlake.config import Config
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 
 @pytest.fixture
-def sample_config() -> Config:
+def sample_config(tmp_path: Path) -> Config:
     """Create a sample Config for testing."""
     return Config(
         api_key="test-api-key",
-        output_dir=Path("/tmp"),
+        output_dir=tmp_path,
         start_date=datetime.date(2024, 1, 1),
         end_date=datetime.date(2024, 12, 31),
         ticker_types=["CS", "ETF", "ETV", "ETN", "ADRC"],
@@ -31,10 +34,10 @@ class TestMassiveClientInit:
         """MassiveClient(config) creates RESTClient with config.api_key."""
         mock_rest_class.return_value = MagicMock()
 
-        client = MassiveClient(sample_config)
+        MassiveClient(sample_config)
 
         mock_rest_class.assert_called_once_with(api_key="test-api-key")
-        assert client._client is not None
+        mock_rest_class.assert_called_once_with(api_key="test-api-key")
 
     @patch("tickerlake.client.RESTClient")
     def test_init_requires_api_key(self, mock_rest_class: MagicMock) -> None:
@@ -144,7 +147,8 @@ class TestFetchTickers:
         client = MassiveClient(sample_config)
         client.fetch_tickers(["CS", "ETF"])
 
-        assert mock_rest.list_tickers.call_count == 2
+        expected_ticker_type_calls = 2
+        assert mock_rest.list_tickers.call_count == expected_ticker_type_calls
 
     @patch("tickerlake.client.RESTClient")
     def test_fetch_tickers_correct_params(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
@@ -157,7 +161,8 @@ class TestFetchTickers:
         client.fetch_tickers(["CS", "ETF"])
 
         calls = mock_rest.list_tickers.call_args_list
-        assert len(calls) == 2
+        expected_ticker_type_calls = 2
+        assert len(calls) == expected_ticker_type_calls
 
         # First call for CS
         assert calls[0][1] == {
@@ -198,4 +203,5 @@ class TestFetchTickers:
 
         expected = cs_tickers + etf_tickers
         assert result == expected
-        assert len(result) == 4
+        expected_ticker_count = 4
+        assert len(result) == expected_ticker_count

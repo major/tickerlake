@@ -1,3 +1,5 @@
+"""Transform market data into adjusted bars and technical metrics."""
+
 import polars as pl
 
 from tickerlake.extract import DAILY_AGGS_SCHEMA
@@ -41,6 +43,7 @@ def adjust_splits(bars: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
 
 
 def filter_tickers(bars: pl.DataFrame, tickers: pl.DataFrame) -> pl.DataFrame:
+    """Keep bars whose ticker appears in the ticker metadata DataFrame."""
     return bars.join(tickers.select("ticker"), on="ticker", how="inner")
 
 
