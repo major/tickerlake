@@ -464,17 +464,27 @@ def test_compact_raw_db_sorted(tmp_path: Path, sample_bars_df: pl.DataFrame) -> 
             assert rows[i][0] >= rows[i - 1][0], "Tickers not sorted"
 
 
-def test_append_raw_db_sorted(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
-    """append_raw_db() inserts rows sorted by (ticker, date)."""
+def test_append_raw_db_preserves_existing_and_new_rows(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
+    """Appending distinct unsorted records preserves all values and schema."""
     db_path = tmp_path / "raw.duckdb"
-    write_raw_db(sample_bars_df, db_path)
-    append_raw_db(sample_bars_df, db_path)
+    reversed_bars = sample_bars_df.reverse()
+    split_index = len(reversed_bars) // 2
+    initial_rows = reversed_bars.slice(0, split_index)
+    appended_rows = reversed_bars.slice(split_index).with_columns(
+        (pl.col("open") + 100).alias("open"),
+        (pl.col("high") + 100).alias("high"),
+        (pl.col("low") + 100).alias("low"),
+        (pl.col("close") + 100).alias("close"),
+        (pl.col("volume") + 100).alias("volume"),
+        (pl.col("vwap") + 100).alias("vwap"),
+        (pl.col("transactions") + 100).alias("transactions"),
+    )
+    expected = pl.concat([initial_rows, appended_rows]).sort(["ticker", "date"])
 
-    con = duckdb.connect(str(db_path), read_only=True)
-    rows = con.execute("SELECT ticker, date FROM raw_daily_bars").fetchall()
-    con.close()
+    write_raw_db(initial_rows, db_path)
+    append_raw_db(appended_rows, db_path)
 
-    assert len(rows) == len(sample_bars_df) * 2
+    assert_frame_equal(read_raw_db(db_path).sort(["ticker", "date"]), expected)
 
 
 def test_write_consumer_db_hvcs_none_no_table(
