@@ -2,7 +2,8 @@
 
 import datetime
 import logging
-import os
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import DEFAULT, patch
 
@@ -28,14 +29,106 @@ EXPECTED_DB_INFO_CALLS = 2
 _PIPELINE = "tickerlake.pipeline"
 
 
+@dataclass
+class _ApiBar:
+    timestamp: int
+    ticker: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    vwap: float
+    transactions: int
+
+
+@dataclass
+class _ApiTicker:
+    ticker: str
+    name: str
+    type: str
+    primary_exchange: str
+    cik: str
+    active: bool
+
+
+class _FakeMassiveClient:
+    """API-boundary fake for a real backfill smoke scenario."""
+
+    def __init__(self) -> None:
+        self.bars_by_date: dict[datetime.date, list[_ApiBar]] = {}
+        self.tickers: list[_ApiTicker] = []
+
+    def fetch_daily_aggs(self, date: datetime.date) -> list[_ApiBar]:
+        return self.bars_by_date.get(date, [])
+
+    def fetch_splits(self, start_date: datetime.date, end_date: datetime.date) -> list[object]:
+        return []
+
+    def fetch_tickers(self, types: list[str]) -> list[_ApiTicker]:
+        return [ticker for ticker in self.tickers if ticker.type in types]
+
+
 def _make_config(tmp_path: Path):
     """Build a Config pointing at tmp_path with a fake API key."""
-    os.environ["MASSIVE_API_KEY"] = "test_key"
     return Config(
+        api_key="test_key",
+        api_key="test_key",
         output_dir=tmp_path,
         start_date=datetime.date(2024, 1, 1),
         end_date=datetime.date(2024, 1, 31),
     )
+
+
+@pytest.fixture
+def fake_massive_client(monkeypatch):
+    from tickerlake import pipeline
+
+    client = _FakeMassiveClient()
+    monkeypatch.setattr(pipeline, "MassiveClient", lambda config: client)
+    return client
+
+
+def test_backfill_persists_api_data_through_real_pipeline(
+    tmp_path: Path, fake_massive_client: _FakeMassiveClient
+) -> None:
+    import duckdb
+
+    from tickerlake import pipeline
+    from tickerlake.config import Config
+
+    date = datetime.date(2024, 1, 2)
+    fake_massive_client.bars_by_date[date] = [
+        _ApiBar(
+            timestamp=int(datetime.datetime(2024, 1, 2, tzinfo=datetime.UTC).timestamp() * 1000),
+            ticker="AAPL",
+            open=100.0,
+            high=102.0,
+            low=99.0,
+            close=101.0,
+            volume=1000.0,
+            vwap=100.5,
+            transactions=25,
+        )
+    ]
+    fake_massive_client.tickers = [_ApiTicker("AAPL", "Apple Inc.", "CS", "XNAS", "0000320193", True)]
+    pipeline.backfill(Config(api_key="test_key", output_dir=tmp_path, start_date=date, end_date=date))
+
+    for filename, table in (
+        ("raw.duckdb", "raw_daily_bars"),
+        ("tickerlake.duckdb", "daily_bars"),
+    ):
+        connection = duckdb.connect(str(tmp_path / filename), read_only=True)
+        try:
+            assert connection.execute(f"SELECT date, ticker, close FROM {table}").fetchall() == [(date, "AAPL", 101.0)]
+        finally:
+            connection.close()
+
+    connection = duckdb.connect(str(tmp_path / "tickerlake.duckdb"), read_only=True)
+    try:
+        assert connection.execute("SELECT ticker, name FROM tickers").fetchall() == [("AAPL", "Apple Inc.")]
+    finally:
+        connection.close()
 
 
 @pytest.fixture
