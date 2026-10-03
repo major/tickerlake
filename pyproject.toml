@@ -39,6 +39,9 @@ dev = [
 source_paths = ["src/tickerlake"]
 pytest_add_cli_args = ["-o", "addopts="]
 pytest_add_cli_args_test_selection = ["tests/"]
+# Bound runaway mutants. Timeout = (full_suite_seconds + constant) * multiplier.
+timeout_constant = 1.0
+timeout_multiplier = 15.0
 
 [tool.ruff]
 line-length = 120
