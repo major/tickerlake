@@ -6,6 +6,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def _default_start_date() -> datetime.date:
+    """Return today minus 10 years, falling back to Feb 28 on leap-day edge."""
+    today = datetime.datetime.now(tz=datetime.UTC).date()
+    target_year = today.year - 10
+    try:
+        return today.replace(year=target_year)
+    except ValueError:
+        # Today is Feb 29 and target_year is not a leap year.
+        return datetime.date(target_year, 2, 28)
+
+
 @dataclass
 class Config:
     """Configuration for tickerlake ETL pipeline.
@@ -23,13 +34,7 @@ class Config:
 
     api_key: str = field(default="")
     output_dir: Path = field(default_factory=Path.cwd)
-    start_date: datetime.date = field(
-        default_factory=lambda: (
-            datetime.datetime.now(tz=datetime.UTC)
-            .date()
-            .replace(year=datetime.datetime.now(tz=datetime.UTC).date().year - 10)
-        )
-    )
+    start_date: datetime.date = field(default_factory=_default_start_date)
     end_date: datetime.date = field(default_factory=lambda: datetime.datetime.now(tz=datetime.UTC).date())
     ticker_types: list[str] = field(default_factory=lambda: ["CS", "ETF", "ETV", "ETN", "ADRC"])
 

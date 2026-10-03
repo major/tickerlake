@@ -2,10 +2,25 @@
 
 import datetime
 import os
+import types
 from pathlib import Path
 from unittest.mock import patch
 
 from tickerlake.config import Config
+
+
+def _config_datetime_on(day: datetime.date) -> types.SimpleNamespace:
+    """Build a stand-in for the config module's ``datetime`` with a pinned today."""
+
+    class _FakeDateTime(datetime.datetime):
+        """A ``datetime`` whose ``now`` always returns the pinned day."""
+
+        @classmethod
+        def now(cls, tz: datetime.tzinfo | None = None) -> datetime.datetime:
+            """Return the pinned day using the requested timezone."""
+            return cls(day.year, day.month, day.day, tzinfo=tz)
+
+    return types.SimpleNamespace(datetime=_FakeDateTime, UTC=datetime.UTC, date=datetime.date)
 
 
 class TestApiKey:
@@ -29,13 +44,28 @@ class TestDates:
     """Test date configuration."""
 
     def test_start_date_default(self) -> None:
-        """start_date defaults to 10 years ago from today."""
-        with patch.dict(os.environ, {"MASSIVE_API_KEY": "test"}):
+        """start_date defaults to the same month and day 10 years before today.
+
+        The Feb 28 fallback only matters on Feb 29, which is covered separately
+        in ``test_start_date_default_on_leap_day``.
+        """
+        with (
+            patch.dict(os.environ, {"MASSIVE_API_KEY": "test"}),
+            patch("tickerlake.config.datetime", _config_datetime_on(datetime.date(2026, 10, 3))),
+        ):
             config = Config()
-            today = datetime.datetime.now(tz=datetime.UTC).date()
-            expected = today.replace(year=today.year - 10)
-            assert config.start_date == expected
-            assert isinstance(config.start_date, datetime.date)
+        assert config.start_date == datetime.date(2016, 10, 3)
+        assert isinstance(config.start_date, datetime.date)
+
+    def test_start_date_default_on_leap_day(self) -> None:
+        """Feb 29 falls back to Feb 28 when the target year is not a leap year."""
+        with (
+            patch.dict(os.environ, {"MASSIVE_API_KEY": "test"}),
+            patch("tickerlake.config.datetime", _config_datetime_on(datetime.date(2024, 2, 29))),
+        ):
+            config = Config()
+        assert config.start_date == datetime.date(2014, 2, 28)
+        assert isinstance(config.start_date, datetime.date)
 
     def test_end_date_default(self) -> None:
         """end_date defaults to today."""
