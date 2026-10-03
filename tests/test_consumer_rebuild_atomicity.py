@@ -38,6 +38,7 @@ def test_failed_consumer_rebuild_preserves_all_tables_then_retry_succeeds(
     """A late table replacement failure leaves the complete prior database intact."""
     db_path = tmp_path / "consumer.duckdb"
     bars = sample_bars_df
+    period_bars = bars.with_columns(pl.lit(False).alias("left_truncated"), pl.lit(False).alias("calendar_closed"))
     metrics = compute_metrics(bars)
     tickers = sample_tickers_df
     write_consumer_db(
@@ -45,9 +46,9 @@ def test_failed_consumer_rebuild_preserves_all_tables_then_retry_succeeds(
         metrics,
         tickers,
         db_path,
-        weekly_bars=bars,
+        weekly_bars=period_bars,
         weekly_metrics=metrics,
-        monthly_bars=bars,
+        monthly_bars=period_bars,
         monthly_metrics=metrics,
     )
     with duckdb.connect(str(db_path)) as connection:
@@ -55,6 +56,7 @@ def test_failed_consumer_rebuild_preserves_all_tables_then_retry_succeeds(
 
     before = _snapshot(db_path)
     changed_bars = bars.with_columns((pl.col("close") + 700).alias("close"))
+    changed_period_bars = period_bars.with_columns((pl.col("close") + 700).alias("close"))
     changed_metrics = compute_metrics(changed_bars)
     changed_tickers = tickers.with_columns(pl.lit("Replacement company").alias("name"))
     original_read_parquet_sql = load._read_parquet_sql  # noqa: SLF001 -- explicit SQL fault injection
@@ -76,9 +78,9 @@ def test_failed_consumer_rebuild_preserves_all_tables_then_retry_succeeds(
             changed_metrics,
             changed_tickers,
             db_path,
-            weekly_bars=changed_bars,
+            weekly_bars=changed_period_bars,
             weekly_metrics=changed_metrics,
-            monthly_bars=changed_bars,
+            monthly_bars=changed_period_bars,
             monthly_metrics=changed_metrics,
         )
 
@@ -90,9 +92,9 @@ def test_failed_consumer_rebuild_preserves_all_tables_then_retry_succeeds(
         changed_metrics,
         changed_tickers,
         db_path,
-        weekly_bars=changed_bars,
+        weekly_bars=changed_period_bars,
         weekly_metrics=changed_metrics,
-        monthly_bars=changed_bars,
+        monthly_bars=changed_period_bars,
         monthly_metrics=changed_metrics,
     )
     after = _snapshot(db_path)
@@ -111,6 +113,7 @@ def test_monthly_metrics_parquet_failure_preserves_tables_and_cleans_temporary_f
     """A final optional frame serialization error rolls back preceding replacements."""
     db_path = tmp_path / "consumer.duckdb"
     bars = sample_bars_df
+    period_bars = bars.with_columns(pl.lit(False).alias("left_truncated"), pl.lit(False).alias("calendar_closed"))
     metrics = compute_metrics(bars)
     tickers = sample_tickers_df
     monthly_metrics = metrics.with_columns((pl.col("sma_20") + 900).alias("sma_20"))
@@ -119,9 +122,9 @@ def test_monthly_metrics_parquet_failure_preserves_tables_and_cleans_temporary_f
         metrics,
         tickers,
         db_path,
-        weekly_bars=bars,
+        weekly_bars=period_bars,
         weekly_metrics=metrics,
-        monthly_bars=bars,
+        monthly_bars=period_bars,
         monthly_metrics=metrics,
     )
     with duckdb.connect(str(db_path)) as connection:
@@ -129,6 +132,7 @@ def test_monthly_metrics_parquet_failure_preserves_tables_and_cleans_temporary_f
     before = _snapshot(db_path)
 
     changed_bars = bars.with_columns((pl.col("close") + 800).alias("close"))
+    changed_period_bars = period_bars.with_columns((pl.col("close") + 800).alias("close"))
     changed_metrics = compute_metrics(changed_bars)
     changed_tickers = tickers.with_columns(pl.lit("Serialization replacement").alias("name"))
     parquet_temp_dir = tmp_path / "parquet-temp"
@@ -148,9 +152,9 @@ def test_monthly_metrics_parquet_failure_preserves_tables_and_cleans_temporary_f
             changed_metrics,
             changed_tickers,
             db_path,
-            weekly_bars=changed_bars,
+            weekly_bars=changed_period_bars,
             weekly_metrics=changed_metrics,
-            monthly_bars=changed_bars,
+            monthly_bars=changed_period_bars,
             monthly_metrics=monthly_metrics,
         )
 
@@ -163,9 +167,9 @@ def test_monthly_metrics_parquet_failure_preserves_tables_and_cleans_temporary_f
         changed_metrics,
         changed_tickers,
         db_path,
-        weekly_bars=changed_bars,
+        weekly_bars=changed_period_bars,
         weekly_metrics=changed_metrics,
-        monthly_bars=changed_bars,
+        monthly_bars=changed_period_bars,
         monthly_metrics=monthly_metrics,
     )
     after = _snapshot(db_path)

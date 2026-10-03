@@ -24,9 +24,9 @@ DAILY_SCHEMA = {
     "high": pl.Float32,
     "low": pl.Float32,
     "close": pl.Float32,
-    "volume": pl.Float32,
+    "volume": pl.Float64,
     "vwap": pl.Float32,
-    "transactions": pl.UInt32,
+    "transactions": pl.Int64,
 }
 SPLIT_SCHEMA = {
     "ticker": pl.String,
@@ -371,13 +371,13 @@ def test_split_adjustment_type_may_be_null():
     assert result.frame["adjustment_type"].to_list() == [None]
 
 
-def test_daily_oversized_volume_is_quarantined():
-    """Quarantine finite source volume that overflows its canonical Float32 type."""
+def test_daily_oversized_volume_is_preserved_in_float64():
+    """Preserve finite source volume that exceeds Float32 range."""
     client = MagicMock()
     client.fetch_daily_aggs.return_value = [agg(volume=1e100)]
     result = extract_daily_aggs(client, [DAY])[0]
-    assert result.status is FetchStatus.quarantined
-    assert result.frame.is_empty()
+    assert result.status is FetchStatus.populated
+    assert result.frame["volume"].to_list() == [1e100]
 
 
 def test_daily_utc_timestamp_is_not_shifted_by_host_timezone(monkeypatch):
@@ -419,7 +419,7 @@ def test_transport_exception_secret_never_reaches_diagnostics_or_logs(endpoint, 
     assert "sentinel-secret-123" not in caplog.text
 
 
-@pytest.mark.parametrize("updates", [{"transactions": None}, {"transactions": 2**32}, {"open": 1e100}])
+@pytest.mark.parametrize("updates", [{"transactions": None}, {"transactions": 2**63}, {"open": 1e100}])
 def test_daily_unrepresentable_or_missing_required_values_are_quarantined(updates):
     """Do not let invalid counts or lossy numeric casts produce populated data."""
     client = MagicMock()

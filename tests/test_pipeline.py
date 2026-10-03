@@ -644,6 +644,45 @@ def test_backfill_persists_api_data_through_real_pipeline(
         connection.close()
 
 
+def test_narrow_target_retains_future_cache_with_period_numeric_contracts(
+    tmp_path: Path, fake_massive_client: _FakeMassiveClient
+) -> None:
+    """Persist fractional/large aggregate values while retaining cached dates after target."""
+    dates = [
+        datetime.date(2024, 1, 8),
+        datetime.date(2024, 1, 9),
+        datetime.date(2024, 1, 10),
+        datetime.date(2024, 1, 11),
+        datetime.date(2024, 1, 12),
+    ]
+    for index, date in enumerate(dates):
+        fake_massive_client.bars_by_date[date] = [
+            _ApiBar(
+                timestamp=int(datetime.datetime.combine(date, datetime.time(), datetime.UTC).timestamp() * 1000),
+                ticker="AAA",
+                open=10.0 + index,
+                high=12.0 + index,
+                low=9.0 + index,
+                close=11.0 + index,
+                volume=1_000_000_000.25,
+                vwap=10.5 + index,
+                transactions=1_000_000_000,
+            )
+        ]
+    fake_massive_client.tickers = [_ApiTicker("AAA", "Example Co", "CS", "XNAS", "0000000001", True)]
+
+    pipeline.backfill(Config(api_key="test_key", output_dir=tmp_path, start_date=dates[0], end_date=dates[-1]))
+    pipeline.backfill(Config(api_key="test_key", output_dir=tmp_path, start_date=dates[0], end_date=dates[2]))
+
+    with duckdb.connect(str(tmp_path / "tickerlake.duckdb"), read_only=True) as connection:
+        assert connection.execute(
+            "SELECT date, volume, transactions, left_truncated, calendar_closed FROM weekly_bars ORDER BY date"
+        ).fetchall() == [(datetime.date(2024, 1, 8), 5_000_000_001.25, 5_000_000_000, False, False)]
+        assert connection.execute("SELECT date, volume, transactions FROM monthly_bars").fetchall() == [
+            (datetime.date(2024, 1, 12), 5_000_000_001.25, 5_000_000_000)
+        ]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Backfill
 # ═══════════════════════════════════════════════════════════════════════════════

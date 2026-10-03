@@ -2,12 +2,66 @@
 
 import datetime
 from types import SimpleNamespace
+from typing import Literal
 
 import pandas as pd
 import pytest
 
 import tickerlake.calendar as market_calendar
-from tickerlake.calendar import get_trading_days
+from tickerlake.calendar import get_trading_days, period_session_bounds
+
+
+@pytest.mark.parametrize(
+    ("date", "period", "expected"),
+    [
+        (datetime.date(2024, 1, 17), "week", (datetime.date(2024, 1, 16), datetime.date(2024, 1, 19))),
+        (datetime.date(2024, 3, 29), "week", (datetime.date(2024, 3, 25), datetime.date(2024, 3, 28))),
+        (datetime.date(2024, 11, 28), "week", (datetime.date(2024, 11, 25), datetime.date(2024, 11, 29))),
+        (datetime.date(2024, 11, 29), "week", (datetime.date(2024, 11, 25), datetime.date(2024, 11, 29))),
+        (datetime.date(2024, 2, 29), "month", (datetime.date(2024, 2, 1), datetime.date(2024, 2, 29))),
+        (datetime.date(2024, 8, 31), "month", (datetime.date(2024, 8, 1), datetime.date(2024, 8, 30))),
+    ],
+)
+def test_period_session_bounds(
+    date: datetime.date,
+    period: Literal["week", "month"],
+    expected: tuple[datetime.date, datetime.date],
+) -> None:
+    """Bounds reflect scheduled sessions, including holidays and early closes."""
+    assert period_session_bounds(date, period) == expected
+
+
+def test_period_session_bounds_includes_future_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scheduled sessions are included even when their closes are in the future."""
+    TestGetTradingDays.freeze_calendar_clocks(monkeypatch, pd.Timestamp("2024-01-02 00:00:00", tz="UTC"))
+    assert period_session_bounds(datetime.date(2024, 1, 3), "week") == (
+        datetime.date(2024, 1, 2),
+        datetime.date(2024, 1, 5),
+    )
+
+
+@pytest.mark.parametrize(
+    ("date", "period", "expected"),
+    [
+        (datetime.date(1990, 1, 3), "week", (datetime.date(1990, 1, 2), datetime.date(1990, 1, 5))),
+        (datetime.date(2050, 1, 1), "month", (datetime.date(2050, 1, 3), datetime.date(2050, 1, 31))),
+    ],
+)
+def test_period_session_bounds_supports_periods_outside_default_calendar(
+    date: datetime.date,
+    period: Literal["week", "month"],
+    expected: tuple[datetime.date, datetime.date],
+) -> None:
+    """Period lookup works well beyond the default calendar's range."""
+    assert period_session_bounds(date, period) == expected
+
+
+def test_period_session_bounds_handles_week_ending_on_holiday() -> None:
+    """A period whose endpoints are non-sessions still returns its sessions."""
+    assert period_session_bounds(datetime.date(2024, 1, 15), "week") == (
+        datetime.date(2024, 1, 16),
+        datetime.date(2024, 1, 19),
+    )
 
 
 class TestGetTradingDays:
@@ -35,7 +89,7 @@ class TestGetTradingDays:
         monkeypatch.setattr(
             market_calendar,
             "datetime",
-            SimpleNamespace(datetime=FrozenDateTime, UTC=datetime.UTC),
+            SimpleNamespace(datetime=FrozenDateTime, UTC=datetime.UTC, timedelta=datetime.timedelta),
         )
         monkeypatch.setattr(
             market_calendar,

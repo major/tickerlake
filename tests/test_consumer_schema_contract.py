@@ -46,14 +46,17 @@ def test_write_consumer_db_rejects_extra_columns_without_changing_database(
     initial_bars = sample_bars_df.with_columns((pl.col("close") + 10).alias("close"))
     initial_metrics = sample_metrics_df.with_columns((pl.col("sma_20") + 10).alias("sma_20"))
     initial_tickers = sample_tickers_df.with_columns(pl.lit("Initial name").alias("name"))
+    period_bars = sample_bars_df.with_columns(
+        pl.lit(False).alias("left_truncated"), pl.lit(False).alias("calendar_closed")
+    )
     write_consumer_db(
         initial_bars,
         initial_metrics,
         initial_tickers,
         db_path,
-        weekly_bars=initial_bars,
+        weekly_bars=period_bars,
         weekly_metrics=initial_metrics,
-        monthly_bars=initial_bars,
+        monthly_bars=period_bars,
         monthly_metrics=initial_metrics,
     )
 
@@ -69,9 +72,9 @@ def test_write_consumer_db_rejects_extra_columns_without_changing_database(
         "daily_bars": sample_bars_df,
         "daily_metrics": sample_metrics_df,
         "tickers": sample_tickers_df,
-        "weekly_bars": sample_bars_df,
+        "weekly_bars": period_bars,
         "weekly_metrics": sample_metrics_df,
-        "monthly_bars": sample_bars_df,
+        "monthly_bars": period_bars,
         "monthly_metrics": sample_metrics_df,
     }[table].with_columns(pl.lit("extra").alias(extra_column))
     args = {

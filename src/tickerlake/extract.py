@@ -23,9 +23,9 @@ DAILY_AGGS_SCHEMA = {
     "high": pl.Float32,
     "low": pl.Float32,
     "close": pl.Float32,
-    "volume": pl.Float32,
+    "volume": pl.Float64,
     "vwap": pl.Float32,
-    "transactions": pl.UInt32,
+    "transactions": pl.Int64,
 }
 SPLITS_SCHEMA = {
     "ticker": pl.Utf8,
@@ -131,7 +131,7 @@ def _daily_rows(records: list[Any], date: datetime.date) -> list[dict[str, Any]]
                 or volume < 0
                 or not isinstance(transactions, int)
                 or isinstance(transactions, bool)
-                or not 0 <= transactions <= 2**32 - 1
+                or not 0 <= transactions <= 2**63 - 1
                 or ticker in seen
             ):
                 return None

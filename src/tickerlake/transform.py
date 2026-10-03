@@ -1,7 +1,11 @@
 """Transform market data into adjusted bars and technical metrics."""
 
+import datetime
+from typing import Literal
+
 import polars as pl
 
+from tickerlake.calendar import period_session_bounds
 from tickerlake.extract import DAILY_AGGS_SCHEMA
 
 PRICE_COLUMNS = ("open", "high", "low", "close", "vwap")
@@ -16,7 +20,7 @@ def adjust_splits(bars: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
     cumulative multiplier for that bar's position in the split timeline.
     """
     if splits.is_empty():
-        return bars
+        return bars.with_columns(pl.col("volume").cast(pl.Float64))
 
     splits_shifted = splits.with_columns(
         (pl.col("execution_date") - pl.duration(days=1)).alias("execution_date")
@@ -36,8 +40,10 @@ def adjust_splits(bars: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
 
     adjusted = joined.with_columns(
         [(pl.col(column).cast(pl.Float64) * factor).cast(pl.Float32).alias(column) for column in PRICE_COLUMNS]
-        + [(pl.col("volume").cast(pl.Float64) / factor).cast(pl.Float32).alias("volume")]
+        + [(pl.col("volume").cast(pl.Float64) / factor).alias("volume")]
     )
+    if adjusted.filter(pl.col("volume").is_not_null() & ~pl.col("volume").is_finite()).height:
+        raise ValueError
 
     return adjusted.select(bars.columns)
 
@@ -129,7 +135,7 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
         ]
     )
 
-    return df.select(
+    metrics = df.select(
         [
             pl.col("date"),
             pl.col("ticker"),
@@ -149,27 +155,50 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
             pl.col("atr_14"),
             pl.col("atr_pct"),
             pl.col("adr_pct"),
-            pl.col("volume")
-            .cast(pl.Float64)
-            .rolling_mean(window_size=20)
-            .over("ticker")
-            .cast(pl.Float32)
-            .alias("volume_sma_20"),
+            pl.col("volume").cast(pl.Float64).rolling_mean(window_size=20).over("ticker").alias("volume_sma_20"),
         ]
     )
+    if metrics.filter(pl.col("volume_sma_20").is_not_null() & ~pl.col("volume_sma_20").is_finite()).height:
+        raise ValueError
+    return metrics
 
 
-def _aggregate_to_period(bars: pl.DataFrame, every: str) -> pl.DataFrame:
+PERIOD_AGGS_SCHEMA = DAILY_AGGS_SCHEMA | {"left_truncated": pl.Boolean, "calendar_closed": pl.Boolean}
+
+
+def _aggregate_to_period(
+    bars: pl.DataFrame,
+    every: str,
+    *,
+    collection_start: datetime.date,
+    target: datetime.date,
+) -> pl.DataFrame:
     """Aggregate daily OHLCV bars into calendar periods per ticker.
 
     Weekly bars are labeled with the Monday that starts their week (the
     week-start convention used by most charting platforms); monthly bars
-    with the last trading day of the month.
+    with the last observed bar date in the ticker-month.
     """
+    if collection_start > target:
+        raise ValueError
     if bars.is_empty():
-        return pl.DataFrame(schema=DAILY_AGGS_SCHEMA)
+        return pl.DataFrame(schema=PERIOD_AGGS_SCHEMA)
 
     is_weekly = every == "1w"
+    period: Literal["week", "month"] = "week" if is_weekly else "month"
+    dates = bars.get_column("date").unique().to_list()
+    period_keys = {
+        date - datetime.timedelta(days=date.weekday()) if is_weekly else date.replace(day=1) for date in dates
+    }
+    bounds_by_period = {key: period_session_bounds(key, period) for key in period_keys}
+    boundary_rows = pl.DataFrame(
+        {
+            "period_key": list(bounds_by_period),
+            "first_session": [value[0] for value in bounds_by_period.values()],
+            "last_session": [value[1] for value in bounds_by_period.values()],
+        },
+        schema={"period_key": pl.Date, "first_session": pl.Date, "last_session": pl.Date},
+    )
     aggregated = (
         bars.sort(["ticker", "date"])
         .group_by_dynamic(
@@ -185,40 +214,59 @@ def _aggregate_to_period(bars: pl.DataFrame, every: str) -> pl.DataFrame:
                 pl.col("high").max().cast(pl.Float32).alias("high"),
                 pl.col("low").min().cast(pl.Float32).alias("low"),
                 pl.col("close").sort_by("date").last().cast(pl.Float32).alias("close"),
-                pl.col("volume").sum().cast(pl.Float32).alias("volume"),
-                pl.when(pl.col("volume").sum() == 0)
+                pl.col("volume").cast(pl.Float64).sum().alias("volume"),
+                pl.when(
+                    ((pl.col("volume") > 0) & pl.col("vwap").is_null()).any()
+                    | (pl.col("volume").cast(pl.Float64).sum() == 0)
+                )
                 .then(None)
-                .otherwise((pl.col("vwap") * pl.col("volume")).sum() / pl.col("volume").sum())
+                .otherwise(
+                    pl.when(pl.col("volume") > 0)
+                    .then(
+                        (pl.col("volume").cast(pl.Float64) / pl.col("volume").cast(pl.Float64).sum())
+                        * pl.col("vwap").cast(pl.Float64)
+                    )
+                    .sum()
+                )
                 .cast(pl.Float32)
                 .alias("vwap"),
-                pl.col("transactions").sum().cast(pl.UInt32).alias("transactions"),
+                pl.col("transactions").cast(pl.Decimal(precision=38, scale=0)).sum().alias("transactions"),
                 pl.col("date").max().alias("period_date"),
             ]
         )
+        .with_columns(pl.col("transactions").cast(pl.Int64, strict=True))
     )
     if is_weekly:
-        return aggregated.drop("period_date").sort(["ticker", "date"]).select(list(DAILY_AGGS_SCHEMA.keys()))
-    return (
-        aggregated.drop("date")
-        .rename({"period_date": "date"})
-        .sort(["ticker", "date"])
-        .select(list(DAILY_AGGS_SCHEMA.keys()))
+        result = aggregated.drop("period_date").sort(["ticker", "date"])
+    else:
+        result = aggregated.drop("date").rename({"period_date": "date"}).sort(["ticker", "date"])
+    boundary_rows = boundary_rows.with_columns(
+        (collection_start > pl.col("first_session")).alias("left_truncated"),
+        (pl.col("last_session") <= target).alias("calendar_closed"),
     )
+    date_key = pl.col("date").dt.truncate("1w") if is_weekly else pl.col("date").dt.truncate("1mo")
+    result = result.with_columns(date_key.alias("period_key")).join(boundary_rows, on="period_key", how="left")
+    result = result.drop("period_key", "first_session", "last_session").select(list(PERIOD_AGGS_SCHEMA))
+    if result.filter(pl.col("volume").is_not_null() & ~pl.col("volume").is_finite()).height:
+        raise ValueError
+    return result
 
 
-def aggregate_to_weekly(bars: pl.DataFrame) -> pl.DataFrame:
+def aggregate_to_weekly(bars: pl.DataFrame, *, collection_start: datetime.date, target: datetime.date) -> pl.DataFrame:
     """Aggregate daily OHLCV bars into weekly bars per ticker.
 
     Weekly grouping is by calendar week (Monday-start). The output date is
-    the Monday that starts the ticker-week.
+    the Monday that starts the ticker-week. ``target`` determines whether a
+    period is calendar-closed; it does not filter retained future bars.
     """
-    return _aggregate_to_period(bars, "1w")
+    return _aggregate_to_period(bars, "1w", collection_start=collection_start, target=target)
 
 
-def aggregate_to_monthly(bars: pl.DataFrame) -> pl.DataFrame:
+def aggregate_to_monthly(bars: pl.DataFrame, *, collection_start: datetime.date, target: datetime.date) -> pl.DataFrame:
     """Aggregate daily OHLCV bars into monthly bars per ticker.
 
-    Monthly grouping is by calendar month. The output date is the actual last
-    trading day present in that ticker-month.
+    Monthly grouping is by calendar month. The output date is the last
+    observed bar date in that ticker-month. ``target`` determines whether a
+    period is calendar-closed; it does not filter retained future bars.
     """
-    return _aggregate_to_period(bars, "1mo")
+    return _aggregate_to_period(bars, "1mo", collection_start=collection_start, target=target)
