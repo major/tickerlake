@@ -1006,4 +1006,42 @@ def test_backfill_split_guard_failure_preserves_existing_consumer(
         connection.close()
 
 
+def test_backfill_rejects_split_ratio_error_measured_relative_to_expected(
+    tmp_path: Path,
+    fake_massive_client: _FakeMassiveClient,
+    api_bar,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject a ratio 0.8% from expected and preserve existing consumer data."""
+    date = datetime.date(2024, 1, 2)
+    raw_close = 400.0
+    adjusted_close = 100.8
+    fake_massive_client.bars_by_date[date] = [api_bar(date, "AAA", raw_close, 1000)]
+    fake_massive_client.splits = [_ApiSplit("AAA", "2024-01-03", 1, 4, 0.25, "forward")]
+    fake_massive_client.tickers = [_ApiTicker("AAA", "Example Co", "CS", "XNAS", "0000000001", True)]
+    config = Config(api_key="test_key", output_dir=tmp_path, start_date=date, end_date=datetime.date(2024, 1, 3))
+    pipeline.backfill(config)
+
+    consumer_path = tmp_path / "tickerlake.duckdb"
+    with duckdb.connect(str(consumer_path), read_only=True) as connection:
+        before = connection.execute("SELECT date, ticker, close FROM daily_bars").fetchall()
+
+    original_adjust = adjust_splits
+
+    def slightly_wrong(bars: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
+        return original_adjust(bars, splits).with_columns(
+            pl.when(pl.col("date") < datetime.date(2024, 1, 3))
+            .then(pl.lit(adjusted_close))
+            .otherwise(pl.col("close"))
+            .alias("close")
+        )
+
+    monkeypatch.setattr(pipeline, "adjust_splits", slightly_wrong)
+    with pytest.raises(ValueError, match="spot check failed"):
+        pipeline.backfill(config)
+
+    with duckdb.connect(str(consumer_path), read_only=True) as connection:
+        assert connection.execute("SELECT date, ticker, close FROM daily_bars").fetchall() == before
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
