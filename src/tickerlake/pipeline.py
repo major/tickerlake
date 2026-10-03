@@ -11,12 +11,11 @@ from tickerlake.calendar import get_trading_days
 from tickerlake.client import MassiveClient
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
 from tickerlake.load import (
-    append_raw_db,
     compact_raw_db,
-    delete_raw_dates,
     get_db_info,
     get_existing_dates,
     read_raw_db,
+    replace_raw_dates,
     write_consumer_db,
     write_raw_db,
     write_splits,
@@ -144,10 +143,9 @@ def _run_backfill(config: Config, *, bars_start: datetime.date | None = None) ->
                 "Deleting %d refreshed dates from raw DB before appending.",
                 len(dates_to_delete),
             )
-            delete_raw_dates(raw_path, dates_to_delete)
 
         logger.info("Appending to raw DB at %s...", raw_path)
-        append_raw_db(new_raw_bars, raw_path)
+        replace_raw_dates(new_raw_bars, raw_path, dates_to_delete)
     else:
         logger.info("All dates cached, skipping extraction.")
 
