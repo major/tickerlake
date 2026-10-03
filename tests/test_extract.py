@@ -1,6 +1,8 @@
 """Tests for tickerlake.extract — raw API data → polars DataFrames."""
 
 import datetime
+import os
+import time
 from dataclasses import dataclass
 from unittest.mock import MagicMock
 
@@ -116,6 +118,31 @@ def test_extract_daily_aggs_returns_expected_bar_and_schema():
             "transactions": 1000,
         }
     ]
+
+
+def test_extract_daily_aggs_uses_utc_date_when_host_timezone_is_west(monkeypatch):
+    """UTC API timestamps retain their UTC date on hosts in western timezones."""
+    if not hasattr(time, "tzset"):
+        pytest.skip("Changing the process timezone requires time.tzset")
+
+    old_tz = os.environ.get("TZ")
+    try:
+        monkeypatch.setenv("TZ", "America/Los_Angeles")
+        time.tzset()
+
+        client = MagicMock()
+        client.fetch_daily_aggs.return_value = [
+            _make_agg({**SAMPLE_AGG, "timestamp": 1704171600000}),
+        ]
+        df = extract_daily_aggs(client, [datetime.date(2024, 1, 2)])
+
+        assert df["date"].to_list() == [datetime.date(2024, 1, 2)]
+    finally:
+        if old_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", old_tz)
+        time.tzset()
 
 
 def test_extract_daily_aggs_empty_response():
