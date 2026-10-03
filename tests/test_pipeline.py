@@ -19,6 +19,7 @@ from tickerlake.pipeline import (
     compact,
     info,
 )
+from tickerlake.transform import adjust_splits
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -932,7 +933,7 @@ def test_backfill_split_guard_failure_preserves_existing_consumer(
     api_bar,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A split guard failure leaves the existing consumer database unchanged."""
+    """A failed rebuild leaves consumer data intact after raw refresh, then retries cleanly."""
     date = datetime.date(2024, 1, 2)
     fake_massive_client.bars_by_date[date] = [api_bar(date, "AAA", 400.0, 1000)]
     fake_massive_client.splits = [_ApiSplit("AAA", "2024-01-03", 1, 4, 0.25, "forward")]
@@ -947,13 +948,49 @@ def test_backfill_split_guard_failure_preserves_existing_consumer(
     finally:
         connection.close()
 
+    fake_massive_client.bars_by_date[date] = [api_bar(date, "AAA", 410.0, 1100)]
+    fake_massive_client.splits = [_ApiSplit("AAA", "2024-01-03", 1, 4, 0.25, "forward")]
     monkeypatch.setattr(pipeline, "adjust_splits", lambda bars, splits: bars)
     with pytest.raises(ValueError, match="spot check failed"):
         pipeline.backfill(config)
 
+    raw_path = tmp_path / "raw.duckdb"
+    connection = duckdb.connect(str(raw_path), read_only=True)
+    try:
+        assert connection.execute(
+            "SELECT date, ticker, close, volume FROM raw_daily_bars ORDER BY date, ticker"
+        ).fetchall() == [(date, "AAA", 410.0, 1100.0)]
+        assert connection.execute("SELECT ticker, execution_date, adjustment_factor FROM splits").fetchall() == [
+            ("AAA", datetime.date(2024, 1, 3), 0.25)
+        ]
+    finally:
+        connection.close()
+
     connection = duckdb.connect(str(consumer_path), read_only=True)
     try:
         assert connection.execute("SELECT date, ticker, close FROM daily_bars").fetchall() == before
+    finally:
+        connection.close()
+
+    monkeypatch.setattr(pipeline, "adjust_splits", adjust_splits)
+    pipeline.backfill(config)
+
+    connection = duckdb.connect(str(raw_path), read_only=True)
+    try:
+        assert connection.execute(
+            "SELECT date, ticker, close, volume FROM raw_daily_bars ORDER BY date, ticker"
+        ).fetchall() == [(date, "AAA", 410.0, 1100.0)]
+        assert connection.execute("SELECT ticker, execution_date, adjustment_factor FROM splits").fetchall() == [
+            ("AAA", datetime.date(2024, 1, 3), 0.25)
+        ]
+    finally:
+        connection.close()
+
+    connection = duckdb.connect(str(consumer_path), read_only=True)
+    try:
+        assert connection.execute("SELECT date, ticker, close, volume FROM daily_bars").fetchall() == [
+            (date, "AAA", 102.5, 4400.0)
+        ]
     finally:
         connection.close()
 
