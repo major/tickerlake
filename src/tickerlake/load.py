@@ -81,18 +81,22 @@ def write_raw_db(bars: pl.DataFrame, path: Path) -> None:
     """Write bars DataFrame to raw_daily_bars table, replacing any existing data."""
     with _tmp_parquet(bars) as tmp:
         con = duckdb.connect(str(path))
-        con.execute(f"CREATE OR REPLACE TABLE raw_daily_bars AS {_read_parquet_sql('ticker, date')}", [str(tmp)])
-        con.execute("CHECKPOINT")
-        con.close()
+        try:
+            con.execute(f"CREATE OR REPLACE TABLE raw_daily_bars AS {_read_parquet_sql('ticker, date')}", [str(tmp)])
+            con.execute("CHECKPOINT")
+        finally:
+            con.close()
 
 
 def append_raw_db(new_bars: pl.DataFrame, path: Path) -> None:
     """Append new_bars rows to existing raw_daily_bars table."""
     with _tmp_parquet(new_bars) as tmp:
         con = duckdb.connect(str(path))
-        con.execute(f"INSERT INTO raw_daily_bars {_read_parquet_sql('ticker, date')}", [str(tmp)])
-        con.execute("CHECKPOINT")
-        con.close()
+        try:
+            con.execute(f"INSERT INTO raw_daily_bars {_read_parquet_sql('ticker, date')}", [str(tmp)])
+            con.execute("CHECKPOINT")
+        finally:
+            con.close()
 
 
 def delete_raw_dates(path: Path, dates: set[datetime.date]) -> None:
@@ -207,9 +211,11 @@ def write_splits(splits: pl.DataFrame, path: Path) -> None:
     """Write splits DataFrame to splits table, replacing any existing data."""
     with _tmp_parquet(splits) as tmp:
         con = duckdb.connect(str(path))
-        con.execute(f"CREATE OR REPLACE TABLE splits AS {_read_parquet_sql('ticker, execution_date')}", [str(tmp)])
-        con.execute("CHECKPOINT")
-        con.close()
+        try:
+            con.execute(f"CREATE OR REPLACE TABLE splits AS {_read_parquet_sql('ticker, execution_date')}", [str(tmp)])
+            con.execute("CHECKPOINT")
+        finally:
+            con.close()
 
 
 def read_splits(path: Path) -> pl.DataFrame:
