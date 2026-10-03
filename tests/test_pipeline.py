@@ -1044,4 +1044,105 @@ def test_backfill_rejects_split_ratio_error_measured_relative_to_expected(
         assert connection.execute("SELECT date, ticker, close FROM daily_bars").fetchall() == before
 
 
+@pytest.mark.parametrize("skip_first", ["duplicate", "no_pre_split_bars", "missing_adjusted_row"])
+def test_backfill_split_verifier_checks_later_bad_ticker(
+    tmp_path: Path,
+    fake_massive_client: _FakeMassiveClient,
+    api_bar,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_first: str,
+) -> None:
+    """Continue verification after an unusable candidate and reject a later bad ratio."""
+    date = datetime.date(2024, 1, 2)
+    execution_date = datetime.date(2024, 1, 3)
+    fake_massive_client.bars_by_date[date] = [api_bar(date, ticker, 400.0, 1000) for ticker in ("AAA", "BBB")]
+    fake_massive_client.tickers = [
+        _ApiTicker(ticker, ticker, "CS", "XNAS", f"000000000{i}", True)
+        for i, ticker in enumerate(("AAA", "BBB"), start=1)
+    ]
+    first_split = _ApiSplit("AAA", "2024-01-03", 1, 4, 0.25, "forward")
+    end_date = execution_date
+    if skip_first == "duplicate":
+        fake_massive_client.splits = [
+            _ApiSplit("AAA", "2024-01-03", 1, 4, 0.0625, "forward"),
+            _ApiSplit("AAA", "2024-01-04", 1, 4, 0.25, "forward"),
+            _ApiSplit("BBB", "2024-01-03", 1, 4, 0.25, "forward"),
+        ]
+        end_date = datetime.date(2024, 1, 4)
+    elif skip_first == "no_pre_split_bars":
+        fake_massive_client.splits = [
+            _ApiSplit("AAA", "2024-01-02", 1, 4, 0.25, "forward"),
+            _ApiSplit("BBB", "2024-01-03", 1, 4, 0.25, "forward"),
+        ]
+    else:
+        fake_massive_client.splits = [
+            first_split,
+            _ApiSplit("BBB", "2024-01-03", 1, 4, 0.25, "forward"),
+        ]
+    config = Config(api_key="test_key", output_dir=tmp_path, start_date=date, end_date=end_date)
+    pipeline.backfill(config)
+    consumer_path = tmp_path / "tickerlake.duckdb"
+    with duckdb.connect(str(consumer_path), read_only=True) as connection:
+        before = connection.execute("SELECT date, ticker, close FROM daily_bars ORDER BY ticker").fetchall()
+
+    original_adjust = adjust_splits
+
+    def corrupt_adjustment(bars: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
+        # Fault-inject a bad eligible ticker; the missing-row case also removes
+        # the first candidate to exercise continuation after that skip.
+        adjusted = original_adjust(bars, splits)
+        if skip_first == "missing_adjusted_row":
+            adjusted = adjusted.filter(pl.col("ticker") != "AAA")
+        return adjusted.with_columns(
+            pl.when(pl.col("ticker") == "BBB").then(pl.col("close") * 4).otherwise(pl.col("close")).alias("close")
+        )
+
+    monkeypatch.setattr(pipeline, "adjust_splits", corrupt_adjustment)
+    with pytest.raises(ValueError, match="spot check failed: BBB"):
+        pipeline.backfill(config)
+
+    with duckdb.connect(str(consumer_path), read_only=True) as connection:
+        assert connection.execute("SELECT date, ticker, close FROM daily_bars ORDER BY ticker").fetchall() == before
+
+
+def test_backfill_split_verifier_checks_fifth_eligible_ticker(
+    tmp_path: Path,
+    fake_massive_client: _FakeMassiveClient,
+    api_bar,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject an incorrect adjustment on the fifth eligible ticker."""
+    date = datetime.date(2024, 1, 2)
+    execution_date = datetime.date(2024, 1, 3)
+    tickers = ["AAA", "BBB", "CCC", "DDD", "EEE"]
+    fake_massive_client.bars_by_date[date] = [api_bar(date, ticker, 400.0, 1000) for ticker in tickers]
+    fake_massive_client.tickers = [
+        _ApiTicker(ticker, ticker, "CS", "XNAS", f"000000000{i}", True) for i, ticker in enumerate(tickers, start=1)
+    ]
+    adjustment_factors = [0.1, 0.125, 0.2, 0.25, 1 / 3]
+    fake_massive_client.splits = [
+        _ApiSplit(ticker, execution_date.isoformat(), 1, round(1 / factor), factor, "forward")
+        for ticker, factor in zip(tickers, adjustment_factors, strict=True)
+    ]
+    config = Config(api_key="test_key", output_dir=tmp_path, start_date=date, end_date=execution_date)
+    pipeline.backfill(config)
+    consumer_path = tmp_path / "tickerlake.duckdb"
+    with duckdb.connect(str(consumer_path), read_only=True) as connection:
+        before = connection.execute("SELECT date, ticker, close FROM daily_bars ORDER BY ticker").fetchall()
+
+    original_adjust = adjust_splits
+
+    def corrupt_fifth(bars: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
+        return original_adjust(bars, splits).with_columns(
+            pl.when(pl.col("ticker") == "EEE").then(pl.col("close") * 2).otherwise(pl.col("close")).alias("close")
+        )
+
+    monkeypatch.setattr(pipeline, "adjust_splits", corrupt_fifth)
+    with pytest.raises(ValueError, match="spot check failed: EEE"):
+        pipeline.backfill(config)
+
+    with duckdb.connect(str(consumer_path), read_only=True) as connection:
+        assert connection.execute("SELECT date, ticker, close FROM daily_bars ORDER BY ticker").fetchall() == before
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
