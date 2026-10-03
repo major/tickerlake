@@ -116,8 +116,10 @@ def read_raw_db(path: Path) -> pl.DataFrame:
         tmp = Path(f.name)
     try:
         con = duckdb.connect(str(path), read_only=True)
-        con.execute("COPY (SELECT * FROM raw_daily_bars ORDER BY ticker, date) TO ? (FORMAT PARQUET)", [str(tmp)])
-        con.close()
+        try:
+            con.execute("COPY (SELECT * FROM raw_daily_bars ORDER BY ticker, date) TO ? (FORMAT PARQUET)", [str(tmp)])
+        finally:
+            con.close()
         return pl.read_parquet(tmp)
     finally:
         tmp.unlink(missing_ok=True)
@@ -216,8 +218,10 @@ def read_splits(path: Path) -> pl.DataFrame:
         tmp = Path(f.name)
     try:
         con = duckdb.connect(str(path), read_only=True)
-        con.execute("COPY (SELECT * FROM splits ORDER BY ticker, execution_date) TO ? (FORMAT PARQUET)", [str(tmp)])
-        con.close()
+        try:
+            con.execute("COPY (SELECT * FROM splits ORDER BY ticker, execution_date) TO ? (FORMAT PARQUET)", [str(tmp)])
+        finally:
+            con.close()
         return pl.read_parquet(tmp)
     finally:
         tmp.unlink(missing_ok=True)
@@ -244,18 +248,20 @@ def _table_date_range(con: duckdb.DuckDBPyConnection, table: str) -> dict | None
 def get_db_info(path: Path) -> dict:
     """Return metadata about a DuckDB file: tables, row counts, date range, file size."""
     con = duckdb.connect(str(path), read_only=True)
-    tables = [row[0] for row in con.execute("SHOW TABLES").fetchall()]
-    row_counts = {
-        table: (
-            con.execute(
-                f"SELECT COUNT(*) FROM {_quote_identifier(table)}"  # noqa: S608 -- table comes from SHOW TABLES
-            ).fetchone()
-            or (0,)
-        )[0]
-        for table in tables
-    }
-    date_range = {t: dr for t in tables if (dr := _table_date_range(con, t)) is not None}
-    con.close()
+    try:
+        tables = [row[0] for row in con.execute("SHOW TABLES").fetchall()]
+        row_counts = {
+            table: (
+                con.execute(
+                    f"SELECT COUNT(*) FROM {_quote_identifier(table)}"  # noqa: S608 -- table comes from SHOW TABLES
+                ).fetchone()
+                or (0,)
+            )[0]
+            for table in tables
+        }
+        date_range = {t: dr for t in tables if (dr := _table_date_range(con, t)) is not None}
+    finally:
+        con.close()
     return {
         "tables": tables,
         "row_counts": row_counts,
