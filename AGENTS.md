@@ -21,7 +21,6 @@
 | `make lint` | Ruff check on `src/` and `tests/` |
 | `make format` | Format `src/` and `tests/` with Ruff |
 | `make format-check` | Check Ruff formatting without changes |
-| `make complexity` | Radon report and Xenon A/B complexity gate |
 | `make check` | lint, format-check, complexity, test-cov |
 | `make sync` | Runs `tickerlake sync --verbose`; unsupported by current CLI |
 

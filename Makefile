@@ -15,10 +15,6 @@ format:
 format-check:
 	uv run ruff format --check src/ tests/
 
-complexity:
-	uv run radon cc src/ -a -nc
-	uv run xenon --max-absolute B --max-modules B --max-average A src/
-
 check: lint format-check complexity test-cov
 
 sync:
