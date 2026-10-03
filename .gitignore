@@ -16,7 +16,6 @@ wheels/
 .coverage
 coverage.xml
 htmlcov/
-mutants/
 
 # Sisyphus workflow
 .sisyphus/
