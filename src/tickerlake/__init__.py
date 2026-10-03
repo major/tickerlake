@@ -26,19 +26,6 @@ def _parse_date(s: str) -> datetime.date:
         raise argparse.ArgumentTypeError(msg) from err
 
 
-def _parse_positive_int(s: str) -> int:
-    """Parse a positive integer, raising argparse.ArgumentTypeError on failure."""
-    try:
-        value = int(s)
-    except ValueError as err:
-        msg = f"Invalid positive integer: {s!r}."
-        raise argparse.ArgumentTypeError(msg) from err
-    if value < 1:
-        msg = "Value must be >= 1."
-        raise argparse.ArgumentTypeError(msg)
-    return value
-
-
 def _build_parser() -> argparse.ArgumentParser:
     """Build and return the argument parser with all subcommands."""
     parser = argparse.ArgumentParser(
