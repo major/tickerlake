@@ -904,7 +904,7 @@ def test_info_reports_persisted_database_contents(
     assert consumer_messages[daily_bars_index + 1] == f"dates: {first} to {last}"
 
 
-def test_compact_preserves_raw_bars(tmp_path: Path, fake_massive_client: _FakeMassiveClient, api_bar) -> None:
+def test_compact_preserves_raw_bars(tmp_path: Path, fake_massive_client: _FakeMassiveClient, api_bar, caplog) -> None:
     """Compact preserves logical raw bar contents."""
     dates = [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)]
     fake_massive_client.bars_by_date = {
@@ -920,7 +920,11 @@ def test_compact_preserves_raw_bars(tmp_path: Path, fake_massive_client: _FakeMa
     finally:
         connection.close()
 
-    pipeline.compact(config)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="tickerlake.pipeline"):
+        pipeline.compact(config)
+
+    assert not [record for record in caplog.records if record.name == "tickerlake.pipeline"]
 
     connection = duckdb.connect(str(path), read_only=True)
     try:
