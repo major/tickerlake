@@ -225,7 +225,6 @@ def update_history(tmp_path: Path, fake_massive_client: _FakeMassiveClient, api_
 def test_update_refreshes_recent_bars_and_rebuilds_split_adjusted_history(update_history):
     """Refresh recent data and rebuild persisted split-adjusted consumers."""
     dates, set_bars, run, _, rows, client = update_history
-    client.bars_by_date[dates[1]] = []
     run(dates[-1])
     client.requested_dates.clear()
 
@@ -241,8 +240,6 @@ def test_update_refreshes_recent_bars_and_rebuilds_split_adjusted_history(update
 
     expected_raw = []
     for index, date in enumerate(dates):
-        if date == dates[1]:
-            continue
         revision = 10 if date in dates[-5:] else 0
         expected_raw.extend(
             [
@@ -367,10 +364,12 @@ def test_update_does_not_fill_an_older_gap_until_backfill(update_history):
     dates, set_bars, run, run_backfill, rows, client = update_history
     gap = dates[5]
     client.bars_by_date[gap] = []
-    run(dates[-1])
+    with pytest.raises(pipeline.ExtractionIncompleteError, match="2023-12-08=successful_empty"):
+        run(dates[-1])
 
     assert rows("raw.duckdb", "SELECT COUNT(*) FROM raw_daily_bars WHERE date = DATE '2023-12-08'") == [(0,)]
     set_bars(gap, 0)
+    set_bars(datetime.date(2024, 1, 10), 0)
     client.requested_dates.clear()
     run(datetime.date(2024, 1, 10))
     assert rows("raw.duckdb", "SELECT COUNT(*) FROM raw_daily_bars WHERE date = DATE '2023-12-08'") == [(0,)]
@@ -385,33 +384,42 @@ def test_backfill_refreshes_five_cached_sessions_and_preserves_other_dates(cache
     dates, set_bars, run, bars, client = cached_backfill
     start = datetime.date(2024, 1, 2)
     end = datetime.date(2024, 1, 10)
+    new_date = datetime.date(2024, 1, 10)
+    future_date = datetime.date(2024, 1, 11)
+    set_bars(new_date, 0)
+    set_bars(future_date, 0)
     run(dates[0], dates[-1])
     client.requested_dates.clear()
 
     for date in dates[2:7]:
         set_bars(date, 10)
-    new_date = datetime.date(2024, 1, 10)
     set_bars(new_date, 20)
     run(start, end)
 
     state = bars()
     expected = []
-    for date in (dates[0], dates[1], *dates[2:7], new_date, dates[7]):
-        revision = 0 if date in (dates[0], dates[1], dates[7]) else 10
-        if date == new_date:
-            revision = 20
+    expected_dates = (*dates[:3], *dates[3:7], new_date, future_date, dates[7])
+    revised_dates = {*dates[3:7]}
+    for date in expected_dates:
+        revision = 10 if date in revised_dates else 20 if date == new_date else 0
         expected.extend(
             [(date, "AAA", 100.0 + revision, 1000.0 + revision), (date, "BBB", 200.0 + revision, 2000.0 + revision)]
         )
     assert state == expected
-    assert set(client.requested_dates) == set(dates[2:7]) | {new_date}
+    assert set(client.requested_dates) == revised_dates | {new_date}
     assert len({(date, ticker) for date, ticker, _, _ in state}) == len(state)
+    assert [(date, close) for date, _, close, _ in state if date in {future_date, dates[7]}] == [
+        (future_date, 100.0),
+        (future_date, 200.0),
+        (dates[7], 100.0),
+        (dates[7], 200.0),
+    ]
 
 
 def test_backfill_keeps_failed_or_empty_refreshes_and_updates_successful_dates(cached_backfill):
     """Keep old rows for failed or empty refreshes and store successful revisions."""
     dates, set_bars, run, bars, client = cached_backfill
-    run(dates[0], dates[-1])
+    run(dates[0], dates[-2])
     client.requested_dates.clear()
 
     for date in dates[2:7]:
@@ -420,7 +428,8 @@ def test_backfill_keeps_failed_or_empty_refreshes_and_updates_successful_dates(c
     client.bars_by_date[dates[3]] = []
     new_date = datetime.date(2024, 1, 10)
     set_bars(new_date, 20)
-    run(datetime.date(2024, 1, 2), new_date)
+    with pytest.raises(pipeline.ExtractionIncompleteError, match=r"failed|quarantined"):
+        run(datetime.date(2024, 1, 2), new_date)
 
     state = bars()
     by_date_ticker = {(date, ticker): (close, volume) for date, ticker, close, volume in state}
@@ -437,7 +446,7 @@ def test_backfill_keeps_failed_or_empty_refreshes_and_updates_successful_dates(c
 def test_backfill_does_not_delete_cached_dates_when_all_refreshes_fail(cached_backfill):
     """Do not delete cached bars when every refresh fails."""
     dates, set_bars, run, bars, client = cached_backfill
-    run(dates[0], dates[-1])
+    run(dates[0], dates[-2])
     original = bars()
     client.requested_dates.clear()
 
@@ -445,7 +454,8 @@ def test_backfill_does_not_delete_cached_dates_when_all_refreshes_fail(cached_ba
     client.failed_dates.update(cached_refresh_dates)
     new_date = datetime.date(2024, 1, 10)
     set_bars(new_date, 20)
-    run(datetime.date(2024, 1, 2), new_date)
+    with pytest.raises(pipeline.ExtractionIncompleteError, match="failed"):
+        run(datetime.date(2024, 1, 2), new_date)
 
     expected = original.copy()
     expected.extend([(new_date, "AAA", 120.0, 1020.0), (new_date, "BBB", 220.0, 2020.0)])
@@ -878,7 +888,7 @@ def test_info_reports_persisted_database_contents(
     last = datetime.date(2024, 1, 4)
     fake_massive_client.bars_by_date = {
         first: [api_bar(first, "AAA", 10.0, 100), api_bar(first, "UNKNOWN", 20.0, 200)],
-        middle: [],
+        middle: [api_bar(middle, "AAA", 10.5, 100)],
         last: [api_bar(last, "AAA", 11.0, 100), api_bar(last, "BBB", 30.0, 300)],
     }
     fake_massive_client.tickers = [
@@ -897,10 +907,10 @@ def test_info_reports_persisted_database_contents(
     consumer_section = messages.index(f"tickerlake.duckdb: {tmp_path / 'tickerlake.duckdb'}")
     assert raw_section < consumer_section
     raw_messages = [message.strip() for message in messages[raw_section + 1 : consumer_section]]
-    raw_bars_index = raw_messages.index("raw_daily_bars: 4 rows")
+    raw_bars_index = raw_messages.index("raw_daily_bars: 5 rows")
     assert raw_messages[raw_bars_index + 1] == f"dates: {first} to {last}"
     consumer_messages = [message.strip() for message in messages[consumer_section + 1 :]]
-    daily_bars_index = consumer_messages.index("daily_bars: 3 rows")
+    daily_bars_index = consumer_messages.index("daily_bars: 4 rows")
     assert consumer_messages[daily_bars_index + 1] == f"dates: {first} to {last}"
 
 
@@ -951,6 +961,8 @@ def test_backfill_split_guard_failure_preserves_existing_consumer(
     """A failed rebuild leaves consumer data intact after raw refresh, then retries cleanly."""
     date = datetime.date(2024, 1, 2)
     fake_massive_client.bars_by_date[date] = [api_bar(date, "AAA", 400.0, 1000)]
+    execution_date = datetime.date(2024, 1, 3)
+    fake_massive_client.bars_by_date[execution_date] = [api_bar(execution_date, "AAA", 420.0, 1000)]
     fake_massive_client.splits = [_ApiSplit("AAA", "2024-01-03", 1, 4, 0.25, "forward")]
     fake_massive_client.tickers = [_ApiTicker("AAA", "Example Co", "CS", "XNAS", "0000000001", True)]
     config = Config(api_key="test_key", output_dir=tmp_path, start_date=date, end_date=datetime.date(2024, 1, 3))
@@ -974,7 +986,7 @@ def test_backfill_split_guard_failure_preserves_existing_consumer(
     try:
         assert connection.execute(
             "SELECT date, ticker, close, volume FROM raw_daily_bars ORDER BY date, ticker"
-        ).fetchall() == [(date, "AAA", 410.0, 1100.0)]
+        ).fetchall() == [(date, "AAA", 410.0, 1100.0), (execution_date, "AAA", 420.0, 1000.0)]
         assert connection.execute("SELECT ticker, execution_date, adjustment_factor FROM splits").fetchall() == [
             ("AAA", datetime.date(2024, 1, 3), 0.25)
         ]
@@ -994,7 +1006,7 @@ def test_backfill_split_guard_failure_preserves_existing_consumer(
     try:
         assert connection.execute(
             "SELECT date, ticker, close, volume FROM raw_daily_bars ORDER BY date, ticker"
-        ).fetchall() == [(date, "AAA", 410.0, 1100.0)]
+        ).fetchall() == [(date, "AAA", 410.0, 1100.0), (execution_date, "AAA", 420.0, 1000.0)]
         assert connection.execute("SELECT ticker, execution_date, adjustment_factor FROM splits").fetchall() == [
             ("AAA", datetime.date(2024, 1, 3), 0.25)
         ]
@@ -1003,8 +1015,9 @@ def test_backfill_split_guard_failure_preserves_existing_consumer(
 
     connection = duckdb.connect(str(consumer_path), read_only=True)
     try:
-        assert connection.execute("SELECT date, ticker, close, volume FROM daily_bars").fetchall() == [
-            (date, "AAA", 102.5, 4400.0)
+        assert connection.execute("SELECT date, ticker, close, volume FROM daily_bars ORDER BY date").fetchall() == [
+            (date, "AAA", 102.5, 4400.0),
+            (execution_date, "AAA", 420.0, 1000.0),
         ]
     finally:
         connection.close()
@@ -1021,6 +1034,8 @@ def test_backfill_rejects_split_ratio_error_measured_relative_to_expected(
     raw_close = 400.0
     adjusted_close = 100.8
     fake_massive_client.bars_by_date[date] = [api_bar(date, "AAA", raw_close, 1000)]
+    execution_date = datetime.date(2024, 1, 3)
+    fake_massive_client.bars_by_date[execution_date] = [api_bar(execution_date, "AAA", 410.0, 1000)]
     fake_massive_client.splits = [_ApiSplit("AAA", "2024-01-03", 1, 4, 0.25, "forward")]
     fake_massive_client.tickers = [_ApiTicker("AAA", "Example Co", "CS", "XNAS", "0000000001", True)]
     config = Config(api_key="test_key", output_dir=tmp_path, start_date=date, end_date=datetime.date(2024, 1, 3))
@@ -1060,6 +1075,9 @@ def test_backfill_split_verifier_checks_later_bad_ticker(
     date = datetime.date(2024, 1, 2)
     execution_date = datetime.date(2024, 1, 3)
     fake_massive_client.bars_by_date[date] = [api_bar(date, ticker, 400.0, 1000) for ticker in ("AAA", "BBB")]
+    fake_massive_client.bars_by_date[execution_date] = [
+        api_bar(execution_date, ticker, 410.0, 1000) for ticker in ("AAA", "BBB")
+    ]
     fake_massive_client.tickers = [
         _ApiTicker(ticker, ticker, "CS", "XNAS", f"000000000{i}", True)
         for i, ticker in enumerate(("AAA", "BBB"), start=1)
@@ -1082,6 +1100,10 @@ def test_backfill_split_verifier_checks_later_bad_ticker(
         fake_massive_client.splits = [
             first_split,
             _ApiSplit("BBB", "2024-01-03", 1, 4, 0.25, "forward"),
+        ]
+    if end_date > execution_date:
+        fake_massive_client.bars_by_date[end_date] = [
+            api_bar(end_date, ticker, 410.0, 1000) for ticker in ("AAA", "BBB")
         ]
     config = Config(api_key="test_key", output_dir=tmp_path, start_date=date, end_date=end_date)
     pipeline.backfill(config)
@@ -1120,6 +1142,9 @@ def test_backfill_split_verifier_checks_fifth_eligible_ticker(
     execution_date = datetime.date(2024, 1, 3)
     tickers = ["AAA", "BBB", "CCC", "DDD", "EEE"]
     fake_massive_client.bars_by_date[date] = [api_bar(date, ticker, 400.0, 1000) for ticker in tickers]
+    fake_massive_client.bars_by_date[execution_date] = [
+        api_bar(execution_date, ticker, 410.0, 1000) for ticker in tickers
+    ]
     fake_massive_client.tickers = [
         _ApiTicker(ticker, ticker, "CS", "XNAS", f"000000000{i}", True) for i, ticker in enumerate(tickers, start=1)
     ]
