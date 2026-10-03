@@ -1,4 +1,4 @@
-.PHONY: test test-cov lint format format-check complexity check sync
+.PHONY: test test-cov lint format format-check complexity check sync mutmut mutmut-results mutmut-apply
 
 test:
 	uv run pytest tests/ -x --tb=short
@@ -19,3 +19,12 @@ check: lint format-check complexity test-cov
 
 sync:
 	uv run tickerlake sync --verbose
+
+mutmut:
+	uv run mutmut run
+
+mutmut-results:
+	uv run mutmut results
+
+mutmut-apply:
+	uv run mutmut apply
