@@ -161,16 +161,30 @@ def test_update_forwards_output_dir_to_config(
 
 
 def test_info_reports_missing_databases_without_api_key(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
 ) -> None:
-    """Info needs no API key and reports each missing database by path."""
+    """Cold-start info routes missing database details to stderr without a key."""
     monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+    root_logger = logging.getLogger()
+    old_handlers = root_logger.handlers[:]
+    old_level = root_logger.level
+    root_logger.handlers.clear()
+    root_logger.setLevel(logging.WARNING)
 
-    with caplog.at_level(logging.INFO):
+    try:
         _run_cli(monkeypatch, "info", "--output-dir", str(tmp_path))
+        captured = capsys.readouterr()
+    finally:
+        for handler in root_logger.handlers:
+            handler.close()
+        root_logger.handlers.clear()
+        root_logger.handlers.extend(old_handlers)
+        root_logger.setLevel(old_level)
 
-    assert f"raw.duckdb: not found ({tmp_path / 'raw.duckdb'})" in caplog.text
-    assert f"tickerlake.duckdb: not found ({tmp_path / 'tickerlake.duckdb'})" in caplog.text
+    assert captured.out == ""
+    output = "".join(captured.err.split())
+    assert f"raw.duckdb:notfound({tmp_path / 'raw.duckdb'})" in output
+    assert f"tickerlake.duckdb:notfound({tmp_path / 'tickerlake.duckdb'})" in output
 
 
 def test_compact_without_raw_db_warns_and_succeeds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog) -> None:

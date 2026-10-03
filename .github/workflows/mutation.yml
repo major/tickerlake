@@ -55,6 +55,14 @@ jobs:
           set -o pipefail
           mkdir -p reports
           printf 'Mutmut step outcome: %s\n' "${MUTATION_OUTCOME:-unknown}" > reports/mutmut-outcome.txt
+          {
+            printf 'Commit: %s\n' "$GITHUB_SHA"
+            printf 'Python: %s\n' "$(python --version 2>&1)"
+            printf 'mutmut: %s\n' "$(uv run --locked --no-sync python -c 'import importlib.metadata; print(importlib.metadata.version("mutmut"))' 2>&1 || true)"
+            printf 'Mutation command: uv run mutmut run --max-children 2\n'
+            printf 'Mutmut configuration snapshot:\n'
+            sed -n '/^\[tool\.mutmut\]/,/^\[/p' pyproject.toml | sed '$d'
+          } > reports/mutmut-provenance.txt
           echo "## Mutmut weekly report" >> "$GITHUB_STEP_SUMMARY"
           printf '\n- Mutmut step outcome: %s\n' "${MUTATION_OUTCOME:-unknown}" >> "$GITHUB_STEP_SUMMARY"
 
@@ -68,35 +76,58 @@ jobs:
             exit 0
           fi
 
-          if [ "${MUTATION_OUTCOME:-}" != success ]; then
-            echo 'Mutation run did not complete successfully; any existing results may be stale or partial.' > reports/mutmut-stats-error.txt
-            echo '- No score summary is shown because the mutation run failed or was interrupted.' >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+          if [ "${MUTATION_OUTCOME:-}" = success ]; then
+            complete=true
+          else
+            complete=false
+            echo 'Snapshot status: incomplete. Mutmut failed or was interrupted; retained state may be partial.' > reports/mutmut-snapshot.txt
+            echo '- Snapshot is incomplete because mutmut failed or was interrupted; no score is reported.' >> "$GITHUB_STEP_SUMMARY"
           fi
 
+          # --all prints available records from an incomplete run too. Keep reporting
+          # failures separate from the mutation step outcome so the original failure
+          # remains the workflow's primary status.
           if ! uv run --locked --no-sync mutmut results --all true > reports/mutmut-results.txt 2> reports/mutmut-results.log; then
-            echo 'Could not collect mutmut results.' >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+            echo 'Could not collect available mutmut results.' > reports/mutmut-results-error.txt
+            if [ "$complete" = true ]; then
+              echo 'Could not collect mutmut results.' >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
           fi
           if ! uv run --locked --no-sync mutmut export-cicd-stats > reports/mutmut-export.log 2>&1; then
-            echo 'Could not export mutation statistics.' >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+            echo 'Could not export mutation statistics from available metadata.' > reports/mutmut-stats-error.txt
+            if [ "$complete" = true ]; then
+              echo 'Could not export mutation statistics.' >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            exit 0
           fi
 
           stats=mutants/mutmut-cicd-stats.json
           if [ ! -s "$stats" ]; then
             echo 'Mutmut produced no statistics file.' > reports/mutmut-stats-error.txt
-            echo '- Mutation statistics are missing.' >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+            if [ "$complete" = true ]; then
+              echo '- Mutation statistics are missing.' >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            exit 0
           fi
           cp "$stats" reports/mutmut-cicd-stats.json
           if ! jq -e 'type == "object" and (.total | type) == "number" and (.killed | type) == "number" and (.survived | type) == "number"' "$stats" >/dev/null; then
-            echo 'Mutmut statistics have an invalid schema.' >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+            echo 'Mutmut statistics have an invalid schema.' > reports/mutmut-stats-error.txt
+            if [ "$complete" = true ]; then
+              echo 'Mutmut statistics have an invalid schema.' >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            exit 0
           fi
-          if ! jq -e '.total == ([.killed, .survived, .no_tests, .skipped, .suspicious, .timeout, .check_was_interrupted_by_user, .segfault] | add) and .check_was_interrupted_by_user == 0 and .suspicious == 0' "$stats" >/dev/null; then
+          if [ "$complete" = true ] && ! jq -e '.total == ([.killed, .survived, .no_tests, .skipped, .suspicious, .timeout, .check_was_interrupted_by_user, .segfault] | add) and .check_was_interrupted_by_user == 0 and .suspicious == 0' "$stats" >/dev/null; then
             echo 'Mutation statistics are incomplete or contain unclassified results.' >> "$GITHUB_STEP_SUMMARY"
             exit 1
+          fi
+          if [ "$complete" != true ]; then
+            echo 'Partial statistics are diagnostic only and may omit unprocessed mutants.' >> reports/mutmut-snapshot.txt
+            exit 0
           fi
           jq -r '"- Mutants: \(.total)", "- Killed: \(.killed)", "- Survivors: \(.survived)", "- No tests: \(.no_tests // 0)", "- Skipped: \(.skipped // 0)", "- Timed out: \(.timeout // 0)"' "$stats" >> "$GITHUB_STEP_SUMMARY"
           echo 'Survivors are informational. No mutation-score threshold is applied.' >> "$GITHUB_STEP_SUMMARY"
@@ -108,6 +139,7 @@ jobs:
           name: mutmut-weekly-${{ github.run_id }}
           path: |
             reports/
-            mutants/mutmut-cicd-stats.json
+            mutants/
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
