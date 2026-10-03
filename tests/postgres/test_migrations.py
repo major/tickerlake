@@ -7,6 +7,7 @@ from importlib import resources
 
 import psycopg
 import pytest
+from psycopg import sql
 
 from tickerlake.postgres import migrations
 from tickerlake.postgres.connection import PostgresWriterError, writer_connection
@@ -41,7 +42,14 @@ def test_migrations_apply_repeat_and_ledger_checksums(pg_owner_dsn: str) -> None
                 hashlib.sha256(
                     resources.files("tickerlake.migrations").joinpath("0001_foundation.sql").read_bytes()
                 ).hexdigest(),
-            )
+            ),
+            (
+                2,
+                "0002_publication.sql",
+                hashlib.sha256(
+                    resources.files("tickerlake.migrations").joinpath("0002_publication.sql").read_bytes()
+                ).hexdigest(),
+            ),
         ]
 
 
@@ -68,9 +76,91 @@ def test_schema_contract_and_access_grants(pg_owner_dsn: str, pg_etl_dsn: str, p
             "WHERE table_schema = 'ingest' AND table_name = 'fetch_manifest' "
             "AND column_name = 'requested_ticker_types'"
         ).fetchone() == ("requested_ticker_types", "ARRAY", "YES")
+        assert connection.execute(
+            "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+            "WHERE table_schema = 'ingest' AND table_name = 'raw_session' ORDER BY ordinal_position"
+        ).fetchall() == [
+            ("date", "date", "NO"),
+            ("input_revision", "bigint", "NO"),
+            ("manifest_id", "bigint", "NO"),
+            ("row_count", "bigint", "NO"),
+        ]
+        expected_public_columns = [
+            ("ticker_id", "integer", "NO"),
+            ("date", "date", "NO"),
+            ("open", "real", "NO"),
+            ("high", "real", "NO"),
+            ("low", "real", "NO"),
+            ("close", "real", "NO"),
+            ("vwap", "real", "YES"),
+            ("volume", "double precision", "NO"),
+            ("transactions", "bigint", "NO"),
+            ("sma_20", "real", "YES"),
+            ("sma_50", "real", "YES"),
+            ("sma_200", "real", "YES"),
+            ("atr_14", "real", "YES"),
+            ("atr_pct", "real", "YES"),
+            ("adr_pct", "real", "YES"),
+            ("volume_sma_20", "double precision", "YES"),
+        ]
+        for table in ("adjusted_daily", "adjusted_weekly", "adjusted_monthly", "latest_daily"):
+            columns = connection.execute(
+                "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+                "WHERE table_schema = 'market' AND table_name = %s ORDER BY ordinal_position",
+                (table,),
+            ).fetchall()
+            expected = expected_public_columns.copy()
+            if table in {"adjusted_weekly", "adjusted_monthly"}:
+                expected.extend([("left_truncated", "boolean", "NO"), ("calendar_closed", "boolean", "NO")])
+            assert columns == expected
+        assert connection.execute(
+            "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+            "WHERE table_schema = 'market' AND table_name = 'publication_state' ORDER BY ordinal_position"
+        ).fetchall() == [
+            ("singleton", "boolean", "NO"),
+            ("published_session", "date", "NO"),
+            ("published_at", "timestamp with time zone", "NO"),
+            ("run_id", "uuid", "NO"),
+            ("ticker_count", "bigint", "NO"),
+        ]
+        assert connection.execute("SELECT count(*) FROM ingest.raw_session").fetchone() == (0,)
+        assert (
+            connection.execute(
+                "SELECT conname FROM pg_constraint WHERE conrelid = 'market.publication_state'::regclass "
+                "AND contype = 'p'"
+            ).fetchone()
+            is not None
+        )
+        assert (
+            connection.execute(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = 'ingest' "
+                "AND indexname = 'raw_daily_ticker_date_idx'"
+            )
+            .fetchone()[0]
+            .endswith("(ticker_id, date)")
+        )
+        assert (
+            connection.execute(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = 'ingest' AND indexname = 'split_event_ticker_idx'"
+            )
+            .fetchone()[0]
+            .endswith("(ticker_id)")
+        )
     with psycopg.connect(pg_etl_dsn, autocommit=True) as etl:
         assert etl.execute("SELECT count(*) FROM ingest.cache_state").fetchone() == (1,)
         etl.execute("CREATE TEMP TABLE migration_temp_check (value integer)")
+        # Exercise DML privileges using a private ticker, then remove it.
+        ticker = etl.execute(
+            "INSERT INTO market.ticker (symbol) VALUES ('grant-check') RETURNING ticker_id"
+        ).fetchone()[0]
+        etl.execute(
+            "INSERT INTO market.adjusted_daily (ticker_id, date, open, high, low, close, volume, transactions) "
+            "VALUES (%s, '2025-01-02', 1, 1, 1, 1, 0, 0)",
+            (ticker,),
+        )
+        etl.execute("UPDATE market.adjusted_daily SET close = 2, high = 2 WHERE ticker_id = %s", (ticker,))
+        etl.execute("DELETE FROM market.adjusted_daily WHERE ticker_id = %s", (ticker,))
+        etl.execute("DELETE FROM market.ticker WHERE ticker_id = %s", (ticker,))
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             etl.execute(
                 "INSERT INTO ingest.schema_migration (version, filename, checksum) VALUES (99, 'bad.sql', %s)",
@@ -86,6 +176,11 @@ def test_schema_contract_and_access_grants(pg_owner_dsn: str, pg_etl_dsn: str, p
             reader.execute("SELECT count(*) FROM ingest.raw_daily")
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             reader.execute("INSERT INTO market.ticker (symbol) VALUES ('reader-write')")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            reader.execute(
+                "INSERT INTO market.publication_state (singleton, published_session, published_at, run_id) "
+                "VALUES (true, '2025-01-02', now(), '00000000-0000-0000-0000-000000000000')"
+            )
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             reader.execute("SELECT count(*) FROM ingest.schema_migration")
 
@@ -183,7 +278,7 @@ def test_corrupt_applied_checksum_and_unknown_version_are_rejected(pg_owner_dsn:
             apply_migrations(connection)
         connection.execute("UPDATE ingest.schema_migration SET checksum = %s WHERE version = 1", ("0" * 64,))
         connection.execute(
-            "INSERT INTO ingest.schema_migration (version, filename, checksum) VALUES (2, '0002_unknown.sql', %s)",
+            "INSERT INTO ingest.schema_migration (version, filename, checksum) VALUES (3, '0003_unknown.sql', %s)",
             ("1" * 64,),
         )
         with pytest.raises(PostgresWriterError, match="unknown"):
@@ -208,3 +303,74 @@ def test_invalid_raw_values_and_split_nullsafe_natural_key_are_rejected(pg_owner
         connection.execute(split_insert, (ticker_id,))
         with pytest.raises(psycopg.errors.UniqueViolation):
             connection.execute(split_insert, (ticker_id,))
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("open", "'NaN'::real"),
+        ("high", "'Infinity'::real"),
+        ("vwap", "'-Infinity'::real"),
+        ("volume", "-1::double precision"),
+        ("transactions", "-1"),
+        ("sma_20", "'NaN'::real"),
+        ("atr_pct", "'Infinity'::real"),
+        ("volume_sma_20", "-1::double precision"),
+    ],
+)
+def test_adjusted_products_reject_invalid_numeric_values(pg_owner_dsn: str, column: str, value: str) -> None:
+    """Database constraints reject invalid bar and metric numbers in every product."""
+    with writer_connection(pg_owner_dsn) as connection:
+        apply_migrations(connection)
+        ticker_id = connection.execute(
+            "INSERT INTO market.ticker (symbol) VALUES ('CHECK') RETURNING ticker_id"
+        ).fetchone()[0]
+        for table in ("adjusted_daily", "adjusted_weekly", "adjusted_monthly", "latest_daily"):
+            columns = "ticker_id, date, open, high, low, close, volume, transactions"
+            values = "%s, '2025-01-02', 9, 11, 8, 10, 1, 1"
+            if table in {"adjusted_weekly", "adjusted_monthly"}:
+                columns += ", left_truncated, calendar_closed"
+                values += ", false, false"
+            connection.execute(
+                sql.SQL("INSERT INTO market.{} ({}) VALUES ({})").format(
+                    sql.Identifier(table), sql.SQL(columns), sql.SQL(values)
+                ),
+                (ticker_id,),
+            )
+            with pytest.raises(psycopg.errors.CheckViolation):
+                connection.execute(
+                    sql.SQL("UPDATE market.{} SET {} = {} WHERE ticker_id = %s").format(
+                        sql.Identifier(table), sql.Identifier(column), sql.SQL(value)
+                    ),
+                    (ticker_id,),
+                )
+            connection.execute(
+                sql.SQL("DELETE FROM market.{} WHERE ticker_id = %s").format(sql.Identifier(table)),
+                (ticker_id,),
+            )
+
+
+@pytest.mark.parametrize("table", ["adjusted_daily", "adjusted_weekly", "adjusted_monthly", "latest_daily"])
+def test_adjusted_products_reject_invalid_ohlc_relationships(pg_owner_dsn: str, table: str) -> None:
+    """Each published table enforces high and low OHLC bounds."""
+    with writer_connection(pg_owner_dsn) as connection:
+        apply_migrations(connection)
+        ticker_id = connection.execute(
+            "INSERT INTO market.ticker (symbol) VALUES ('OHLC') RETURNING ticker_id"
+        ).fetchone()[0]
+        columns = "ticker_id, date, open, high, low, close, volume, transactions"
+        values = "%s, '2025-01-02', 9, 11, 8, 10, 1, 1"
+        if table in {"adjusted_weekly", "adjusted_monthly"}:
+            columns += ", left_truncated, calendar_closed"
+            values += ", false, false"
+        connection.execute(
+            sql.SQL("INSERT INTO market.{} ({}) VALUES ({})").format(
+                sql.Identifier(table), sql.SQL(columns), sql.SQL(values)
+            ),
+            (ticker_id,),
+        )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            connection.execute(
+                sql.SQL("UPDATE market.{} SET high = 9 WHERE ticker_id = %s").format(sql.Identifier(table)),
+                (ticker_id,),
+            )

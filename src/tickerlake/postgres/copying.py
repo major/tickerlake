@@ -12,7 +12,17 @@ from tickerlake.postgres.connection import PostgresWriterError, require_writer_c
 if TYPE_CHECKING:
     import polars as pl
 
-_STAGE_NAMES = frozenset({"raw_stage", "ticker_stage", "split_stage"})
+_STAGE_NAMES = frozenset(
+    {
+        "raw_stage",
+        "ticker_stage",
+        "split_stage",
+        "publication_daily_stage",
+        "publication_weekly_stage",
+        "publication_monthly_stage",
+        "publication_ticker_stage",
+    }
+)
 _UNSUPPORTED_STAGE = "Unsupported PostgreSQL staging table"
 _INVALID_COLUMNS = "PostgreSQL staging columns must be unique and nonempty"
 _MISSING_COLUMNS = "PostgreSQL staging columns are missing from the frame"
