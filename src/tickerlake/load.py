@@ -99,6 +99,25 @@ def append_raw_db(new_bars: pl.DataFrame, path: Path) -> None:
             con.close()
 
 
+def replace_raw_dates(new_bars: pl.DataFrame, path: Path, dates_to_delete: set[datetime.date]) -> None:
+    """Atomically replace selected raw dates and append the new bars."""
+    with _tmp_parquet(new_bars) as tmp:
+        con = duckdb.connect(str(path))
+        try:
+            con.execute("BEGIN TRANSACTION")
+            try:
+                if dates_to_delete:
+                    con.execute("DELETE FROM raw_daily_bars WHERE date IN ?", [sorted(dates_to_delete)])
+                con.execute(f"INSERT INTO raw_daily_bars {_read_parquet_sql('ticker, date')}", [str(tmp)])
+                con.execute("COMMIT")
+            except Exception:
+                con.execute("ROLLBACK")
+                raise
+            con.execute("CHECKPOINT")
+        finally:
+            con.close()
+
+
 def delete_raw_dates(path: Path, dates: set[datetime.date]) -> None:
     """Delete raw_daily_bars rows for the provided trading dates."""
     if not dates or not path.exists():
