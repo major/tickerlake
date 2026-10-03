@@ -2,10 +2,12 @@
 
 import datetime
 import os
+import traceback
 import types
 from pathlib import Path
 from unittest.mock import patch
 
+import psycopg
 import pytest
 
 from tickerlake.config import Config
@@ -145,6 +147,58 @@ class TestOutputDir:
             config = Config(output_dir=Path("./relative/path"))
             assert config.output_dir.is_absolute()
             assert config.output_dir == Path("./relative/path").resolve()
+
+
+class TestDatabaseUrl:
+    """Test optional PostgreSQL connection configuration."""
+
+    def test_database_url_is_optional_and_loaded_from_environment(self) -> None:
+        """The setting may be omitted or loaded from DATABASE_URL."""
+        with patch.dict(os.environ, {}, clear=True):
+            assert Config().database_url is None
+        with patch.dict(os.environ, {"DATABASE_URL": "postgresql://localhost/market"}):
+            assert Config().database_url == "postgresql://localhost/market"
+
+    def test_explicit_database_url_overrides_environment(self) -> None:
+        """An explicit constructor value takes precedence over the environment."""
+        with patch.dict(os.environ, {"DATABASE_URL": "postgresql://env/market"}):
+            config = Config(database_url="host=localhost dbname=market")
+        assert config.database_url == "host=localhost dbname=market"
+
+    @pytest.mark.parametrize("database_url", ["", " \t\n", "not a valid conninfo key=value extra"])
+    def test_invalid_database_url_has_safe_error(self, database_url: str) -> None:
+        """Invalid input fails without exposing connection credentials."""
+        credential = "private-value"
+        value = f"{database_url} password={credential}" if database_url.startswith("not") else database_url
+        with patch.dict(os.environ, {"DATABASE_URL": value}), pytest.raises(ValueError, match="DATABASE_URL") as error:
+            Config()
+        rendered = "".join(traceback.format_exception(error.type, error.value, error.tb))
+        assert credential not in rendered
+        if value:
+            assert value not in repr(error.value)
+
+    @pytest.mark.parametrize(
+        "database_url",
+        ["postgresql://user:password@localhost:5432/market", "host=localhost dbname=market user=reader"],
+    )
+    def test_valid_database_url_does_not_connect(self, database_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Valid connection strings are parsed without opening a connection."""
+
+        def fail_connect(*args: object, **kwargs: object) -> None:
+            pytest.fail("Config must not connect to PostgreSQL")
+
+        monkeypatch.setattr(psycopg, "connect", fail_connect)
+        assert Config(database_url=database_url).database_url == database_url
+
+    def test_secrets_are_not_shown_in_config_repr(self) -> None:
+        """API and database credentials are hidden from Config's string form."""
+        credential = "private-value"
+        with patch.dict(
+            os.environ, {"MASSIVE_API_KEY": credential, "DATABASE_URL": f"postgresql://u:{credential}@localhost/db"}
+        ):
+            config = Config()
+        assert credential not in repr(config)
+        assert credential not in str(config)
 
 
 class TestTickerTypes:

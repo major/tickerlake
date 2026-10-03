@@ -1,7 +1,10 @@
-.PHONY: test test-cov lint format format-check complexity check sync mutmut mutmut-results mutmut-apply
+.PHONY: test test-postgres test-cov lint format format-check complexity check sync mutmut mutmut-results mutmut-apply
 
 test:
 	uv run pytest tests/ -x --tb=short
+
+test-postgres:
+	./scripts/test-postgres.sh
 
 test-cov:
 	uv run pytest tests/ --cov=src/tickerlake --cov-branch --cov-report=html --cov-report=xml --cov-report=term-missing -x
