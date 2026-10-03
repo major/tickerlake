@@ -2,24 +2,28 @@
 
 from __future__ import annotations
 
+import datetime
 import logging
 from typing import TYPE_CHECKING
 
+import duckdb
 import polars as pl
 
 from tickerlake.calendar import get_trading_days
 from tickerlake.client import MassiveClient
-from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
+from tickerlake.extract import TICKERS_SCHEMA, extract_daily_aggs, extract_splits, extract_tickers
 from tickerlake.load import (
     compact_raw_db,
     get_db_info,
     get_existing_dates,
     read_raw_db,
+    read_splits,
     replace_raw_dates,
     write_consumer_db,
     write_raw_db,
     write_splits,
 )
+from tickerlake.outcomes import FetchOutcome, FetchStatus
 from tickerlake.transform import (
     adjust_splits,
     aggregate_to_monthly,
@@ -29,7 +33,6 @@ from tickerlake.transform import (
 )
 
 if TYPE_CHECKING:
-    import datetime
     from pathlib import Path
 
     from tickerlake.config import Config
@@ -41,6 +44,60 @@ _SPOT_CHECK_TOLERANCE = 1e-3
 # Massive revises published daily bars up to this many trading days after
 # initial publication; always refresh this trailing window on every run.
 _REVISION_WINDOW_DAYS = 5
+
+
+class ExtractionIncompleteError(RuntimeError):
+    """Raised when source outcomes do not support a complete consumer rebuild."""
+
+    def __init__(self, source: str, outcomes: list[FetchOutcome]) -> None:
+        """Build a concise domain error from the source outcomes that blocked publication."""
+        self.outcomes = outcomes
+        super().__init__(f"{source} extraction did not validate all expected data: {_outcome_summary(outcomes)}")
+
+
+def _outcome_summary(outcomes: list[FetchOutcome]) -> str:
+    """Describe non-publishable outcomes without exposing source records."""
+    return "; ".join(
+        f"{outcome.requested_date or 'reference'}={outcome.status.value}"
+        + (f" ({outcome.diagnostic})" if outcome.diagnostic else "")
+        for outcome in outcomes
+        if outcome.status in {FetchStatus.failed, FetchStatus.quarantined, FetchStatus.successful_empty}
+    )
+
+
+def _read_previous_tickers(path: Path, types: list[str]) -> pl.DataFrame | None:
+    """Read only the previously published ticker rows in the requested catalog scope."""
+    if not path.exists():
+        return None
+
+    con = duckdb.connect(str(path), read_only=True)
+    try:
+        tables = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
+        if "tickers" not in tables:
+            return None
+        rows = con.execute(
+            "SELECT ticker, name, type, primary_exchange, cik, active FROM tickers WHERE type IN ?",
+            [types],
+        ).fetchall()
+        return pl.DataFrame(rows, schema=TICKERS_SCHEMA, orient="row")
+    finally:
+        con.close()
+
+
+def _split_fetch_bounds(
+    config: Config, retained_start: datetime.date, retained_end: datetime.date, previous: pl.DataFrame | None
+) -> tuple[datetime.date, datetime.date]:
+    """Cover configured dates, all retained bars, and every cached split event."""
+    starts: list[datetime.date] = [config.start_date, retained_start]
+    ends: list[datetime.date] = [config.end_date, retained_end]
+    if previous is not None and not previous.is_empty():
+        previous_start = previous["execution_date"].min()
+        previous_end = previous["execution_date"].max()
+        if not isinstance(previous_start, datetime.date) or not isinstance(previous_end, datetime.date):
+            raise ExtractionIncompleteError("Split", [])
+        starts.append(previous_start)
+        ends.append(previous_end)
+    return min(starts), max(ends)
 
 
 def _verify_split_adjustment(raw_bars: pl.DataFrame, adjusted_bars: pl.DataFrame, splits: pl.DataFrame) -> None:
@@ -125,29 +182,27 @@ def _run_backfill(config: Config, *, bars_start: datetime.date | None = None) ->
     )
     client = MassiveClient(config)
 
-    if fetch_dates and not existing_dates:
-        logger.info("Extracting daily bars...")
-        raw_bars = extract_daily_aggs(client, sorted(fetch_dates))
-        logger.info("Writing raw DB to %s...", raw_path)
-        write_raw_db(raw_bars, raw_path)
-    elif fetch_dates:
+    daily_outcomes: list[FetchOutcome] = []
+    if fetch_dates:
         logger.info("Extracting %d dates (missing + refresh window)...", len(fetch_dates))
-        new_raw_bars = extract_daily_aggs(client, sorted(fetch_dates))
-
-        # Delete only the dates that are both actually present in the newly-fetched
-        # data AND already in the table (never delete a date the table doesn't have).
-        fetched_dates = set(new_raw_bars["date"].unique().to_list())
-        dates_to_delete = fetched_dates & existing_dates
-        if dates_to_delete:
-            logger.info(
-                "Deleting %d refreshed dates from raw DB before appending.",
-                len(dates_to_delete),
-            )
-
-        logger.info("Appending to raw DB at %s...", raw_path)
-        replace_raw_dates(new_raw_bars, raw_path, dates_to_delete)
+        previous = read_raw_db(raw_path) if raw_path.exists() and existing_dates else None
+        daily_outcomes = extract_daily_aggs(client, sorted(fetch_dates), previous=previous)
+        populated = [outcome for outcome in daily_outcomes if outcome.status is FetchStatus.populated]
+        if populated:
+            new_raw_bars = pl.concat([outcome.frame for outcome in populated])
+            dates_to_delete = {
+                date for outcome in populated if (date := outcome.requested_date) is not None and date in existing_dates
+            }
+            if raw_path.exists() and existing_dates:
+                replace_raw_dates(new_raw_bars, raw_path, dates_to_delete)
+            else:
+                write_raw_db(new_raw_bars, raw_path)
     else:
         logger.info("All dates cached, skipping extraction.")
+
+    unacceptable = [outcome for outcome in daily_outcomes if outcome.status is not FetchStatus.populated]
+    if unacceptable:
+        raise ExtractionIncompleteError("Daily", unacceptable)
 
     _rebuild_consumer_database(config, client, raw_path, consumer_path)
 
@@ -157,12 +212,32 @@ def _rebuild_consumer_database(config: Config, client: MassiveClient, raw_path: 
     logger.info("Loading raw bars for transform...")
     all_bars = read_raw_db(raw_path)
 
-    logger.info("Extracting splits (%s to %s)...", config.start_date, config.end_date)
-    splits = extract_splits(client, config.start_date, config.end_date)
-    logger.info("Persisting %d splits to %s...", len(splits), raw_path)
-    write_splits(splits, raw_path)
+    retained_start = all_bars["date"].min()
+    retained_end = all_bars["date"].max()
+    if not isinstance(retained_start, datetime.date) or not isinstance(retained_end, datetime.date):
+        raise ExtractionIncompleteError("Daily", [])
+
+    previous_splits = (
+        read_splits(raw_path) if raw_path.exists() and "splits" in get_db_info(raw_path)["tables"] else None
+    )
+    splits_start, splits_end = _split_fetch_bounds(config, retained_start, retained_end, previous_splits)
+    logger.info("Extracting splits (%s to %s)...", splits_start, splits_end)
+    split_outcome = extract_splits(client, splits_start, splits_end, previous=previous_splits)
     logger.info("Extracting tickers (types: %s)...", ", ".join(config.ticker_types))
-    tickers = extract_tickers(client, config.ticker_types)
+    previous_tickers = _read_previous_tickers(consumer_path, config.ticker_types)
+    ticker_outcome = extract_tickers(client, config.ticker_types, previous=previous_tickers)
+    if split_outcome.status in {FetchStatus.failed, FetchStatus.quarantined}:
+        raise ExtractionIncompleteError("Split", [split_outcome])
+    if ticker_outcome.status is not FetchStatus.populated:
+        raise ExtractionIncompleteError("Ticker", [ticker_outcome])
+    splits = split_outcome.frame
+    tickers = ticker_outcome.frame
+    if split_outcome.status is FetchStatus.populated:
+        logger.info("Persisting %d splits to %s...", len(splits), raw_path)
+        write_splits(splits, raw_path)
+    elif previous_splits is None or previous_splits.is_empty():
+        logger.info("Persisting empty split cache to %s...", raw_path)
+        write_splits(splits, raw_path)
 
     logger.info("Adjusting for %d splits...", len(splits))
     bars = adjust_splits(all_bars, splits)

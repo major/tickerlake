@@ -1,10 +1,12 @@
 """Tests for the Massive API client wrapper."""
 
 import datetime
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from urllib3.response import HTTPResponse
 
 from tickerlake.client import MassiveClient
 from tickerlake.config import Config
@@ -50,21 +52,37 @@ class FakeSdk:
         self.daily_params: dict[str, Any] | None = None
         self.split_params: dict[str, Any] | None = None
         self.ticker_params: list[dict[str, Any]] = []
+        self.BASE = "https://api.massive.com"
+        self.json = json
 
     def get_grouped_daily_aggs(self, **params: Any) -> list[DailyAgg]:
         """Return configured aggregate records and store the request."""
-        self.daily_params = params
-        return self.daily_aggs
+        self.daily_params = {key: value for key, value in params.items() if key != "raw"}
+        rows = [{"T": row.ticker, "c": row.close} for row in self.daily_aggs]
+        return HTTPResponse(body=json.dumps({"results": rows}).encode(), status=200)  # type: ignore[return-value]
 
-    def list_stocks_splits(self, **params: Any):
+    def list_stocks_splits(self, **params: Any) -> HTTPResponse:
         """Yield configured split records and store the request."""
-        self.split_params = params
-        yield from self.splits
+        self.split_params = {key: value for key, value in params.items() if key != "raw"}
+        rows = [
+            {
+                "ticker": row.ticker,
+                "execution_date": row.execution_date,
+                "split_from": row.split_from,
+                "split_to": row.split_to,
+            }
+            for row in self.splits
+        ]
+        return HTTPResponse(body=json.dumps({"results": rows}).encode(), status=200)
 
-    def list_tickers(self, **params: Any):
+    def list_tickers(self, **params: Any) -> HTTPResponse:
         """Yield configured records for the requested type."""
+        params = {key: value for key, value in params.items() if key != "raw"}
         self.ticker_params.append(params)
-        yield from self.tickers_by_type[params["type"]]
+        rows = [
+            {"ticker": row.ticker, "type": row.type, "active": True} for row in self.tickers_by_type[params["type"]]
+        ]
+        return HTTPResponse(body=json.dumps({"results": rows}).encode(), status=200)
 
 
 @pytest.fixture
@@ -111,7 +129,7 @@ def test_fetch_daily_aggs_preserves_sdk_records_and_request(
 
     result = client.fetch_daily_aggs(requested_date)
 
-    assert result == expected
+    assert len(result) == 1
     assert result[0].ticker == "AAPL"
     assert result[0].close == expected[0].close
     assert sdk.daily_params == {
@@ -136,7 +154,7 @@ def test_fetch_splits_materializes_sdk_generator_and_formats_date_filters(
 
     result = client.fetch_splits(datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
 
-    assert result == expected
+    assert len(result) == len(expected)
     assert isinstance(result, list)
     assert [split.ticker for split in result] == ["AAPL", "MSFT"]
     assert sdk.split_params == {
@@ -157,7 +175,7 @@ def test_fetch_tickers_materializes_and_combines_each_type_response(
 
     result = client.fetch_tickers(["CS", "ETF"])
 
-    assert result == cs_tickers + etf_tickers
+    assert [ticker.ticker for ticker in result] == [ticker.ticker for ticker in cs_tickers + etf_tickers]
     assert isinstance(result, list)
     assert [ticker.ticker for ticker in result] == ["AAPL", "MSFT", "SPY", "QQQ"]
     assert sdk.ticker_params == [
