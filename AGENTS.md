@@ -61,7 +61,7 @@ tickerlake/
 - **Test fixtures** -- pytest fixtures (not helper functions) for reusable test data
 - **Mock-first tests** -- all external deps mocked; `patch.multiple()` for pipeline tests
 - **Dev tools**: ruff (lint/format), ty (type check), radon (complexity), vulture (dead code), pytest-cov, pytest-randomly, xenon
-- **Coverage gate**: 95% minimum enforced via `pytest-cov --cov-fail-under=95` in CI
+- **Coverage gate**: 95% minimum enforced via `pytest-cov --cov-branch --cov-fail-under=95` in CI; branch coverage is included in the total
 - **Complexity gate**: A/B-only (per-function, per-module, and average) enforced via `xenon --max-absolute B --max-modules B --max-average A` in CI. Ruff's `mccabe`/`C901` rule (part of `select = ["ALL"]`, default `max-complexity = 10`) already flags per-function complexity above B at lint time as a first signal; `xenon` remains the authoritative radon-based gate because it also covers module-level and average complexity, which ruff does not.
 
 ## ANTI-PATTERNS
