@@ -1,9 +1,8 @@
 """Tests for the Massive API client wrapper."""
 
 import datetime
-import os
-from typing import TYPE_CHECKING
-from unittest.mock import MagicMock, patch
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -14,9 +13,63 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+@dataclass(frozen=True)
+class DailyAgg:
+    """Representative grouped daily aggregate record."""
+
+    ticker: str
+    close: float
+
+
+@dataclass(frozen=True)
+class Split:
+    """Representative stock split record."""
+
+    ticker: str
+    execution_date: str
+    split_from: float
+    split_to: float
+
+
+@dataclass(frozen=True)
+class Ticker:
+    """Representative ticker reference record."""
+
+    ticker: str
+    type: str
+
+
+class FakeSdk:
+    """Small SDK-boundary fake with generator-backed endpoint responses."""
+
+    def __init__(self) -> None:
+        """Initialize empty endpoint responses and request records."""
+        self.daily_aggs: list[DailyAgg] = []
+        self.splits: list[Split] = []
+        self.tickers_by_type: dict[str, list[Ticker]] = {}
+        self.daily_params: dict[str, Any] | None = None
+        self.split_params: dict[str, Any] | None = None
+        self.ticker_params: list[dict[str, Any]] = []
+
+    def get_grouped_daily_aggs(self, **params: Any) -> list[DailyAgg]:
+        """Return configured aggregate records and store the request."""
+        self.daily_params = params
+        return self.daily_aggs
+
+    def list_stocks_splits(self, **params: Any):
+        """Yield configured split records and store the request."""
+        self.split_params = params
+        yield from self.splits
+
+    def list_tickers(self, **params: Any):
+        """Yield configured records for the requested type."""
+        self.ticker_params.append(params)
+        yield from self.tickers_by_type[params["type"]]
+
+
 @pytest.fixture
 def sample_config(tmp_path: Path) -> Config:
-    """Create a sample Config for testing."""
+    """Build a representative client configuration."""
     return Config(
         api_key="test-api-key",
         output_dir=tmp_path,
@@ -26,182 +79,109 @@ def sample_config(tmp_path: Path) -> Config:
     )
 
 
-class TestMassiveClientInit:
-    """Tests for MassiveClient initialization."""
+def client_with_sdk(monkeypatch: pytest.MonkeyPatch, config: Config, sdk: FakeSdk) -> MassiveClient:
+    """Construct a client using the supplied SDK-boundary fake."""
 
-    @patch("tickerlake.client.RESTClient")
-    def test_init_creates_rest_client(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
-        """MassiveClient(config) creates RESTClient with config.api_key."""
-        mock_rest_class.return_value = MagicMock()
+    def create_client(*, api_key: str) -> FakeSdk:
+        assert api_key == config.api_key
+        return sdk
 
-        MassiveClient(sample_config)
+    monkeypatch.setattr("tickerlake.client.RESTClient", create_client)
+    return MassiveClient(config)
 
-        mock_rest_class.assert_called_once_with(api_key="test-api-key")
-        mock_rest_class.assert_called_once_with(api_key="test-api-key")
 
-    @patch("tickerlake.client.RESTClient")
-    def test_init_requires_api_key(self, mock_rest_class: MagicMock) -> None:
-        """MassiveClient rejects missing API keys with a clear message."""
-        with patch.dict(os.environ, {}, clear=True):
-            config = Config(api_key="")
-
+def test_init_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reject missing credentials before constructing the SDK client."""
+    with monkeypatch.context() as context:
+        context.delenv("MASSIVE_API_KEY", raising=False)
+        context.setattr("tickerlake.client.RESTClient", lambda **_: pytest.fail("SDK should not be created"))
         with pytest.raises(ValueError, match="MASSIVE_API_KEY environment variable is required"):
-            MassiveClient(config)
-
-        mock_rest_class.assert_not_called()
+            MassiveClient(Config(api_key=""))
 
 
-class TestFetchDailyAggs:
-    """Tests for fetch_daily_aggs method."""
+def test_fetch_daily_aggs_preserves_sdk_records_and_request(
+    sample_config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Return representative SDK data and send the grouped-aggregate filters."""
+    sdk = FakeSdk()
+    expected = [DailyAgg(ticker="AAPL", close=150.25)]
+    sdk.daily_aggs = expected
+    client = client_with_sdk(monkeypatch, sample_config, sdk)
+    requested_date = datetime.date(2024, 1, 15)
 
-    @patch("tickerlake.client.RESTClient")
-    def test_fetch_daily_aggs_correct_params(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
-        """fetch_daily_aggs calls get_grouped_daily_aggs with correct parameters."""
-        mock_rest = MagicMock()
-        mock_rest_class.return_value = mock_rest
-        mock_rest.get_grouped_daily_aggs.return_value = []
+    result = client.fetch_daily_aggs(requested_date)
 
-        client = MassiveClient(sample_config)
-        test_date = datetime.date(2024, 1, 15)
-        client.fetch_daily_aggs(test_date)
-
-        mock_rest.get_grouped_daily_aggs.assert_called_once_with(
-            date=test_date,
-            adjusted=False,
-            market_type="stocks",
-            include_otc=False,
-        )
-
-    @patch("tickerlake.client.RESTClient")
-    def test_fetch_daily_aggs_returns_list(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
-        """fetch_daily_aggs returns the list from the underlying API call."""
-        mock_rest = MagicMock()
-        mock_rest_class.return_value = mock_rest
-        expected_result = [{"ticker": "AAPL", "close": 150.0}]
-        mock_rest.get_grouped_daily_aggs.return_value = expected_result
-
-        client = MassiveClient(sample_config)
-        result = client.fetch_daily_aggs(datetime.date(2024, 1, 15))
-
-        assert result == expected_result
+    assert result == expected
+    assert result[0].ticker == "AAPL"
+    assert result[0].close == expected[0].close
+    assert sdk.daily_params == {
+        "date": requested_date,
+        "adjusted": False,
+        "market_type": "stocks",
+        "include_otc": False,
+    }
 
 
-class TestFetchSplits:
-    """Tests for fetch_splits method."""
+def test_fetch_splits_materializes_sdk_generator_and_formats_date_filters(
+    sample_config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Materialize split records and send inclusive date filters as strings."""
+    sdk = FakeSdk()
+    expected = [
+        Split(ticker="AAPL", execution_date="2024-01-15", split_from=1.0, split_to=2.0),
+        Split(ticker="MSFT", execution_date="2024-02-01", split_from=1.0, split_to=3.0),
+    ]
+    sdk.splits = expected
+    client = client_with_sdk(monkeypatch, sample_config, sdk)
 
-    @patch("tickerlake.client.RESTClient")
-    def test_fetch_splits_correct_params(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
-        """fetch_splits calls list_stocks_splits with correct parameters as strings."""
-        mock_rest = MagicMock()
-        mock_rest_class.return_value = mock_rest
-        mock_rest.list_stocks_splits.return_value = iter([])
+    result = client.fetch_splits(datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
 
-        client = MassiveClient(sample_config)
-        start_date = datetime.date(2024, 1, 1)
-        end_date = datetime.date(2024, 12, 31)
-        client.fetch_splits(start_date, end_date)
-
-        mock_rest.list_stocks_splits.assert_called_once_with(
-            execution_date_gte="2024-01-01",
-            execution_date_lte="2024-12-31",
-        )
-
-    @patch("tickerlake.client.RESTClient")
-    def test_fetch_splits_returns_list(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
-        """fetch_splits materializes the iterator to a list."""
-        mock_rest = MagicMock()
-        mock_rest_class.return_value = mock_rest
-        expected_splits = [
-            {
-                "ticker": "AAPL",
-                "execution_date": "2024-01-15",
-                "split_from": 1.0,
-                "split_to": 2.0,
-            },
-            {
-                "ticker": "MSFT",
-                "execution_date": "2024-02-01",
-                "split_from": 1.0,
-                "split_to": 3.0,
-            },
-        ]
-        mock_rest.list_stocks_splits.return_value = iter(expected_splits)
-
-        client = MassiveClient(sample_config)
-        result = client.fetch_splits(datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
-
-        assert result == expected_splits
-        assert isinstance(result, list)
+    assert result == expected
+    assert isinstance(result, list)
+    assert [split.ticker for split in result] == ["AAPL", "MSFT"]
+    assert sdk.split_params == {
+        "execution_date_gte": "2024-01-01",
+        "execution_date_lte": "2024-12-31",
+    }
 
 
-class TestFetchTickers:
-    """Tests for fetch_tickers method."""
+def test_fetch_tickers_materializes_and_combines_each_type_response(
+    sample_config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Combine generator responses and preserve each ticker record's values."""
+    sdk = FakeSdk()
+    cs_tickers = [Ticker(ticker="AAPL", type="CS"), Ticker(ticker="MSFT", type="CS")]
+    etf_tickers = [Ticker(ticker="SPY", type="ETF"), Ticker(ticker="QQQ", type="ETF")]
+    sdk.tickers_by_type = {"CS": cs_tickers, "ETF": etf_tickers}
+    client = client_with_sdk(monkeypatch, sample_config, sdk)
 
-    @patch("tickerlake.client.RESTClient")
-    def test_fetch_tickers_two_calls(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
-        """fetch_tickers(["CS", "ETF"]) makes exactly 2 calls to list_tickers."""
-        mock_rest = MagicMock()
-        mock_rest_class.return_value = mock_rest
-        mock_rest.list_tickers.return_value = iter([])
+    result = client.fetch_tickers(["CS", "ETF"])
 
-        client = MassiveClient(sample_config)
-        client.fetch_tickers(["CS", "ETF"])
+    assert result == cs_tickers + etf_tickers
+    assert isinstance(result, list)
+    assert [ticker.ticker for ticker in result] == ["AAPL", "MSFT", "SPY", "QQQ"]
+    assert sdk.ticker_params == [
+        {"market": "stocks", "type": "CS", "active": True, "limit": 1000},
+        {"market": "stocks", "type": "ETF", "active": True, "limit": 1000},
+    ]
 
-        expected_ticker_type_calls = 2
-        assert mock_rest.list_tickers.call_count == expected_ticker_type_calls
 
-    @patch("tickerlake.client.RESTClient")
-    def test_fetch_tickers_correct_params(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
-        """fetch_tickers calls list_tickers with correct parameters for each type."""
-        mock_rest = MagicMock()
-        mock_rest_class.return_value = mock_rest
-        mock_rest.list_tickers.return_value = iter([])
+def test_fetch_tickers_with_no_types_returns_empty_list(sample_config: Config, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Return an empty result without issuing ticker requests for no types."""
+    sdk = FakeSdk()
+    client = client_with_sdk(monkeypatch, sample_config, sdk)
 
-        client = MassiveClient(sample_config)
-        client.fetch_tickers(["CS", "ETF"])
+    assert client.fetch_tickers([]) == []
+    assert sdk.ticker_params == []
 
-        calls = mock_rest.list_tickers.call_args_list
-        expected_ticker_type_calls = 2
-        assert len(calls) == expected_ticker_type_calls
 
-        # First call for CS
-        assert calls[0][1] == {
-            "market": "stocks",
-            "type": "CS",
-            "active": True,
-            "limit": 1000,
-        }
+def test_fetch_splits_with_empty_sdk_generator_returns_empty_list(
+    sample_config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Return an empty list when the SDK split generator yields no records."""
+    client = client_with_sdk(monkeypatch, sample_config, FakeSdk())
 
-        # Second call for ETF
-        assert calls[1][1] == {
-            "market": "stocks",
-            "type": "ETF",
-            "active": True,
-            "limit": 1000,
-        }
+    result = client.fetch_splits(datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
 
-    @patch("tickerlake.client.RESTClient")
-    def test_fetch_tickers_concatenates_results(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
-        """fetch_tickers concatenates results from both calls into one list."""
-        mock_rest = MagicMock()
-        mock_rest_class.return_value = mock_rest
-
-        cs_tickers = [
-            {"ticker": "AAPL", "type": "CS"},
-            {"ticker": "MSFT", "type": "CS"},
-        ]
-        etf_tickers = [
-            {"ticker": "SPY", "type": "ETF"},
-            {"ticker": "QQQ", "type": "ETF"},
-        ]
-
-        # Return different iterators for each call
-        mock_rest.list_tickers.side_effect = [iter(cs_tickers), iter(etf_tickers)]
-
-        client = MassiveClient(sample_config)
-        result = client.fetch_tickers(["CS", "ETF"])
-
-        expected = cs_tickers + etf_tickers
-        assert result == expected
-        expected_ticker_count = 4
-        assert len(result) == expected_ticker_count
+    assert result == []
+    assert isinstance(result, list)
