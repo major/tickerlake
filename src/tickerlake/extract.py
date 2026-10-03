@@ -53,9 +53,7 @@ TICKERS_SCHEMA = {
 
 def _agg_to_row(agg) -> dict:
     return {
-        "date": datetime.datetime.fromtimestamp(
-            agg.timestamp / 1000, tz=datetime.UTC
-        ).date(),
+        "date": datetime.datetime.fromtimestamp(agg.timestamp / 1000, tz=datetime.UTC).date(),
         "ticker": agg.ticker,
         "open": agg.open,
         "high": agg.high,
@@ -95,9 +93,7 @@ def _rows_to_df(rows: list[dict], schema: dict) -> pl.DataFrame:
     return pl.DataFrame(rows).cast(schema)
 
 
-def extract_daily_aggs(
-    client: MassiveClient, dates: list[datetime.date]
-) -> pl.DataFrame:
+def extract_daily_aggs(client: MassiveClient, dates: list[datetime.date]) -> pl.DataFrame:
     """Extract daily aggregate bars for each date into a single DataFrame."""
     frames: list[pl.DataFrame] = []
     if not dates:
@@ -121,18 +117,14 @@ def extract_daily_aggs(
                 continue
             logger.debug("Fetching %s... %d tickers", date, len(aggs))
             if aggs:
-                frames.append(
-                    _rows_to_df([_agg_to_row(a) for a in aggs], DAILY_AGGS_SCHEMA)
-                )
+                frames.append(_rows_to_df([_agg_to_row(a) for a in aggs], DAILY_AGGS_SCHEMA))
             progress.update(task, description=f"Fetching {date}...", advance=1)
     if not frames:
         return pl.DataFrame(schema=DAILY_AGGS_SCHEMA)
     return pl.concat(frames)
 
 
-def extract_splits(
-    client: MassiveClient, start_date: datetime.date, end_date: datetime.date
-) -> pl.DataFrame:
+def extract_splits(client: MassiveClient, start_date: datetime.date, end_date: datetime.date) -> pl.DataFrame:
     splits = client.fetch_splits(start_date, end_date)
     return _rows_to_df([_split_to_row(s) for s in splits], SPLITS_SCHEMA)
 

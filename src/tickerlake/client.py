@@ -32,9 +32,7 @@ class MassiveClient:
             ),
         )
 
-    def fetch_splits(
-        self, start_date: datetime.date, end_date: datetime.date
-    ) -> list[Any]:
+    def fetch_splits(self, start_date: datetime.date, end_date: datetime.date) -> list[Any]:
         """Fetch stock splits in the given date range."""
         return list(
             self._client.list_stocks_splits(

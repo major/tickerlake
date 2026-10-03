@@ -62,9 +62,7 @@ _LIQUIDITY_VOLUME_THRESHOLD = 1_000_000.0
 _ACTIONABLE_ZONES = ["in_ibz", "in_smz", "below_smz"]
 
 
-def _verify_split_adjustment(
-    raw_bars: pl.DataFrame, adjusted_bars: pl.DataFrame, splits: pl.DataFrame
-) -> None:
+def _verify_split_adjustment(raw_bars: pl.DataFrame, adjusted_bars: pl.DataFrame, splits: pl.DataFrame) -> None:
     """Spot-check that split adjustment factors were applied correctly.
 
     Samples tickers with the most extreme (smallest) cumulative adjustment
@@ -74,9 +72,7 @@ def _verify_split_adjustment(
     if splits.is_empty():
         return
 
-    sample = splits.filter(
-        pl.col("adjustment_factor").is_between(0.02, 0.5, closed="left")
-    ).sort("adjustment_factor")
+    sample = splits.filter(pl.col("adjustment_factor").is_between(0.02, 0.5, closed="left")).sort("adjustment_factor")
     seen: set[str] = set()
     verified = 0
 
@@ -86,17 +82,13 @@ def _verify_split_adjustment(
             continue
         seen.add(ticker)
 
-        pre_split = raw_bars.filter(
-            (pl.col("ticker") == ticker) & (pl.col("date") < row["execution_date"])
-        )
+        pre_split = raw_bars.filter((pl.col("ticker") == ticker) & (pl.col("date") < row["execution_date"]))
         if pre_split.is_empty():
             continue
 
         check_date = pre_split["date"].max()
         raw_close = float(pre_split.filter(pl.col("date") == check_date)["close"][0])
-        adj_row = adjusted_bars.filter(
-            (pl.col("ticker") == ticker) & (pl.col("date") == check_date)
-        )
+        adj_row = adjusted_bars.filter((pl.col("ticker") == ticker) & (pl.col("date") == check_date))
         if adj_row.is_empty():
             continue
 
@@ -116,9 +108,7 @@ def _verify_split_adjustment(
             break
 
     if verified > 0:
-        logger.info(
-            "Split adjustment spot check passed (%d tickers verified).", verified
-        )
+        logger.info("Split adjustment spot check passed (%d tickers verified).", verified)
 
 
 def _run_backfill(config: Config, *, bars_start: datetime.date | None = None) -> None:
@@ -160,9 +150,7 @@ def _run_backfill(config: Config, *, bars_start: datetime.date | None = None) ->
         logger.info("Writing raw DB to %s...", raw_path)
         write_raw_db(raw_bars, raw_path)
     elif fetch_dates:
-        logger.info(
-            "Extracting %d dates (missing + refresh window)...", len(fetch_dates)
-        )
+        logger.info("Extracting %d dates (missing + refresh window)...", len(fetch_dates))
         new_raw_bars = extract_daily_aggs(client, sorted(fetch_dates))
 
         # Delete only the dates that are both actually present in the newly-fetched
@@ -263,9 +251,7 @@ def update(config: Config) -> None:
     _run_backfill(config, bars_start=window_start)
 
 
-def find_ticker_pivots(
-    config: Config, ticker: str, timeframe: str = "weekly", k: int = 4
-) -> pl.DataFrame:
+def find_ticker_pivots(config: Config, ticker: str, timeframe: str = "weekly", k: int = 4) -> pl.DataFrame:
     """Return pivots for a ticker/timeframe from adjusted consumer daily bars."""
     if k < 1:
         msg = "k must be >= 1"
@@ -273,9 +259,7 @@ def find_ticker_pivots(
     if timeframe not in VALID_TIMEFRAMES:
         msg = f"timeframe must be one of: {', '.join(sorted(VALID_TIMEFRAMES))}"
         raise ValueError(msg)
-    bars = read_adjusted_daily_bars_for_ticker(
-        config.output_dir / "tickerlake.duckdb", ticker
-    )
+    bars = read_adjusted_daily_bars_for_ticker(config.output_dir / "tickerlake.duckdb", ticker)
     timeframe_bars = bars_for_timeframe(bars, timeframe)
     return find_pivots(timeframe_bars, k=k)
 
@@ -366,10 +350,7 @@ def _read_weekly_fib_inputs(consumer_path: Path) -> tuple[pl.DataFrame, set[str]
     try:
         con = duckdb.connect(str(consumer_path), read_only=True)
         try:
-            con.execute(
-                "COPY (SELECT * FROM weekly_bars ORDER BY ticker, date) "
-                f"TO '{bars_tmp}' (FORMAT PARQUET)"
-            )
+            con.execute(f"COPY (SELECT * FROM weekly_bars ORDER BY ticker, date) TO '{bars_tmp}' (FORMAT PARQUET)")
             con.execute(
                 "COPY (SELECT m.ticker FROM weekly_metrics m "
                 "JOIN (SELECT ticker, MAX(date) AS max_date "
@@ -379,10 +360,7 @@ def _read_weekly_fib_inputs(consumer_path: Path) -> tuple[pl.DataFrame, set[str]
                 f"TO '{eligible_tmp}' (FORMAT PARQUET)"
             )
         except duckdb.CatalogException as err:
-            msg = (
-                "weekly_bars/weekly_metrics tables not found in consumer DB: "
-                f"{consumer_path}. Run backfill first."
-            )
+            msg = f"weekly_bars/weekly_metrics tables not found in consumer DB: {consumer_path}. Run backfill first."
             raise ValueError(msg) from err
         finally:
             con.close()
@@ -447,8 +425,7 @@ def compute_weekly_fib_zones(config: Config) -> None:
     write_weekly_fib_zones(zones, consumer_path)
 
     logger.info(
-        "Weekly fib zones written: n_in_ibz=%d, n_in_smz=%d, n_below_smz=%d, "
-        "n_above_ibz=%d, n_void=%d, n_written=%d.",
+        "Weekly fib zones written: n_in_ibz=%d, n_in_smz=%d, n_below_smz=%d, n_above_ibz=%d, n_void=%d, n_written=%d.",
         n_in_ibz,
         n_in_smz,
         n_below_smz,

@@ -188,11 +188,7 @@ class TestAggregateToWeekly:
         assert row["close"] == pytest.approx(103.0)
         assert row["volume"] == pytest.approx(6000.0)
         expected_vwap = (
-            (100.7 * 1000.0)
-            + (103.1 * 1100.0)
-            + (100.2 * 1200.0)
-            + (101.5 * 1300.0)
-            + (102.8 * 1400.0)
+            (100.7 * 1000.0) + (103.1 * 1100.0) + (100.2 * 1200.0) + (101.5 * 1300.0) + (102.8 * 1400.0)
         ) / 6000.0
         assert row["vwap"] == pytest.approx(expected_vwap)
         assert row["transactions"] == 60
@@ -661,14 +657,12 @@ class TestAggregateToMonthly:
         assert result.dtypes == list(DAILY_AGGS_SCHEMA.values())
 
 
-def test_adjust_splits_basic(
-    sample_bars_df: pl.DataFrame, sample_splits_df: pl.DataFrame
-):
+def test_adjust_splits_basic(sample_bars_df: pl.DataFrame, sample_splits_df: pl.DataFrame):
     result = adjust_splits(sample_bars_df, sample_splits_df)
 
-    aapl_row = result.filter(
-        (pl.col("ticker") == "AAPL") & (pl.col("date") == datetime.date(2024, 1, 1))
-    ).row(0, named=True)
+    aapl_row = result.filter((pl.col("ticker") == "AAPL") & (pl.col("date") == datetime.date(2024, 1, 1))).row(
+        0, named=True
+    )
 
     assert aapl_row["open"] == pytest.approx(300.0)
     assert aapl_row["close"] == pytest.approx(303.0)
@@ -718,12 +712,8 @@ def test_adjust_splits_same_day_not_adjusted():
 
     result = adjust_splits(bars, splits)
 
-    pre_split_row = result.filter(pl.col("date") == datetime.date(2024, 8, 30)).row(
-        0, named=True
-    )
-    split_day_row = result.filter(pl.col("date") == datetime.date(2024, 8, 31)).row(
-        0, named=True
-    )
+    pre_split_row = result.filter(pl.col("date") == datetime.date(2024, 8, 30)).row(0, named=True)
+    split_day_row = result.filter(pl.col("date") == datetime.date(2024, 8, 31)).row(0, named=True)
 
     assert pre_split_row["close"] == pytest.approx(126.25)
     assert pre_split_row["volume"] == pytest.approx(4000.0)
@@ -1043,17 +1033,13 @@ def test_adjust_splits_multi_split_spot_check(ticker, splits_data, checks):
         assert row["volume"] == pytest.approx(expected_volume, rel=1e-4)
 
 
-def test_adjust_splits_empty_splits(
-    sample_bars_df: pl.DataFrame, sample_splits_df: pl.DataFrame
-):
+def test_adjust_splits_empty_splits(sample_bars_df: pl.DataFrame, sample_splits_df: pl.DataFrame):
     result = adjust_splits(sample_bars_df, sample_splits_df.head(0))
 
     assert_frame_equal(result, sample_bars_df)
 
 
-def test_filter_tickers_keeps_matching(
-    sample_bars_df: pl.DataFrame, sample_tickers_df: pl.DataFrame
-):
+def test_filter_tickers_keeps_matching(sample_bars_df: pl.DataFrame, sample_tickers_df: pl.DataFrame):
     result = filter_tickers(sample_bars_df, sample_tickers_df)
 
     assert set(result["ticker"].unique()) == {"AAPL", "MSFT"}
@@ -1129,9 +1115,7 @@ def test_compute_metrics_sma20_null_count():
     )
 
     result = compute_metrics(bars)
-    null_counts = result.group_by("ticker").agg(
-        pl.col("sma_20").null_count().alias("nulls")
-    )
+    null_counts = result.group_by("ticker").agg(pl.col("sma_20").null_count().alias("nulls"))
 
     assert null_counts.sort("ticker")["nulls"].to_list() == [19, 19]
 
@@ -1145,9 +1129,7 @@ def test_compute_metrics_sma50_null_count():
     )
 
     result = compute_metrics(bars)
-    null_counts = result.group_by("ticker").agg(
-        pl.col("sma_50").null_count().alias("nulls")
-    )
+    null_counts = result.group_by("ticker").agg(pl.col("sma_50").null_count().alias("nulls"))
 
     assert null_counts.sort("ticker")["nulls"].to_list() == [49, 49]
 
@@ -1161,9 +1143,7 @@ def test_compute_metrics_sma200_null_count():
     )
 
     result = compute_metrics(bars)
-    null_counts = result.group_by("ticker").agg(
-        pl.col("sma_200").null_count().alias("nulls")
-    )
+    null_counts = result.group_by("ticker").agg(pl.col("sma_200").null_count().alias("nulls"))
 
     assert null_counts.sort("ticker")["nulls"].to_list() == [199, 199]
 
@@ -1177,12 +1157,12 @@ def test_compute_metrics_per_ticker():
     )
 
     result = compute_metrics(bars)
-    aapl_row = result.filter(
-        (pl.col("ticker") == "AAPL") & (pl.col("date") == datetime.date(2024, 2, 19))
-    ).row(0, named=True)
-    msft_row = result.filter(
-        (pl.col("ticker") == "MSFT") & (pl.col("date") == datetime.date(2024, 2, 19))
-    ).row(0, named=True)
+    aapl_row = result.filter((pl.col("ticker") == "AAPL") & (pl.col("date") == datetime.date(2024, 2, 19))).row(
+        0, named=True
+    )
+    msft_row = result.filter((pl.col("ticker") == "MSFT") & (pl.col("date") == datetime.date(2024, 2, 19))).row(
+        0, named=True
+    )
 
     assert aapl_row["sma_20"] == pytest.approx(10.0)
     assert msft_row["sma_20"] == pytest.approx(20.0)
@@ -1260,9 +1240,7 @@ def test_compute_atr_null_count():
     bars = make_ohlc_bars({"AAPL": ohlc, "MSFT": ohlc})
 
     result = _compute_atr(bars)
-    null_counts = result.group_by("ticker").agg(
-        pl.col("atr_14").null_count().alias("nulls")
-    )
+    null_counts = result.group_by("ticker").agg(pl.col("atr_14").null_count().alias("nulls"))
 
     assert null_counts.sort("ticker")["nulls"].to_list() == [13, 13]
 
@@ -1277,12 +1255,12 @@ def test_compute_atr_per_ticker_isolation():
 
     result = _compute_atr(bars)
 
-    aapl_row = result.filter(
-        (pl.col("ticker") == "AAPL") & (pl.col("date") == datetime.date(2024, 1, 14))
-    ).row(0, named=True)
-    msft_row = result.filter(
-        (pl.col("ticker") == "MSFT") & (pl.col("date") == datetime.date(2024, 1, 14))
-    ).row(0, named=True)
+    aapl_row = result.filter((pl.col("ticker") == "AAPL") & (pl.col("date") == datetime.date(2024, 1, 14))).row(
+        0, named=True
+    )
+    msft_row = result.filter((pl.col("ticker") == "MSFT") & (pl.col("date") == datetime.date(2024, 1, 14))).row(
+        0, named=True
+    )
 
     assert aapl_row["atr_14"] == pytest.approx(4.0, abs=1e-4)
     assert msft_row["atr_14"] == pytest.approx(2.0, abs=1e-4)
@@ -1349,8 +1327,7 @@ def test_compute_metrics_no_spy():
 
     # SMA columns still work
     aapl_late = result.filter(
-        (pl.col("ticker") == "AAPL")
-        & (pl.col("date") == datetime.date(2024, 1, 1) + datetime.timedelta(days=99))
+        (pl.col("ticker") == "AAPL") & (pl.col("date") == datetime.date(2024, 1, 1) + datetime.timedelta(days=99))
     ).row(0, named=True)
     assert aapl_late["sma_20"] is not None
     assert aapl_late["sma_50"] is not None
@@ -1377,9 +1354,7 @@ def test_compute_metrics_atr_pct_null_count():
     bars = make_ohlc_bars({"AAPL": ohlc, "MSFT": ohlc})
 
     result = compute_metrics(bars)
-    null_counts = result.group_by("ticker").agg(
-        pl.col("atr_pct").null_count().alias("nulls")
-    )
+    null_counts = result.group_by("ticker").agg(pl.col("atr_pct").null_count().alias("nulls"))
 
     assert null_counts.sort("ticker")["nulls"].to_list() == [13, 13]
 
@@ -1393,9 +1368,7 @@ def test_compute_metrics_atr_pct_no_spy():
     result = compute_metrics(bars)
 
     # After ATR warmup (row 13+), atr_pct must be non-null
-    after_warmup = result.filter(
-        (pl.col("ticker") == "AAPL") & pl.col("atr_14").is_not_null()
-    )
+    after_warmup = result.filter((pl.col("ticker") == "AAPL") & pl.col("atr_14").is_not_null())
     assert len(after_warmup) > 0
     assert after_warmup["atr_pct"].null_count() == 0
 
@@ -1417,12 +1390,8 @@ def test_compute_metrics_atr_pct_per_ticker():
 
     # Row 13 = first non-null ATR = date 2024-01-14
     target_date = datetime.date(2024, 1, 14)
-    aapl_row = result.filter(
-        (pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)
-    ).row(0, named=True)
-    msft_row = result.filter(
-        (pl.col("ticker") == "MSFT") & (pl.col("date") == target_date)
-    ).row(0, named=True)
+    aapl_row = result.filter((pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)).row(0, named=True)
+    msft_row = result.filter((pl.col("ticker") == "MSFT") & (pl.col("date") == target_date)).row(0, named=True)
 
     assert aapl_row["atr_pct"] == pytest.approx(0.04, abs=1e-4)
     assert msft_row["atr_pct"] == pytest.approx(0.02, abs=1e-4)
@@ -1437,9 +1406,7 @@ def test_compute_metrics_volume_sma20_correct():
     Volumes: 1.0, 2.0, ..., 30.0. At row 19 (20th bar), SMA(20) = mean(1..20) = 10.5.
     """
     bars = make_metric_bars({"AAPL": [float(i) for i in range(1, 31)]})
-    bars = bars.with_columns(
-        pl.Series("volume", [float(i) for i in range(1, 31)]).cast(pl.Float32)
-    )
+    bars = bars.with_columns(pl.Series("volume", [float(i) for i in range(1, 31)]).cast(pl.Float32))
 
     result = compute_metrics(bars)
 
@@ -1459,9 +1426,7 @@ def test_compute_metrics_volume_sma20_null_count():
     )
 
     result = compute_metrics(bars)
-    null_counts = result.group_by("ticker").agg(
-        pl.col("volume_sma_20").null_count().alias("nulls")
-    )
+    null_counts = result.group_by("ticker").agg(pl.col("volume_sma_20").null_count().alias("nulls"))
 
     assert null_counts.sort("ticker")["nulls"].to_list() == [19, 19]
 
@@ -1490,12 +1455,8 @@ def test_compute_metrics_volume_sma20_per_ticker():
     result = compute_metrics(bars)
 
     target_date = datetime.date(2024, 1, 1) + datetime.timedelta(days=59)
-    aapl_row = result.filter(
-        (pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)
-    ).row(0, named=True)
-    msft_row = result.filter(
-        (pl.col("ticker") == "MSFT") & (pl.col("date") == target_date)
-    ).row(0, named=True)
+    aapl_row = result.filter((pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)).row(0, named=True)
+    msft_row = result.filter((pl.col("ticker") == "MSFT") & (pl.col("date") == target_date)).row(0, named=True)
 
     assert aapl_row["volume_sma_20"] == pytest.approx(1000.0)
     assert msft_row["volume_sma_20"] == pytest.approx(2000.0)
@@ -1516,9 +1477,7 @@ def test_compute_adr_pct_warmup_nulls():
     ohlc = [(100.0, 102.0, 98.0, 100.0)] * 30
     bars = make_ohlc_bars({"AAPL": ohlc, "MSFT": ohlc})
     result = _compute_adr_pct(bars)
-    null_counts = result.group_by("ticker").agg(
-        pl.col("adr_pct").null_count().alias("nulls")
-    )
+    null_counts = result.group_by("ticker").agg(pl.col("adr_pct").null_count().alias("nulls"))
     assert null_counts.sort("ticker")["nulls"].to_list() == [19, 19]
 
 
@@ -1529,12 +1488,8 @@ def test_compute_adr_pct_per_ticker_isolation():
     bars = make_ohlc_bars({"AAPL": aapl_ohlc, "MSFT": msft_ohlc})
     result = _compute_adr_pct(bars)
     target_date = datetime.date(2024, 1, 20)
-    aapl_row = result.filter(
-        (pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)
-    ).row(0, named=True)
-    msft_row = result.filter(
-        (pl.col("ticker") == "MSFT") & (pl.col("date") == target_date)
-    ).row(0, named=True)
+    aapl_row = result.filter((pl.col("ticker") == "AAPL") & (pl.col("date") == target_date)).row(0, named=True)
+    msft_row = result.filter((pl.col("ticker") == "MSFT") & (pl.col("date") == target_date)).row(0, named=True)
     assert aapl_row["adr_pct"] == pytest.approx(0.04, abs=1e-4)
     assert msft_row["adr_pct"] == pytest.approx(0.10, abs=1e-4)
 
@@ -1546,9 +1501,7 @@ def test_compute_adr_pct_flat_price():
     result = _compute_adr_pct(bars)
     non_null = result.filter(pl.col("adr_pct").is_not_null())
     assert len(non_null) > 0
-    assert non_null["adr_pct"].to_list() == pytest.approx(
-        [0.0] * len(non_null), abs=1e-6
-    )
+    assert non_null["adr_pct"].to_list() == pytest.approx([0.0] * len(non_null), abs=1e-6)
 
 
 def test_compute_adr_pct_output_columns():
@@ -1578,9 +1531,7 @@ def test_compute_metrics_adr_pct_null_count():
     ohlc = [(100.0, 102.0, 98.0, 100.0)] * 30
     bars = make_ohlc_bars({"AAPL": ohlc, "MSFT": ohlc})
     result = compute_metrics(bars)
-    null_counts = result.group_by("ticker").agg(
-        pl.col("adr_pct").null_count().alias("nulls")
-    )
+    null_counts = result.group_by("ticker").agg(pl.col("adr_pct").null_count().alias("nulls"))
     assert null_counts.sort("ticker")["nulls"].to_list() == [19, 19]
 
 
@@ -1589,8 +1540,6 @@ def test_compute_metrics_adr_pct_independent_of_spy():
     ohlc = [(100.0, 102.0, 98.0, 100.0)] * 25
     bars = make_ohlc_bars({"AAPL": ohlc})  # No SPY
     result = compute_metrics(bars)
-    after_warmup = result.filter(
-        (pl.col("ticker") == "AAPL") & pl.col("adr_pct").is_not_null()
-    )
+    after_warmup = result.filter((pl.col("ticker") == "AAPL") & pl.col("adr_pct").is_not_null())
     assert len(after_warmup) > 0
     assert after_warmup["adr_pct"].null_count() == 0

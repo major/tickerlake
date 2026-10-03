@@ -27,9 +27,7 @@ def _make_bars(
     n = len(prices_high)
     assert len(prices_low) == n
     dates = [start + datetime.timedelta(weeks=i) for i in range(n)]
-    closes: list[float] = [
-        (hi + lo) / 2 for hi, lo in zip(prices_high, prices_low, strict=True)
-    ]
+    closes: list[float] = [(hi + lo) / 2 for hi, lo in zip(prices_high, prices_low, strict=True)]
     return pl.DataFrame(
         {
             "date": dates,
@@ -114,9 +112,7 @@ def test_compute_fib_zones_v_shape() -> None:
         12.0,
     ]
     bars = _make_bars(highs, lows, datetime.date(2024, 1, 1))
-    result = compute_fib_zones_for_ticker(
-        bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=2
-    )
+    result = compute_fib_zones_for_ticker(bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=2)
     assert result is not None
     assert result["swing_low"] == 8.0
     assert result["swing_high"] == 30.0
@@ -160,13 +156,9 @@ def test_compute_fib_zones_keeps_old_unswept_leg() -> None:
     ]
     tail_highs = [14.0 - 0.035 * i for i in range(100)]
     tail_lows = [13.0 - 0.035 * i for i in range(100)]
-    bars = _make_bars(
-        v_highs + tail_highs, v_lows + tail_lows, datetime.date(2023, 1, 1)
-    )
+    bars = _make_bars(v_highs + tail_highs, v_lows + tail_lows, datetime.date(2023, 1, 1))
 
-    result = compute_fib_zones_for_ticker(
-        bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=2
-    )
+    result = compute_fib_zones_for_ticker(bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=2)
 
     assert result is not None
     assert result["swing_low"] == 8.0
@@ -210,9 +202,7 @@ def test_compute_fib_zones_min_leg_pct_too_strict() -> None:
         12.0,
     ]
     bars = _make_bars(highs, lows, datetime.date(2024, 1, 1))
-    result = compute_fib_zones_for_ticker(
-        bars, k=3, min_leg_pct=0.99, min_bars_between_pivots=2
-    )
+    result = compute_fib_zones_for_ticker(bars, k=3, min_leg_pct=0.99, min_bars_between_pivots=2)
     assert result is None
 
 
@@ -253,9 +243,7 @@ def test_compute_fib_zones_min_bars_between_pivots_too_strict() -> None:
         12.0,
     ]
     bars = _make_bars(highs, lows, datetime.date(2024, 1, 1))
-    result = compute_fib_zones_for_ticker(
-        bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=1000
-    )
+    result = compute_fib_zones_for_ticker(bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=1000)
     assert result is None
 
 
@@ -296,9 +284,7 @@ def test_compute_fib_zones_min_bars_between_pivots_relaxed() -> None:
         12.0,
     ]
     bars = _make_bars(highs, lows, datetime.date(2024, 1, 1))
-    result = compute_fib_zones_for_ticker(
-        bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=1
-    )
+    result = compute_fib_zones_for_ticker(bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=1)
     assert result is not None
     assert result["swing_low"] == 8.0
     assert result["swing_high"] == 30.0
@@ -361,9 +347,7 @@ def test_compute_fib_zones_highest_high_not_most_recent() -> None:
         38.0,
     ]
     bars = _make_bars(highs, lows, datetime.date(2024, 1, 1))
-    result = compute_fib_zones_for_ticker(
-        bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=3
-    )
+    result = compute_fib_zones_for_ticker(bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=3)
     assert result is not None
     assert result["swing_low"] == 18.0
     assert result["swing_high"] == 60.0
@@ -406,9 +390,7 @@ def test_compute_fib_zones_schema_compliance() -> None:
         12.0,
     ]
     bars = _make_bars(highs, lows, datetime.date(2024, 1, 1))
-    result = compute_fib_zones_for_ticker(
-        bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=2
-    )
+    result = compute_fib_zones_for_ticker(bars, k=3, min_leg_pct=0.20, min_bars_between_pivots=2)
     assert result is not None
     for key in WEEKLY_FIB_ZONES_SCHEMA:
         assert key in result, f"missing key: {key}"
@@ -451,9 +433,7 @@ def test_compute_weekly_fib_zones_all_filters_eligible() -> None:
 
 def test_find_most_recent_unswept_leg_empty_pivots() -> None:
     """Empty pivots → None."""
-    pivots = pl.DataFrame(
-        schema={"date": pl.Date, "pivot_type": pl.Utf8, "price": pl.Float64}
-    )
+    pivots = pl.DataFrame(schema={"date": pl.Date, "pivot_type": pl.Utf8, "price": pl.Float64})
     assert _find_most_recent_unswept_leg(pivots, [], 0.20) is None
 
 
@@ -571,8 +551,6 @@ def test_compute_weekly_fib_zones_all_successful_path() -> None:
         },
         schema_overrides={"date": pl.Date},
     )
-    result = compute_weekly_fib_zones_all(
-        bars, eligible_tickers={"AAA"}, k=3, min_leg_pct=0.20
-    )
+    result = compute_weekly_fib_zones_all(bars, eligible_tickers={"AAA"}, k=3, min_leg_pct=0.20)
     assert not result.is_empty()
     assert result["ticker"][0] == "AAA"

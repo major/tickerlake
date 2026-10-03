@@ -59,14 +59,10 @@ def _build_parser() -> argparse.ArgumentParser:
     info_parser = subparsers.add_parser("info", help="Show database info")
     info_parser.add_argument("--output-dir", type=Path, metavar="DIR")
 
-    compact_parser = subparsers.add_parser(
-        "compact", help="Rebuild raw.duckdb to reclaim space"
-    )
+    compact_parser = subparsers.add_parser("compact", help="Rebuild raw.duckdb to reclaim space")
     compact_parser.add_argument("--output-dir", type=Path, metavar="DIR")
 
-    pivots_parser = subparsers.add_parser(
-        "pivots", help="Find confirmed pivots for one ticker"
-    )
+    pivots_parser = subparsers.add_parser("pivots", help="Find confirmed pivots for one ticker")
     pivots_parser.add_argument("ticker", help="Ticker symbol, e.g. AAPL")
     pivots_parser.add_argument(
         "--timeframe",
@@ -86,9 +82,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "fib-zones",
         help="Compute and screen weekly Fibonacci-retracement IBZ/SMZ zones",
     )
-    fib_zones_subparsers = fib_zones_parser.add_subparsers(
-        dest="fib_zones_command", metavar="COMMAND"
-    )
+    fib_zones_subparsers = fib_zones_parser.add_subparsers(dest="fib_zones_command", metavar="COMMAND")
     fib_zones_subparsers.required = True
 
     fib_zones_compute_parser = fib_zones_subparsers.add_parser(
@@ -96,9 +90,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     fib_zones_compute_parser.add_argument("--output-dir", type=Path, metavar="DIR")
 
-    fib_zones_screen_parser = fib_zones_subparsers.add_parser(
-        "screen", help="Screen persisted weekly fib zones"
-    )
+    fib_zones_screen_parser = fib_zones_subparsers.add_parser("screen", help="Screen persisted weekly fib zones")
     fib_zones_screen_parser.add_argument(
         "--zone",
         choices=["in_ibz", "in_smz", "below_smz", "above_ibz", "all"],
@@ -135,9 +127,7 @@ def _make_config(args: argparse.Namespace) -> Config:
     return Config(**kwargs)
 
 
-def _dispatch_etl(
-    parser: argparse.ArgumentParser, config: Config, command: str
-) -> None:
+def _dispatch_etl(parser: argparse.ArgumentParser, config: Config, command: str) -> None:
     """Dispatch backfill/update to the pipeline, wrapping ValueErrors."""
     try:
         {"backfill": pipeline.backfill, "update": pipeline.update}[command](config)
@@ -145,9 +135,7 @@ def _dispatch_etl(
         parser.error(str(err))
 
 
-def _dispatch_fib_zones(
-    parser: argparse.ArgumentParser, args: argparse.Namespace, config: Config
-) -> None:
+def _dispatch_fib_zones(parser: argparse.ArgumentParser, args: argparse.Namespace, config: Config) -> None:
     """Dispatch the fib-zones compute/screen subcommands, wrapping ValueErrors."""
     if args.fib_zones_command == "compute":
         try:

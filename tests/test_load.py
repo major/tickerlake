@@ -57,9 +57,7 @@ def sample_metrics_df(sample_bars_df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def test_write_raw_db_creates_table(
-    tmp_path: Path, sample_bars_df: pl.DataFrame
-) -> None:
+def test_write_raw_db_creates_table(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
     """write_raw_db() creates raw_daily_bars table with correct row count."""
     db_path = tmp_path / "raw.duckdb"
     write_raw_db(sample_bars_df, db_path)
@@ -109,9 +107,7 @@ def test_write_raw_db_sorted(tmp_path: Path, sample_bars_df: pl.DataFrame) -> No
     # Verify sorted by ticker first, then date within each ticker
     for i in range(1, len(rows)):
         if tickers[i] == tickers[i - 1]:
-            assert dates[i] >= dates[i - 1], (
-                f"Dates not sorted within ticker {tickers[i]}"
-            )
+            assert dates[i] >= dates[i - 1], f"Dates not sorted within ticker {tickers[i]}"
         else:
             assert tickers[i] >= tickers[i - 1], "Tickers not sorted"
 
@@ -145,9 +141,7 @@ def test_read_raw_db(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
     assert set(result.columns) == set(sample_bars_df.columns)
 
 
-def test_get_existing_dates_returns_correct_dates(
-    tmp_path: Path, sample_bars_df: pl.DataFrame
-) -> None:
+def test_get_existing_dates_returns_correct_dates(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
     """get_existing_dates() returns set of dates from raw_daily_bars."""
     db_path = tmp_path / "raw.duckdb"
     write_raw_db(sample_bars_df, db_path)
@@ -180,9 +174,7 @@ def test_get_existing_dates_missing_table(tmp_path: Path) -> None:
     assert result == set()
 
 
-def test_delete_raw_dates_removes_rows_for_matching_days(
-    tmp_path: Path, sample_bars_df: pl.DataFrame
-) -> None:
+def test_delete_raw_dates_removes_rows_for_matching_days(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
     """delete_raw_dates() removes all rows for the requested trading dates."""
     db_path = tmp_path / "raw.duckdb"
     write_raw_db(sample_bars_df, db_path)
@@ -233,15 +225,9 @@ def test_write_consumer_db_schema(
     write_consumer_db(sample_bars_df, sample_metrics_df, sample_tickers_df, db_path)
 
     con = duckdb.connect(str(db_path), read_only=True)
-    bars_schema = {
-        row[0]: row[1] for row in con.execute("DESCRIBE daily_bars").fetchall()
-    }
-    metrics_schema = {
-        row[0]: row[1] for row in con.execute("DESCRIBE daily_metrics").fetchall()
-    }
-    tickers_schema = {
-        row[0]: row[1] for row in con.execute("DESCRIBE tickers").fetchall()
-    }
+    bars_schema = {row[0]: row[1] for row in con.execute("DESCRIBE daily_bars").fetchall()}
+    metrics_schema = {row[0]: row[1] for row in con.execute("DESCRIBE daily_metrics").fetchall()}
+    tickers_schema = {row[0]: row[1] for row in con.execute("DESCRIBE tickers").fetchall()}
     con.close()
 
     # daily_bars schema
@@ -286,9 +272,7 @@ def test_write_consumer_db_rejects_wrong_dtype(
     db_path = tmp_path / "tickerlake.duckdb"
     bad_bars = sample_bars_df.with_columns(pl.col("close").cast(pl.Float64))
 
-    with pytest.raises(
-        ValueError, match=r"daily_bars.*close: expected Float32, got Float64"
-    ):
+    with pytest.raises(ValueError, match=r"daily_bars.*close: expected Float32, got Float64"):
         write_consumer_db(bad_bars, sample_metrics_df, sample_tickers_df, db_path)
 
 
@@ -300,9 +284,7 @@ def test_write_consumer_db_validates_optional_weekly_schema(
 ) -> None:
     """Optional weekly tables are schema-validated when provided."""
     db_path = tmp_path / "tickerlake.duckdb"
-    bad_weekly_metrics = sample_metrics_df.with_columns(
-        pl.col("volume_sma_20").cast(pl.Float64)
-    )
+    bad_weekly_metrics = sample_metrics_df.with_columns(pl.col("volume_sma_20").cast(pl.Float64))
 
     with pytest.raises(
         ValueError,
@@ -461,9 +443,7 @@ def test_write_raw_db_idempotent(tmp_path: Path, sample_bars_df: pl.DataFrame) -
     assert count == len(sample_bars_df)
 
 
-def test_compact_raw_db_preserves_data(
-    tmp_path: Path, sample_bars_df: pl.DataFrame
-) -> None:
+def test_compact_raw_db_preserves_data(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
     """compact_raw_db() preserves all rows after rebuild."""
     db_path = tmp_path / "raw.duckdb"
     write_raw_db(sample_bars_df, db_path)
@@ -488,9 +468,7 @@ def test_compact_raw_db_sorted(tmp_path: Path, sample_bars_df: pl.DataFrame) -> 
 
     for i in range(1, len(rows)):
         if rows[i][0] == rows[i - 1][0]:
-            assert rows[i][1] >= rows[i - 1][1], (
-                f"Dates not sorted within ticker {rows[i][0]}"
-            )
+            assert rows[i][1] >= rows[i - 1][1], f"Dates not sorted within ticker {rows[i][0]}"
         else:
             assert rows[i][0] >= rows[i - 1][0], "Tickers not sorted"
 
@@ -677,9 +655,7 @@ def test_write_consumer_db_weekly_metrics_sorted(
     assert rows == sorted(rows)
 
 
-def test_write_splits_creates_table(
-    tmp_path: Path, sample_splits_df: pl.DataFrame
-) -> None:
+def test_write_splits_creates_table(tmp_path: Path, sample_splits_df: pl.DataFrame) -> None:
     """write_splits() creates splits table with correct row count."""
     db_path = tmp_path / "raw.duckdb"
     write_splits(sample_splits_df, db_path)
@@ -734,9 +710,7 @@ def test_read_splits_round_trip(tmp_path: Path, sample_splits_df: pl.DataFrame) 
     assert set(result.columns) == set(sample_splits_df.columns)
 
 
-def test_delete_then_append_no_duplicates(
-    tmp_path: Path, sample_bars_df: pl.DataFrame
-) -> None:
+def test_delete_then_append_no_duplicates(tmp_path: Path, sample_bars_df: pl.DataFrame) -> None:
     """Delete-then-append for a date yields no duplicate (ticker, date) rows."""
     db_path = tmp_path / "raw.duckdb"
     write_raw_db(sample_bars_df, db_path)

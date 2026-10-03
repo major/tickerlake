@@ -36,9 +36,7 @@ class TestBackfillSubcommand:
         """Verify backfill subcommand invokes pipeline.backfill."""
         monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
         with patch("tickerlake.pipeline.backfill") as mock_backfill:
-            monkeypatch.setattr(
-                "sys.argv", ["tickerlake", "backfill", "--output-dir", str(tmp_path)]
-            )
+            monkeypatch.setattr("sys.argv", ["tickerlake", "backfill", "--output-dir", str(tmp_path)])
             main()
             mock_backfill.assert_called_once()
             config = mock_backfill.call_args[0][0]
@@ -125,9 +123,7 @@ class TestUpdateSubcommand:
         """Verify update subcommand invokes pipeline.update."""
         monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
         with patch("tickerlake.pipeline.update") as mock_update:
-            monkeypatch.setattr(
-                "sys.argv", ["tickerlake", "update", "--output-dir", str(tmp_path)]
-            )
+            monkeypatch.setattr("sys.argv", ["tickerlake", "update", "--output-dir", str(tmp_path)])
             main()
             mock_update.assert_called_once()
             config = mock_update.call_args[0][0]
@@ -154,9 +150,7 @@ class TestInfoSubcommand:
         """Verify info subcommand invokes pipeline.info."""
         monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
         with patch("tickerlake.pipeline.info") as mock_info:
-            monkeypatch.setattr(
-                "sys.argv", ["tickerlake", "info", "--output-dir", str(tmp_path)]
-            )
+            monkeypatch.setattr("sys.argv", ["tickerlake", "info", "--output-dir", str(tmp_path)])
             main()
             mock_info.assert_called_once()
             config = mock_info.call_args[0][0]
@@ -183,9 +177,7 @@ class TestCompactSubcommand:
         """Verify compact subcommand invokes pipeline.compact."""
         monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
         with patch("tickerlake.pipeline.compact") as mock_compact:
-            monkeypatch.setattr(
-                "sys.argv", ["tickerlake", "compact", "--output-dir", str(tmp_path)]
-            )
+            monkeypatch.setattr("sys.argv", ["tickerlake", "compact", "--output-dir", str(tmp_path)])
             main()
             mock_compact.assert_called_once()
             config = mock_compact.call_args[0][0]
@@ -247,9 +239,7 @@ class TestPivotsSubcommand:
     def test_pivots_invalid_timeframe(self, monkeypatch):
         """Verify invalid timeframe exits with error."""
         monkeypatch.setenv("MASSIVE_API_KEY", "test_key")
-        monkeypatch.setattr(
-            "sys.argv", ["tickerlake", "pivots", "AAPL", "--timeframe", "yearly"]
-        )
+        monkeypatch.setattr("sys.argv", ["tickerlake", "pivots", "AAPL", "--timeframe", "yearly"])
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code != 0

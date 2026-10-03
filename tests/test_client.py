@@ -27,9 +27,7 @@ class TestMassiveClientInit:
     """Tests for MassiveClient initialization."""
 
     @patch("tickerlake.client.RESTClient")
-    def test_init_creates_rest_client(
-        self, mock_rest_class: MagicMock, sample_config: Config
-    ) -> None:
+    def test_init_creates_rest_client(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
         """MassiveClient(config) creates RESTClient with config.api_key."""
         mock_rest_class.return_value = MagicMock()
 
@@ -44,9 +42,7 @@ class TestMassiveClientInit:
         with patch.dict(os.environ, {}, clear=True):
             config = Config(api_key="")
 
-        with pytest.raises(
-            ValueError, match="MASSIVE_API_KEY environment variable is required"
-        ):
+        with pytest.raises(ValueError, match="MASSIVE_API_KEY environment variable is required"):
             MassiveClient(config)
 
         mock_rest_class.assert_not_called()
@@ -56,9 +52,7 @@ class TestFetchDailyAggs:
     """Tests for fetch_daily_aggs method."""
 
     @patch("tickerlake.client.RESTClient")
-    def test_fetch_daily_aggs_correct_params(
-        self, mock_rest_class: MagicMock, sample_config: Config
-    ) -> None:
+    def test_fetch_daily_aggs_correct_params(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
         """fetch_daily_aggs calls get_grouped_daily_aggs with correct parameters."""
         mock_rest = MagicMock()
         mock_rest_class.return_value = mock_rest
@@ -76,9 +70,7 @@ class TestFetchDailyAggs:
         )
 
     @patch("tickerlake.client.RESTClient")
-    def test_fetch_daily_aggs_returns_list(
-        self, mock_rest_class: MagicMock, sample_config: Config
-    ) -> None:
+    def test_fetch_daily_aggs_returns_list(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
         """fetch_daily_aggs returns the list from the underlying API call."""
         mock_rest = MagicMock()
         mock_rest_class.return_value = mock_rest
@@ -95,9 +87,7 @@ class TestFetchSplits:
     """Tests for fetch_splits method."""
 
     @patch("tickerlake.client.RESTClient")
-    def test_fetch_splits_correct_params(
-        self, mock_rest_class: MagicMock, sample_config: Config
-    ) -> None:
+    def test_fetch_splits_correct_params(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
         """fetch_splits calls list_stocks_splits with correct parameters as strings."""
         mock_rest = MagicMock()
         mock_rest_class.return_value = mock_rest
@@ -114,9 +104,7 @@ class TestFetchSplits:
         )
 
     @patch("tickerlake.client.RESTClient")
-    def test_fetch_splits_returns_list(
-        self, mock_rest_class: MagicMock, sample_config: Config
-    ) -> None:
+    def test_fetch_splits_returns_list(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
         """fetch_splits materializes the iterator to a list."""
         mock_rest = MagicMock()
         mock_rest_class.return_value = mock_rest
@@ -137,9 +125,7 @@ class TestFetchSplits:
         mock_rest.list_stocks_splits.return_value = iter(expected_splits)
 
         client = MassiveClient(sample_config)
-        result = client.fetch_splits(
-            datetime.date(2024, 1, 1), datetime.date(2024, 12, 31)
-        )
+        result = client.fetch_splits(datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
 
         assert result == expected_splits
         assert isinstance(result, list)
@@ -149,9 +135,7 @@ class TestFetchTickers:
     """Tests for fetch_tickers method."""
 
     @patch("tickerlake.client.RESTClient")
-    def test_fetch_tickers_two_calls(
-        self, mock_rest_class: MagicMock, sample_config: Config
-    ) -> None:
+    def test_fetch_tickers_two_calls(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
         """fetch_tickers(["CS", "ETF"]) makes exactly 2 calls to list_tickers."""
         mock_rest = MagicMock()
         mock_rest_class.return_value = mock_rest
@@ -163,9 +147,7 @@ class TestFetchTickers:
         assert mock_rest.list_tickers.call_count == 2
 
     @patch("tickerlake.client.RESTClient")
-    def test_fetch_tickers_correct_params(
-        self, mock_rest_class: MagicMock, sample_config: Config
-    ) -> None:
+    def test_fetch_tickers_correct_params(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
         """fetch_tickers calls list_tickers with correct parameters for each type."""
         mock_rest = MagicMock()
         mock_rest_class.return_value = mock_rest
@@ -194,9 +176,7 @@ class TestFetchTickers:
         }
 
     @patch("tickerlake.client.RESTClient")
-    def test_fetch_tickers_concatenates_results(
-        self, mock_rest_class: MagicMock, sample_config: Config
-    ) -> None:
+    def test_fetch_tickers_concatenates_results(self, mock_rest_class: MagicMock, sample_config: Config) -> None:
         """fetch_tickers concatenates results from both calls into one list."""
         mock_rest = MagicMock()
         mock_rest_class.return_value = mock_rest

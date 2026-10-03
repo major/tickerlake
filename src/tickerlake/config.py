@@ -30,12 +30,8 @@ class Config:
             .replace(year=datetime.datetime.now(tz=datetime.UTC).date().year - 10)
         )
     )
-    end_date: datetime.date = field(
-        default_factory=lambda: datetime.datetime.now(tz=datetime.UTC).date()
-    )
-    ticker_types: list[str] = field(
-        default_factory=lambda: ["CS", "ETF", "ETV", "ETN", "ADRC"]
-    )
+    end_date: datetime.date = field(default_factory=lambda: datetime.datetime.now(tz=datetime.UTC).date())
+    ticker_types: list[str] = field(default_factory=lambda: ["CS", "ETF", "ETV", "ETN", "ADRC"])
 
     def __post_init__(self) -> None:
         """Validate and normalize configuration after initialization."""

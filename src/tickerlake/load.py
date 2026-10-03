@@ -76,10 +76,7 @@ def write_raw_db(bars: pl.DataFrame, path: Path) -> None:
     """Write bars DataFrame to raw_daily_bars table, replacing any existing data."""
     with _tmp_parquet(bars) as tmp:
         con = duckdb.connect(str(path))
-        con.execute(
-            "CREATE OR REPLACE TABLE raw_daily_bars AS "
-            f"{_read_parquet_sql(tmp, 'ticker, date')}"
-        )
+        con.execute(f"CREATE OR REPLACE TABLE raw_daily_bars AS {_read_parquet_sql(tmp, 'ticker, date')}")
         con.execute("CHECKPOINT")
         con.close()
 
@@ -88,9 +85,7 @@ def append_raw_db(new_bars: pl.DataFrame, path: Path) -> None:
     """Append new_bars rows to existing raw_daily_bars table."""
     with _tmp_parquet(new_bars) as tmp:
         con = duckdb.connect(str(path))
-        con.execute(
-            f"INSERT INTO raw_daily_bars {_read_parquet_sql(tmp, 'ticker, date')}"
-        )
+        con.execute(f"INSERT INTO raw_daily_bars {_read_parquet_sql(tmp, 'ticker, date')}")
         con.execute("CHECKPOINT")
         con.close()
 
@@ -116,10 +111,7 @@ def read_raw_db(path: Path) -> pl.DataFrame:
         tmp = Path(f.name)
     try:
         con = duckdb.connect(str(path), read_only=True)
-        con.execute(
-            "COPY (SELECT * FROM raw_daily_bars ORDER BY ticker, date) "
-            f"TO '{tmp}' (FORMAT PARQUET)"
-        )
+        con.execute(f"COPY (SELECT * FROM raw_daily_bars ORDER BY ticker, date) TO '{tmp}' (FORMAT PARQUET)")
         con.close()
         return pl.read_parquet(tmp)
     finally:
@@ -174,41 +166,24 @@ def write_consumer_db(
     ):
         con = duckdb.connect(str(path))
         try:
-            con.execute(
-                "CREATE OR REPLACE TABLE daily_bars AS "
-                f"{_read_parquet_sql(bars_tmp, 'ticker, date')}"
-            )
-            con.execute(
-                "CREATE OR REPLACE TABLE daily_metrics AS "
-                f"{_read_parquet_sql(metrics_tmp, 'ticker, date')}"
-            )
-            con.execute(
-                "CREATE OR REPLACE TABLE tickers AS "
-                f"{_read_parquet_sql(tickers_tmp, 'ticker')}"
-            )
+            con.execute(f"CREATE OR REPLACE TABLE daily_bars AS {_read_parquet_sql(bars_tmp, 'ticker, date')}")
+            con.execute(f"CREATE OR REPLACE TABLE daily_metrics AS {_read_parquet_sql(metrics_tmp, 'ticker, date')}")
+            con.execute(f"CREATE OR REPLACE TABLE tickers AS {_read_parquet_sql(tickers_tmp, 'ticker')}")
             if weekly_bars is not None:
                 with _tmp_parquet(weekly_bars) as wb_tmp:
-                    con.execute(
-                        "CREATE OR REPLACE TABLE weekly_bars AS "
-                        f"{_read_parquet_sql(wb_tmp, 'ticker, date')}"
-                    )
+                    con.execute(f"CREATE OR REPLACE TABLE weekly_bars AS {_read_parquet_sql(wb_tmp, 'ticker, date')}")
             if weekly_metrics is not None:
                 with _tmp_parquet(weekly_metrics) as wm_tmp:
                     con.execute(
-                        "CREATE OR REPLACE TABLE weekly_metrics AS "
-                        f"{_read_parquet_sql(wm_tmp, 'ticker, date')}"
+                        f"CREATE OR REPLACE TABLE weekly_metrics AS {_read_parquet_sql(wm_tmp, 'ticker, date')}"
                     )
             if monthly_bars is not None:
                 with _tmp_parquet(monthly_bars) as mb_tmp:
-                    con.execute(
-                        "CREATE OR REPLACE TABLE monthly_bars AS "
-                        f"{_read_parquet_sql(mb_tmp, 'ticker, date')}"
-                    )
+                    con.execute(f"CREATE OR REPLACE TABLE monthly_bars AS {_read_parquet_sql(mb_tmp, 'ticker, date')}")
             if monthly_metrics is not None:
                 with _tmp_parquet(monthly_metrics) as mm_tmp:
                     con.execute(
-                        "CREATE OR REPLACE TABLE monthly_metrics AS "
-                        f"{_read_parquet_sql(mm_tmp, 'ticker, date')}"
+                        f"CREATE OR REPLACE TABLE monthly_metrics AS {_read_parquet_sql(mm_tmp, 'ticker, date')}"
                     )
             con.execute("CHECKPOINT")
         finally:
@@ -219,10 +194,7 @@ def write_splits(splits: pl.DataFrame, path: Path) -> None:
     """Write splits DataFrame to splits table, replacing any existing data."""
     with _tmp_parquet(splits) as tmp:
         con = duckdb.connect(str(path))
-        con.execute(
-            "CREATE OR REPLACE TABLE splits AS "
-            f"{_read_parquet_sql(tmp, 'ticker, execution_date')}"
-        )
+        con.execute(f"CREATE OR REPLACE TABLE splits AS {_read_parquet_sql(tmp, 'ticker, execution_date')}")
         con.execute("CHECKPOINT")
         con.close()
 
@@ -233,10 +205,7 @@ def read_splits(path: Path) -> pl.DataFrame:
         tmp = Path(f.name)
     try:
         con = duckdb.connect(str(path), read_only=True)
-        con.execute(
-            "COPY (SELECT * FROM splits ORDER BY ticker, execution_date) "
-            f"TO '{tmp}' (FORMAT PARQUET)"
-        )
+        con.execute(f"COPY (SELECT * FROM splits ORDER BY ticker, execution_date) TO '{tmp}' (FORMAT PARQUET)")
         con.close()
         return pl.read_parquet(tmp)
     finally:
@@ -255,9 +224,7 @@ def read_adjusted_daily_bars_for_ticker(path: Path, ticker: str) -> pl.DataFrame
         con = duckdb.connect(str(path), read_only=True)
         try:
             con.execute(
-                "COPY ("
-                "SELECT * FROM daily_bars WHERE ticker = ? ORDER BY ticker, date"
-                f") TO '{tmp}' (FORMAT PARQUET)",
+                f"COPY (SELECT * FROM daily_bars WHERE ticker = ? ORDER BY ticker, date) TO '{tmp}' (FORMAT PARQUET)",
                 [ticker.upper()],
             )
         except duckdb.CatalogException as err:
@@ -295,18 +262,13 @@ def write_weekly_fib_zones(df: pl.DataFrame, path: Path) -> None:
     with _tmp_parquet(df) as tmp:
         con = duckdb.connect(str(path))
         try:
-            con.execute(
-                "CREATE OR REPLACE TABLE weekly_fib_zones AS "
-                f"{_read_parquet_sql(tmp, 'ticker')}"
-            )
+            con.execute(f"CREATE OR REPLACE TABLE weekly_fib_zones AS {_read_parquet_sql(tmp, 'ticker')}")
             con.execute("CHECKPOINT")
         finally:
             con.close()
 
 
-def read_weekly_fib_zones(
-    path: Path, *, zone: str | list[str] | None = None
-) -> pl.DataFrame:
+def read_weekly_fib_zones(path: Path, *, zone: str | list[str] | None = None) -> pl.DataFrame:
     """Read weekly_fib_zones table from DuckDB file. Optionally filter by zone.
 
     Returns DataFrame sorted by ticker.
@@ -343,13 +305,8 @@ def get_db_info(path: Path) -> dict:
     """Return metadata about a DuckDB file: tables, row counts, date range, file size."""  # noqa: E501
     con = duckdb.connect(str(path), read_only=True)
     tables = [row[0] for row in con.execute("SHOW TABLES").fetchall()]
-    row_counts = {
-        t: (con.execute(f"SELECT COUNT(*) FROM {t}").fetchone() or (0,))[0]
-        for t in tables
-    }
-    date_range = {
-        t: dr for t in tables if (dr := _table_date_range(con, t)) is not None
-    }
+    row_counts = {t: (con.execute(f"SELECT COUNT(*) FROM {t}").fetchone() or (0,))[0] for t in tables}
+    date_range = {t: dr for t in tables if (dr := _table_date_range(con, t)) is not None}
     con.close()
     return {
         "tables": tables,

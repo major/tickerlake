@@ -41,15 +41,8 @@ def adjust_splits(bars: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
     )
 
     adjusted = joined.with_columns(
-        [
-            (pl.col(column).cast(pl.Float64) * factor).cast(pl.Float32).alias(column)
-            for column in PRICE_COLUMNS
-        ]
-        + [
-            (pl.col("volume").cast(pl.Float64) / factor)
-            .cast(pl.Float32)
-            .alias("volume")
-        ]
+        [(pl.col(column).cast(pl.Float64) * factor).cast(pl.Float32).alias(column) for column in PRICE_COLUMNS]
+        + [(pl.col("volume").cast(pl.Float64) / factor).cast(pl.Float32).alias("volume")]
     )
 
     return adjusted.select(bars.columns)
@@ -77,11 +70,7 @@ def _compute_atr(bars: pl.DataFrame, period: int = 14) -> pl.DataFrame:
         [
             pl.col("date"),
             pl.col("ticker"),
-            true_range.cast(pl.Float64)
-            .rolling_mean(period)
-            .over("ticker")
-            .cast(pl.Float32)
-            .alias("atr_14"),
+            true_range.cast(pl.Float64).rolling_mean(period).over("ticker").cast(pl.Float32).alias("atr_14"),
         ]
     )
 
@@ -105,11 +94,7 @@ def _compute_adr_pct(bars: pl.DataFrame, period: int = 20) -> pl.DataFrame:
         [
             pl.col("date"),
             pl.col("ticker"),
-            daily_range_pct.cast(pl.Float64)
-            .rolling_mean(period)
-            .over("ticker")
-            .cast(pl.Float32)
-            .alias("adr_pct"),
+            daily_range_pct.cast(pl.Float64).rolling_mean(period).over("ticker").cast(pl.Float32).alias("adr_pct"),
         ]
     )
 
@@ -208,9 +193,7 @@ def _aggregate_to_period(bars: pl.DataFrame, every: str) -> pl.DataFrame:
                 pl.col("volume").sum().cast(pl.Float32).alias("volume"),
                 pl.when(pl.col("volume").sum() == 0)
                 .then(None)
-                .otherwise(
-                    (pl.col("vwap") * pl.col("volume")).sum() / pl.col("volume").sum()
-                )
+                .otherwise((pl.col("vwap") * pl.col("volume")).sum() / pl.col("volume").sum())
                 .cast(pl.Float32)
                 .alias("vwap"),
                 pl.col("transactions").sum().cast(pl.UInt32).alias("transactions"),
@@ -219,11 +202,7 @@ def _aggregate_to_period(bars: pl.DataFrame, every: str) -> pl.DataFrame:
         )
     )
     if is_weekly:
-        return (
-            aggregated.drop("period_date")
-            .sort(["ticker", "date"])
-            .select(list(DAILY_AGGS_SCHEMA.keys()))
-        )
+        return aggregated.drop("period_date").sort(["ticker", "date"]).select(list(DAILY_AGGS_SCHEMA.keys()))
     return (
         aggregated.drop("date")
         .rename({"period_date": "date"})
@@ -261,23 +240,16 @@ def bars_for_timeframe(bars: pl.DataFrame, timeframe: str) -> pl.DataFrame:
     raise ValueError(msg)
 
 
-def _shifted_expressions(
-    column: str, k: int, *, forward: bool = False
-) -> list[pl.Expr]:
+def _shifted_expressions(column: str, k: int, *, forward: bool = False) -> list[pl.Expr]:
     multiplier = -1 if forward else 1
-    return [
-        pl.col(column).shift(multiplier * offset).over("ticker")
-        for offset in range(1, k + 1)
-    ]
+    return [pl.col(column).shift(multiplier * offset).over("ticker") for offset in range(1, k + 1)]
 
 
 def _complete_window_expression(expressions: list[pl.Expr]) -> pl.Expr:
     return pl.all_horizontal([expr.is_not_null() for expr in expressions])
 
 
-def _pivot_high_expression(
-    prior_highs: list[pl.Expr], next_highs: list[pl.Expr], complete_window: pl.Expr
-) -> pl.Expr:
+def _pivot_high_expression(prior_highs: list[pl.Expr], next_highs: list[pl.Expr], complete_window: pl.Expr) -> pl.Expr:
     return (
         complete_window
         & pl.all_horizontal([pl.col("high") > expr for expr in prior_highs])
@@ -285,9 +257,7 @@ def _pivot_high_expression(
     )
 
 
-def _pivot_low_expression(
-    prior_lows: list[pl.Expr], next_lows: list[pl.Expr], complete_window: pl.Expr
-) -> pl.Expr:
+def _pivot_low_expression(prior_lows: list[pl.Expr], next_lows: list[pl.Expr], complete_window: pl.Expr) -> pl.Expr:
     return (
         complete_window
         & pl.all_horizontal([pl.col("low") < expr for expr in prior_lows])
@@ -295,9 +265,7 @@ def _pivot_low_expression(
     )
 
 
-def _select_pivots(
-    classified: pl.DataFrame, flag_column: str, pivot_type: str, price_column: str
-) -> pl.DataFrame:
+def _select_pivots(classified: pl.DataFrame, flag_column: str, pivot_type: str, price_column: str) -> pl.DataFrame:
     return classified.filter(pl.col(flag_column)).select(
         [
             pl.col("date"),
@@ -333,18 +301,12 @@ def _find_pivots_non_empty(bars: pl.DataFrame, k: int) -> pl.DataFrame:
     next_lows = _shifted_expressions("low", k, forward=True)
     confirmed_at = pl.col("date").shift(-k).over("ticker")
     confirmed = confirmed_at.is_not_null()
-    complete_window = _complete_window_expression(
-        prior_highs + next_highs + prior_lows + next_lows
-    )
+    complete_window = _complete_window_expression(prior_highs + next_highs + prior_lows + next_lows)
 
     classified = sorted_bars.with_columns(
         [
-            _pivot_high_expression(
-                prior_highs, next_highs, complete_window & confirmed
-            ).alias("is_pivot_high"),
-            _pivot_low_expression(
-                prior_lows, next_lows, complete_window & confirmed
-            ).alias("is_pivot_low"),
+            _pivot_high_expression(prior_highs, next_highs, complete_window & confirmed).alias("is_pivot_high"),
+            _pivot_low_expression(prior_lows, next_lows, complete_window & confirmed).alias("is_pivot_low"),
             confirmed_at.alias("confirmed_at"),
         ]
     )
@@ -353,7 +315,5 @@ def _find_pivots_non_empty(bars: pl.DataFrame, k: int) -> pl.DataFrame:
     low_pivots = _select_pivots(classified, "is_pivot_low", "low", "low")
 
     return (
-        pl.concat([high_pivots, low_pivots])
-        .sort(["ticker", "date", "pivot_type"])
-        .cast(PIVOTS_SCHEMA)  # ty: ignore[invalid-argument-type]
+        pl.concat([high_pivots, low_pivots]).sort(["ticker", "date", "pivot_type"]).cast(PIVOTS_SCHEMA)  # ty: ignore[invalid-argument-type]
     )

@@ -25,9 +25,7 @@ def make_mock_agg(ticker, ts_ms, o, h, low, c, vol, vwap, txns):
     return agg
 
 
-def make_mock_split(
-    ticker, execution_date_str, split_from, split_to, adj_factor, adj_type
-):
+def make_mock_split(ticker, execution_date_str, split_from, split_to, adj_factor, adj_type):
     """Build a mock StockSplit object."""
     s = MagicMock()
     s.ticker = ticker
@@ -72,9 +70,7 @@ def test_extract_daily_aggs_schema():
     client = MagicMock()
     # 1704153600000 ms = 2024-01-02 UTC
     client.fetch_daily_aggs.return_value = [
-        make_mock_agg(
-            "AAPL", 1704153600000, 185.0, 186.0, 184.0, 185.5, 50_000_000.0, 185.2, 1000
-        ),
+        make_mock_agg("AAPL", 1704153600000, 185.0, 186.0, 184.0, 185.5, 50_000_000.0, 185.2, 1000),
     ]
     dates = [datetime.date(2024, 1, 2)]
     df = extract_daily_aggs(client, dates)
@@ -87,9 +83,7 @@ def test_extract_daily_aggs_timestamp_conversion():
     client = MagicMock()
     # 1704153600000 ms = 2024-01-02 00:00:00 UTC
     client.fetch_daily_aggs.return_value = [
-        make_mock_agg(
-            "AAPL", 1704153600000, 185.0, 186.0, 184.0, 185.5, 50_000_000.0, 185.2, 1000
-        ),
+        make_mock_agg("AAPL", 1704153600000, 185.0, 186.0, 184.0, 185.5, 50_000_000.0, 185.2, 1000),
     ]
     df = extract_daily_aggs(client, [datetime.date(2024, 1, 2)])
 
@@ -110,16 +104,8 @@ def test_extract_daily_aggs_multiple_dates():
     """Multiple dates must be concatenated into a single DataFrame."""
     client = MagicMock()
     client.fetch_daily_aggs.side_effect = [
-        [
-            make_mock_agg(
-                "AAPL", 1704153600000, 185.0, 186.0, 184.0, 185.5, 50e6, 185.2, 1000
-            )
-        ],
-        [
-            make_mock_agg(
-                "AAPL", 1704240000000, 186.0, 187.0, 185.0, 186.5, 51e6, 186.2, 1100
-            )
-        ],
+        [make_mock_agg("AAPL", 1704153600000, 185.0, 186.0, 184.0, 185.5, 50e6, 185.2, 1000)],
+        [make_mock_agg("AAPL", 1704240000000, 186.0, 187.0, 185.0, 186.5, 51e6, 186.2, 1100)],
     ]
     dates = [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)]
     df = extract_daily_aggs(client, dates)
@@ -132,9 +118,7 @@ def test_extract_daily_aggs_progress_output():
     """extract_daily_aggs runs without error for a single date."""
     client = MagicMock()
     client.fetch_daily_aggs.return_value = [
-        make_mock_agg(
-            "AAPL", 1704153600000, 185.0, 186.0, 184.0, 185.5, 50e6, 185.2, 1000
-        ),
+        make_mock_agg("AAPL", 1704153600000, 185.0, 186.0, 184.0, 185.5, 50e6, 185.2, 1000),
     ]
     dates = [datetime.date(2024, 1, 2)]
     extract_daily_aggs(client, dates)
@@ -236,11 +220,7 @@ def test_extract_daily_aggs_skips_failed_date():
     # First date raises, second date succeeds
     client.fetch_daily_aggs.side_effect = [
         Exception("API error"),
-        [
-            make_mock_agg(
-                "AAPL", 1704240000000, 186.0, 187.0, 185.0, 186.5, 51e6, 186.2, 1100
-            )
-        ],
+        [make_mock_agg("AAPL", 1704240000000, 186.0, 187.0, 185.0, 186.5, 51e6, 186.2, 1100)],
     ]
     dates = [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)]
     df = extract_daily_aggs(client, dates)

@@ -77,9 +77,7 @@ def _empty_bars() -> pl.DataFrame:
     return pl.DataFrame(schema=WEEKLY_FIB_ZONES_SCHEMA)
 
 
-def _classify_zone(
-    current_price: float, ibz_low: float, ibz_high: float, smz_low: float
-) -> str:
+def _classify_zone(current_price: float, ibz_low: float, ibz_high: float, smz_low: float) -> str:
     """Classify current_price against the IBZ/SMZ bands."""
     if current_price > ibz_high:
         return "above_ibz"
@@ -90,9 +88,7 @@ def _classify_zone(
     return "below_smz"
 
 
-def _classify_status(
-    min_low_after_high: float | None, swing_low: float, smz_low: float
-) -> str:
+def _classify_status(min_low_after_high: float | None, swing_low: float, smz_low: float) -> str:
     """Determine degree status: live (untouched below SMZ), deep
     (touched but held above swing low), or void (broke the swing low).
     """
@@ -160,14 +156,11 @@ def _try_leg_for_low(
     if low_idx is None:
         return None
 
-    candidate_highs = pivots.filter(
-        (pl.col("pivot_type") == "high") & (pl.col("date") > low_date)
-    )
+    candidate_highs = pivots.filter((pl.col("pivot_type") == "high") & (pl.col("date") > low_date))
     eligible_highs = [
         h
         for h in candidate_highs.iter_rows(named=True)
-        if (h_idx := _find_bar_index(bars, h["date"])) is not None
-        and h_idx - low_idx >= min_bars_between_pivots
+        if (h_idx := _find_bar_index(bars, h["date"])) is not None and h_idx - low_idx >= min_bars_between_pivots
     ]
     if not eligible_highs:
         return None
@@ -216,16 +209,12 @@ def _find_most_recent_unswept_leg(
     if pivots.is_empty():
         return None
 
-    low_pivots = pivots.filter(pl.col("pivot_type") == "low").sort(
-        "date", descending=True
-    )
+    low_pivots = pivots.filter(pl.col("pivot_type") == "low").sort("date", descending=True)
     if low_pivots.is_empty():
         return None
 
     for low_row in low_pivots.iter_rows(named=True):
-        leg = _try_leg_for_low(
-            low_row, pivots, bars, min_leg_pct, min_bars_between_pivots
-        )
+        leg = _try_leg_for_low(low_row, pivots, bars, min_leg_pct, min_bars_between_pivots)
         if leg is not None:
             return leg
 
@@ -279,16 +268,12 @@ def compute_fib_zones_for_ticker(
     bars_with_ticker = sorted_df.with_columns(pl.lit("T").alias("ticker"))
     pivots = find_pivots(bars_with_ticker, k=k)
 
-    leg = _find_most_recent_unswept_leg(
-        pivots, bar_dicts, min_leg_pct, min_bars_between_pivots
-    )
+    leg = _find_most_recent_unswept_leg(pivots, bar_dicts, min_leg_pct, min_bars_between_pivots)
     if leg is None:
         return None
 
     data = _levels_and_zones(leg["swing_low"], leg["swing_high"])
-    zone = _classify_zone(
-        current_price, data["ibz_low"], data["ibz_high"], data["smz_low"]
-    )
+    zone = _classify_zone(current_price, data["ibz_low"], data["ibz_high"], data["smz_low"])
 
     # min_low_after_high: lowest low after the swing high (for status).
     min_low_after_high: float | None = None
@@ -300,9 +285,7 @@ def compute_fib_zones_for_ticker(
     status = _classify_status(min_low_after_high, leg["swing_low"], data["smz_low"])
 
     rng = leg["swing_high"] - leg["swing_low"]
-    pct_retracement = (
-        round((leg["swing_high"] - current_price) / rng * 100, 2) if rng > 0 else None
-    )
+    pct_retracement = round((leg["swing_high"] - current_price) / rng * 100, 2) if rng > 0 else None
 
     return {
         "ticker": "",
