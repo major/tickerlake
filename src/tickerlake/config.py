@@ -5,6 +5,9 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import psycopg
+from psycopg.conninfo import conninfo_to_dict
+
 
 def _default_start_date() -> datetime.date:
     """Return today minus 10 years, falling back to Feb 28 on leap-day edge."""
@@ -32,14 +35,26 @@ class Config:
             ["CS", "ETF", "ETV", "ETN", "ADRC"])
     """
 
-    api_key: str = field(default="")
+    api_key: str = field(default="", repr=False)
     output_dir: Path = field(default_factory=Path.cwd)
     start_date: datetime.date = field(default_factory=_default_start_date)
     end_date: datetime.date = field(default_factory=lambda: datetime.datetime.now(tz=datetime.UTC).date())
     ticker_types: list[str] = field(default_factory=lambda: ["CS", "ETF", "ETV", "ETN", "ADRC"])
+    database_url: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         """Validate and normalize configuration after initialization."""
         if not self.api_key:
             self.api_key = os.environ.get("MASSIVE_API_KEY", "")
+        if self.database_url is None:
+            self.database_url = os.environ.get("DATABASE_URL")
+        if self.database_url is not None:
+            if not self.database_url.strip():
+                message = "blank DATABASE_URL"
+                raise ValueError(message)
+            try:
+                conninfo_to_dict(self.database_url)
+            except psycopg.Error:
+                message = "invalid DATABASE_URL"
+                raise ValueError(message) from None
         self.output_dir = Path(self.output_dir).resolve()

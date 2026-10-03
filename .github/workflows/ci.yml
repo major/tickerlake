@@ -48,3 +48,19 @@ jobs:
           files: ./coverage.xml
           fail_ci_if_error: true
           use_oidc: true
+
+  postgres:
+    name: PostgreSQL integration
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes podman
+
+      - name: Test PostgreSQL in disposable containers
+        run: make test-postgres
