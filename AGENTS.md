@@ -28,6 +28,7 @@
 CI runs lint, format-check, complexity, and test-cov separately. There is no configured coverage minimum.
 
 ## Validation
+- Pipeline tests use real extraction, transforms, calendar, and DuckDB files under `tmp_path`. Fake the Massive API at `pipeline.MassiveClient`. Assert persisted state and observable behavior, not internal calls. Patch internal functions only for explicit fault injection.
 - Tests, including `make test`, `make test-cov`, and `make check`, must run in a temporary Podman container per user policy. Do not run them directly on the host.
 - Focused test example: `uv run pytest tests/test_transform.py -k test_name` (use the corresponding test file and selector).
 - `uv run ty check src/` is available as a separate check; it is not part of `make check` or CI's listed steps.
