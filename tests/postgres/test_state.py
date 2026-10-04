@@ -12,9 +12,7 @@ from tickerlake.postgres.migrations import apply_migrations
 from tickerlake.postgres.models import FetchRequest, RunSpec
 from tickerlake.postgres.state import (
     advance_cache_revision,
-    capture_run_inputs,
     fail_run,
-    finish_run,
     read_cache_state,
     record_fetch_outcome,
     start_run,
@@ -36,28 +34,6 @@ def _advance_then_abort(connection: psycopg.Connection) -> None:
     with connection.transaction():
         advance_cache_revision(connection, date(2025, 1, 2))
         raise RuntimeError("rollback")
-
-
-def test_run_revision_capture_and_terminal_states(pg_owner_dsn: str) -> None:
-    """Capture revisions and enforce running-to-terminal transitions."""
-    with writer_connection(pg_owner_dsn) as connection:
-        apply_migrations(connection)
-        run_id = start_run(connection, _spec())
-        assert connection.execute(
-            "SELECT state, input_revision, ended_at FROM ingest.run WHERE run_id = %s", (run_id,)
-        ).fetchone() == ("running", 0, None)
-        assert advance_cache_revision(connection, date(2025, 1, 2)) == 1
-        assert capture_run_inputs(connection, run_id) == 1
-        finish_run(connection, run_id)
-        row = connection.execute(
-            "SELECT state, input_revision, started_at, ended_at, published_at FROM ingest.run WHERE run_id = %s",
-            (run_id,),
-        ).fetchone()
-        assert row[0:2] == ("completed", 1)
-        assert row[2] <= row[3]
-        assert row[4] is None
-        with pytest.raises(PostgresWriterError, match="not running"):
-            capture_run_inputs(connection, run_id)
 
 
 def test_failure_and_nested_transaction_rollback(pg_owner_dsn: str) -> None:

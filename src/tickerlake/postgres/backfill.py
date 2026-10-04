@@ -19,6 +19,7 @@ from tickerlake.calendar import get_closed_sessions, resolve_closed_target
 from tickerlake.client import MassiveClient
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
 from tickerlake.outcomes import FetchOutcome, FetchStatus
+from tickerlake.postgres._validation import is_date, require_unique_nonempty_strings
 from tickerlake.postgres.connection import PostgresWriterError, require_writer_connection, writer_connection
 from tickerlake.postgres.models import FetchRequest, RunSpec
 from tickerlake.postgres.publication import PublicationOutcomeUnknownError
@@ -108,11 +109,6 @@ def _outcome_summary(outcomes: list[FetchOutcome]) -> str:
     )
 
 
-def _is_date(value: object) -> bool:
-    """Return true only for a plain date, never a datetime subclass."""
-    return isinstance(value, datetime.date) and not isinstance(value, datetime.datetime)
-
-
 def _validate_config(config: Config) -> str:
     """Validate credentials and scope before any write; return the database URL."""
     if not isinstance(config.api_key, str) or not config.api_key.strip():
@@ -121,17 +117,15 @@ def _validate_config(config: Config) -> str:
     database_url = config.database_url
     if not isinstance(database_url, str) or not database_url.strip():
         raise BackfillError(_SAFE_DATABASE_URL)
-    if not _is_date(config.start_date) or not _is_date(config.end_date) or config.start_date > config.end_date:
+    if not is_date(config.start_date) or not is_date(config.end_date) or config.start_date > config.end_date:
         raise BackfillError(_SAFE_CONFIG_BOUNDS)
-    types = config.ticker_types
-    if (
-        isinstance(types, (str, bytes))
-        or not types
-        or len(types) > _MAX_TICKER_TYPES
-        or any(not isinstance(value, str) or not value.strip() for value in types)
-        or len(set(types)) != len(types)
-    ):
-        raise BackfillError(_SAFE_TICKER_TYPES)
+    require_unique_nonempty_strings(
+        config.ticker_types,
+        field="ticker types",
+        max_len=_MAX_TICKER_TYPES,
+        message=_SAFE_TICKER_TYPES,
+        error=BackfillError,
+    )
     return database_url
 
 
@@ -146,14 +140,14 @@ def _validate_request(request: BackfillRequest | UpdateRequest, *, now: datetime
         for value in (request.code_version, request.schema_version, request.transform_version)
     ):
         raise BackfillError(_SAFE_VERSIONS)
-    if request.target is not None and not _is_date(request.target):
+    if request.target is not None and not is_date(request.target):
         raise BackfillError(_SAFE_TARGET)
     if isinstance(request, BackfillRequest) and request.correction_range is not None:
         correction = request.correction_range
         if not isinstance(correction, tuple) or len(correction) != _CORRECTION_PAIR_SIZE:
             raise BackfillError(_SAFE_CORRECTION)
         start, end = correction
-        if not _is_date(start) or not _is_date(end) or start > end:
+        if not is_date(start) or not is_date(end) or start > end:
             raise BackfillError(_SAFE_CORRECTION)
 
 

@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import datetime
 from typing import TYPE_CHECKING, LiteralString, NoReturn
 
 import polars as pl
 import psycopg
 
 from tickerlake.extract import DAILY_AGGS_SCHEMA, SPLITS_SCHEMA, TICKERS_SCHEMA
+from tickerlake.postgres._validation import is_date, require_unique_nonempty_strings
 from tickerlake.postgres.connection import PostgresWriterError
 
 if TYPE_CHECKING:
+    import datetime
     from collections.abc import Mapping, Sequence
 
 _MAX_BATCH = 1000
@@ -59,7 +60,7 @@ def _valid_ids(ticker_ids: Sequence[int]) -> list[int]:
 
 def read_raw_date(connection: psycopg.Connection, date: datetime.date) -> pl.DataFrame:
     """Read one date of canonical daily aggregates."""
-    if not isinstance(date, datetime.date) or isinstance(date, datetime.datetime):
+    if not is_date(date):
         _fail("Daily date must be a date")
     rows = _query(
         connection,
@@ -73,7 +74,7 @@ def read_raw_date(connection: psycopg.Connection, date: datetime.date) -> pl.Dat
 
 def read_latest_raw_dates(connection: psycopg.Connection, target: datetime.date) -> list[datetime.date]:
     """Read at most the five latest distinct raw dates no later than target."""
-    if not isinstance(target, datetime.date) or isinstance(target, datetime.datetime):
+    if not is_date(target):
         _fail("Daily target must be a date")
     try:
         with connection.cursor() as cursor:
@@ -85,7 +86,7 @@ def read_latest_raw_dates(connection: psycopg.Connection, target: datetime.date)
     except psycopg.Error:
         _fail("Could not read PostgreSQL market data")
     dates = [row[0] for row in rows]
-    if any(not isinstance(value, datetime.date) or isinstance(value, datetime.datetime) for value in dates):
+    if any(not is_date(value) for value in dates):
         _fail("Stored daily dates must be dates")
     return dates
 
@@ -141,7 +142,7 @@ def read_split_range(
 ) -> pl.DataFrame:
     """Read splits whose execution date falls within an inclusive date range."""
     for value in (start_date, end_date):
-        if not isinstance(value, datetime.date) or isinstance(value, datetime.datetime):
+        if not is_date(value):
             _fail("Split range bounds must be dates")
     if start_date > end_date:
         _fail("Split range start must not be after end")
@@ -162,22 +163,23 @@ def read_split_bounds(connection: psycopg.Connection) -> tuple[datetime.date | N
     rows = _query(connection, "SELECT min(execution_date), max(execution_date) FROM ingest.split_event", ())
     earliest = rows[0][0]
     latest = rows[0][1]
-    if earliest is not None and (not isinstance(earliest, datetime.date) or isinstance(earliest, datetime.datetime)):
+    if earliest is not None and not is_date(earliest):
         _fail("Stored split bounds must be dates")
-    if latest is not None and (not isinstance(latest, datetime.date) or isinstance(latest, datetime.datetime)):
+    if latest is not None and not is_date(latest):
         _fail("Stored split bounds must be dates")
     return earliest, latest
 
 
 def read_ticker_reference(connection: psycopg.Connection, ticker_types: Sequence[str]) -> pl.DataFrame:
     """Read references limited to a small explicit set of ticker types."""
-    if isinstance(ticker_types, (str, bytes)) or len(ticker_types) > _MAX_REFERENCE_TYPES:
-        _fail("Ticker type scope must contain at most 20 types")
-    types = list(ticker_types)
-    if any(not isinstance(value, str) or not value for value in types) or len(set(types)) != len(types):
-        _fail("Ticker type scope must contain unique nonempty strings")
-    if not types:
+    if not ticker_types and not isinstance(ticker_types, (str, bytes)):
         return _empty(TICKERS_SCHEMA, ("ticker", "name", "type", "primary_exchange", "cik", "active"))
+    types = require_unique_nonempty_strings(
+        ticker_types,
+        field="ticker type scope",
+        max_len=_MAX_REFERENCE_TYPES,
+        message="Ticker type scope must contain unique nonempty strings",
+    )
     rows = _query(
         connection,
         """SELECT t.symbol, r.name, r.ticker_type, r.primary_exchange, r.cik, r.active

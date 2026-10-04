@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import datetime
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import polars as pl
 
 if TYPE_CHECKING:
+    import datetime
     from collections.abc import Mapping
 
 from tickerlake.extract import DAILY_AGGS_SCHEMA, SPLITS_SCHEMA
+from tickerlake.postgres._validation import is_date
 from tickerlake.transform import (
     adjust_splits,
     aggregate_to_monthly,
@@ -158,9 +159,9 @@ def build_products(
     Identity frames contain ``ticker_id`` (positive Int32) and ``symbol``. Raw
     and split frames use the canonical extraction schemas and symbol column.
     """
-    if not isinstance(collection_start, datetime.date) or isinstance(collection_start, datetime.datetime):
+    if not is_date(collection_start):
         raise TypeError
-    if not isinstance(target, datetime.date) or isinstance(target, datetime.datetime) or collection_start > target:
+    if not is_date(target) or collection_start > target:
         raise ValueError("Invalid")
     identity_rows = _validate_inputs(raw, splits, identities)
     if raw.is_empty():

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Final, TypeGuard
+from typing import TYPE_CHECKING, Final
 from uuid import UUID, uuid4
 
 import psycopg
 
+from tickerlake.postgres._validation import is_date, require_unique_nonempty_strings
 from tickerlake.postgres.connection import PostgresWriterError, require_writer_connection
 from tickerlake.postgres.models import CacheState, FetchRequest, RunSpec
 
@@ -38,20 +39,16 @@ _FAILURE_CODES: Final = frozenset(
 )
 
 
-def _is_date(value: object) -> TypeGuard[date]:
-    return isinstance(value, date) and not isinstance(value, datetime)
-
-
 def _valid_range(start: object, end: object, *, optional: bool) -> bool:
     if start is None or end is None:
         return optional and start is None and end is None
-    return _is_date(start) and _is_date(end) and start <= end
+    return is_date(start) and is_date(end) and start <= end
 
 
 def start_run(connection: psycopg.Connection, spec: RunSpec) -> UUID:
     """Create a running run with the current input revision."""
     require_writer_connection(connection)
-    if not _is_date(spec.target) or not _valid_range(spec.requested_start, spec.requested_end, optional=True):
+    if not is_date(spec.target) or not _valid_range(spec.requested_start, spec.requested_end, optional=True):
         raise PostgresWriterError("Invalid PostgreSQL run date range")
     if any(
         not isinstance(value, str) or not value.strip()
@@ -104,11 +101,6 @@ def capture_run_inputs(connection: psycopg.Connection, run_id: UUID) -> int:
         raise PostgresWriterError("Could not capture PostgreSQL run inputs") from None
 
 
-def finish_run(connection: psycopg.Connection, run_id: UUID) -> None:
-    """Mark a running run completed."""
-    _set_terminal(connection, run_id, "completed", None)
-
-
 def fail_run(connection: psycopg.Connection, run_id: UUID, reason_code: str) -> None:
     """Mark a running run failed using a fixed safe reason code."""
     if reason_code not in _FAILURE_CODES:
@@ -147,7 +139,7 @@ def read_cache_state(connection: psycopg.Connection) -> CacheState:
 def advance_cache_revision(connection: psycopg.Connection, accepted_date: date | None = None) -> int:
     """Advance input revision once and expand retained date bounds."""
     require_writer_connection(connection)
-    if accepted_date is not None and not _is_date(accepted_date):
+    if accepted_date is not None and not is_date(accepted_date):
         raise PostgresWriterError("Invalid PostgreSQL accepted date")
     try:
         with connection.transaction():
@@ -174,7 +166,7 @@ def record_fetch_outcome(connection: psycopg.Connection, request: FetchRequest, 
         raise PostgresWriterError("Invalid PostgreSQL fetch source")
     if request.source == "daily":
         valid_scope = (
-            _is_date(request.requested_date)
+            is_date(request.requested_date)
             and request.requested_start is None
             and request.requested_end is None
             and not request.ticker_types
@@ -186,14 +178,15 @@ def record_fetch_outcome(connection: psycopg.Connection, request: FetchRequest, 
             and not request.ticker_types
         )
     else:
+        if not isinstance(request.ticker_types, tuple):
+            raise PostgresWriterError("Invalid PostgreSQL fetch request scope")
+        require_unique_nonempty_strings(
+            request.ticker_types,
+            field="ticker types",
+            message="Invalid PostgreSQL fetch request scope",
+        )
         valid_scope = (
-            request.requested_date is None
-            and request.requested_start is None
-            and request.requested_end is None
-            and isinstance(request.ticker_types, tuple)
-            and bool(request.ticker_types)
-            and all(isinstance(value, str) and value.strip() for value in request.ticker_types)
-            and len(set(request.ticker_types)) == len(request.ticker_types)
+            request.requested_date is None and request.requested_start is None and request.requested_end is None
         )
     started_at = request.started_at
     if (
@@ -205,7 +198,7 @@ def record_fetch_outcome(connection: psycopg.Connection, request: FetchRequest, 
         or (
             outcome.requested_date is not None
             and (
-                not _is_date(outcome.requested_date)
+                not is_date(outcome.requested_date)
                 or request.source != "daily"
                 or outcome.requested_date != request.requested_date
             )

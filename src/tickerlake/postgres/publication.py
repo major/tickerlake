@@ -9,6 +9,7 @@ import polars as pl
 import psycopg
 from psycopg import sql
 
+from tickerlake.postgres._validation import require_unique_nonempty_strings
 from tickerlake.postgres.connection import PostgresWriterError, require_writer_connection, writer_connection
 from tickerlake.postgres.copying import copy_frame
 
@@ -159,13 +160,11 @@ def prepare_publication(
     _require_idle_writer(connection)
     if isinstance(ticker_types, (str, bytes)):
         raise PostgresWriterError(_TYPES_SEQUENCE)
-    types = tuple(ticker_types)
-    if (
-        not types
-        or len(set(types)) != len(types)
-        or any(not isinstance(value, str) or not value.strip() for value in types)
-    ):
-        raise PostgresWriterError(_TYPES_INVALID)
+    types = require_unique_nonempty_strings(
+        ticker_types,
+        field="ticker types",
+        message=_TYPES_INVALID,
+    )
     row = connection.execute(
         """SELECT r.target_date, r.input_revision, c.input_revision, c.retained_start, c.retained_end
            FROM ingest.run r CROSS JOIN ingest.cache_state c
@@ -238,7 +237,7 @@ def prepare_publication(
             retained_start=retained_start,
             retained_end=retained_end,
             target_session=target,
-            ticker_types=types,
+            ticker_types=tuple(types),
         )
     except psycopg.Error:
         raise PostgresWriterError(_PREPARE_FAILED) from None
