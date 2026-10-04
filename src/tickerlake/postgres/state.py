@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
 from typing import TYPE_CHECKING, Final
 from uuid import UUID, uuid4
 
 import psycopg
 
-from tickerlake.postgres._validation import is_date, require_unique_nonempty_strings
+from tickerlake.postgres._validation import is_aware_datetime, is_date, require_unique_nonempty_strings
 from tickerlake.postgres.connection import PostgresWriterError, require_writer_connection
 from tickerlake.postgres.models import CacheState, FetchRequest, RunSpec
 
@@ -16,6 +15,9 @@ from tickerlake.postgres.models import CacheState, FetchRequest, RunSpec
 # ruff: noqa: TRY003
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from datetime import date
+
     from tickerlake.outcomes import FetchOutcome
 
 _DIAGNOSTICS: Final = frozenset(
@@ -43,6 +45,72 @@ def _valid_range(start: object, end: object, *, optional: bool) -> bool:
     if start is None or end is None:
         return optional and start is None and end is None
     return is_date(start) and is_date(end) and start <= end
+
+
+def _daily_scope_ok(request: FetchRequest) -> bool:
+    """Daily fetches carry exactly one plain date and no range or ticker scope."""
+    return (
+        is_date(request.requested_date)
+        and request.requested_start is None
+        and request.requested_end is None
+        and not request.ticker_types
+    )
+
+
+def _splits_scope_ok(request: FetchRequest) -> bool:
+    """Split fetches carry a required ordered date range and nothing else."""
+    return (
+        request.requested_date is None
+        and _valid_range(request.requested_start, request.requested_end, optional=False)
+        and not request.ticker_types
+    )
+
+
+def _tickers_scope_ok(request: FetchRequest) -> bool:
+    """Ticker fetches carry only a nonempty tuple of unique nonempty ticker types."""
+    if not isinstance(request.ticker_types, tuple):
+        return False
+    require_unique_nonempty_strings(
+        request.ticker_types,
+        field="ticker types",
+        message="Invalid PostgreSQL fetch request scope",
+    )
+    return request.requested_date is None and request.requested_start is None and request.requested_end is None
+
+
+_SCOPE_OK: Final[dict[str, Callable[[FetchRequest], bool]]] = {
+    "daily": _daily_scope_ok,
+    "splits": _splits_scope_ok,
+    "tickers": _tickers_scope_ok,
+}
+
+
+def _started_at_ok(value: object) -> bool:
+    """None, or a tz-aware datetime with a resolvable UTC offset."""
+    return value is None or is_aware_datetime(value)
+
+
+def _outcome_date_ok(request: FetchRequest, outcome: FetchOutcome) -> bool:
+    """An outcome date must be a plain date matching a daily request's date."""
+    if outcome.requested_date is None:
+        return True
+    return (
+        is_date(outcome.requested_date)
+        and request.source == "daily"
+        and outcome.requested_date == request.requested_date
+    )
+
+
+def _validate_fetch_inputs(request: FetchRequest, outcome: FetchOutcome) -> None:
+    """Raise the safe source/scope/diagnostic errors before any I/O."""
+    if not isinstance(request.source, str) or request.source not in _SCOPE_OK:
+        raise PostgresWriterError("Invalid PostgreSQL fetch source")
+    scope_ok = _SCOPE_OK[request.source]
+    if not scope_ok(request) or not _started_at_ok(request.started_at) or not _outcome_date_ok(request, outcome):
+        raise PostgresWriterError("Invalid PostgreSQL fetch request scope")
+    diagnostic = outcome.diagnostic
+    if diagnostic is not None and diagnostic not in _DIAGNOSTICS:
+        raise PostgresWriterError("Unsupported PostgreSQL fetch diagnostic")
 
 
 def start_run(connection: psycopg.Connection, spec: RunSpec) -> UUID:
@@ -162,52 +230,7 @@ def advance_cache_revision(connection: psycopg.Connection, accepted_date: date |
 def record_fetch_outcome(connection: psycopg.Connection, request: FetchRequest, outcome: FetchOutcome) -> int:
     """Record request scope and a sanitized fetch outcome; return the manifest ID."""
     require_writer_connection(connection)
-    if not isinstance(request.source, str) or request.source not in {"daily", "tickers", "splits"}:
-        raise PostgresWriterError("Invalid PostgreSQL fetch source")
-    if request.source == "daily":
-        valid_scope = (
-            is_date(request.requested_date)
-            and request.requested_start is None
-            and request.requested_end is None
-            and not request.ticker_types
-        )
-    elif request.source == "splits":
-        valid_scope = (
-            request.requested_date is None
-            and _valid_range(request.requested_start, request.requested_end, optional=False)
-            and not request.ticker_types
-        )
-    else:
-        if not isinstance(request.ticker_types, tuple):
-            raise PostgresWriterError("Invalid PostgreSQL fetch request scope")
-        require_unique_nonempty_strings(
-            request.ticker_types,
-            field="ticker types",
-            message="Invalid PostgreSQL fetch request scope",
-        )
-        valid_scope = (
-            request.requested_date is None and request.requested_start is None and request.requested_end is None
-        )
-    started_at = request.started_at
-    if (
-        not valid_scope
-        or (
-            started_at is not None
-            and (not isinstance(started_at, datetime) or started_at.tzinfo is None or started_at.utcoffset() is None)
-        )
-        or (
-            outcome.requested_date is not None
-            and (
-                not is_date(outcome.requested_date)
-                or request.source != "daily"
-                or outcome.requested_date != request.requested_date
-            )
-        )
-    ):
-        raise PostgresWriterError("Invalid PostgreSQL fetch request scope")
-    diagnostic = outcome.diagnostic
-    if diagnostic is not None and diagnostic not in _DIAGNOSTICS:
-        raise PostgresWriterError("Unsupported PostgreSQL fetch diagnostic")
+    _validate_fetch_inputs(request, outcome)
     row_count = outcome.frame.height
     try:
         with connection.transaction():
@@ -233,7 +256,7 @@ def record_fetch_outcome(connection: psycopg.Connection, request: FetchRequest, 
                     request.started_at,
                     outcome.status.value,
                     row_count,
-                    diagnostic,
+                    outcome.diagnostic,
                 ),
             )
             timestamps = result.fetchone()
