@@ -60,8 +60,8 @@ def _seed(dsn: str) -> object:
         with connection.cursor() as cursor:
             cursor.executemany(
                 """INSERT INTO ingest.raw_daily
-                   (date, ticker_id, open, high, low, close, volume, transactions)
-                   VALUES (%s, %s, 10, 12, 9, 11, 100, 5)""",
+                   (date, ticker_id, open, high, low, close, volume)
+                   VALUES (%s, %s, 10, 12, 9, 11, 100)""",
                 [
                     (datetime.date(2024, 1, 2), ticker_id),
                     (datetime.date(2024, 1, 3), ticker_id),

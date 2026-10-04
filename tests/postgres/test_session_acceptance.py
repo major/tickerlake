@@ -38,7 +38,6 @@ def _outcome(status: FetchStatus = FetchStatus.populated, day: date = DAY) -> Fe
                 "low": 8.0,
                 "close": 10.0,
                 "volume": 100.0,
-                "transactions": 3,
             }
         )
     return FetchOutcome(status, pl.DataFrame(rows, schema=DAILY_AGGS_SCHEMA), day)
@@ -78,8 +77,8 @@ def test_upgrade_preserves_raw_rows_ids_and_does_not_invent_acceptance(pg_owner_
             "INSERT INTO market.ticker (symbol) VALUES ('AAA') RETURNING ticker_id"
         ).fetchone()[0]
         connection.execute(
-            "INSERT INTO ingest.raw_daily (date, ticker_id, open, high, low, close, volume, transactions) "
-            "VALUES (%s, %s, 9, 11, 8, 10, 100, 3)",
+            "INSERT INTO ingest.raw_daily (date, ticker_id, open, high, low, close, volume) "
+            "VALUES (%s, %s, 9, 11, 8, 10, 100)",
             (DAY, ticker_id),
         )
         apply_migrations(connection)

@@ -24,7 +24,6 @@ DAILY_AGGS_SCHEMA = {
     "low": pl.Float32,
     "close": pl.Float32,
     "volume": pl.Float64,
-    "transactions": pl.Int64,
 }
 SPLITS_SCHEMA = {
     "ticker": pl.Utf8,
@@ -116,7 +115,6 @@ def _daily_rows(records: list[Any], date: datetime.date) -> list[dict[str, Any]]
             record_date = datetime.datetime.fromtimestamp(stamp / 1000, tz=datetime.UTC).date()
             o, h, low, close = (_value(record, key) for key in ("open", "high", "low", "close"))
             volume = _value(record, "volume")
-            transactions = _value(record, "transactions")
             numeric = (o, h, low, close, volume)
             if (
                 not isinstance(ticker, str)
@@ -125,9 +123,6 @@ def _daily_rows(records: list[Any], date: datetime.date) -> list[dict[str, Any]]
                 or not all(_finite(value) for value in numeric)
                 or not low <= min(o, close) <= max(o, close) <= h
                 or volume < 0
-                or not isinstance(transactions, int)
-                or isinstance(transactions, bool)
-                or not 0 <= transactions <= 2**63 - 1
                 or ticker in seen
             ):
                 return None
@@ -141,7 +136,6 @@ def _daily_rows(records: list[Any], date: datetime.date) -> list[dict[str, Any]]
                     "low": low,
                     "close": close,
                     "volume": volume,
-                    "transactions": transactions,
                 }
             )
         except AttributeError, TypeError, ValueError, OverflowError, OSError:

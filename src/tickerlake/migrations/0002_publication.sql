@@ -12,14 +12,13 @@ CREATE TABLE market.adjusted_daily (
     ticker_id integer NOT NULL REFERENCES market.ticker(ticker_id),
     date date NOT NULL,
     open real NOT NULL, high real NOT NULL, low real NOT NULL, close real NOT NULL,
-    volume double precision NOT NULL, transactions bigint NOT NULL,
+    volume double precision NOT NULL,
     PRIMARY KEY (ticker_id, date),
     CHECK (open NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
     CHECK (high NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
     CHECK (low NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
     CHECK (close NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
     CHECK (volume NOT IN ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision) AND volume >= 0),
-    CHECK (transactions >= 0),
     CHECK (high >= open AND high >= close AND high >= low),
     CHECK (low <= open AND low <= close AND low <= high)
 );
@@ -27,7 +26,7 @@ CREATE TABLE market.adjusted_weekly (
     ticker_id integer NOT NULL REFERENCES market.ticker(ticker_id),
     date date NOT NULL,
     open real NOT NULL, high real NOT NULL, low real NOT NULL, close real NOT NULL,
-    volume double precision NOT NULL, transactions bigint NOT NULL,
+    volume double precision NOT NULL,
     left_truncated boolean NOT NULL, calendar_closed boolean NOT NULL,
     PRIMARY KEY (ticker_id, date),
     CHECK (open NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
@@ -35,7 +34,6 @@ CREATE TABLE market.adjusted_weekly (
     CHECK (low NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
     CHECK (close NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
     CHECK (volume NOT IN ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision) AND volume >= 0),
-    CHECK (transactions >= 0),
     CHECK (high >= open AND high >= close AND high >= low),
     CHECK (low <= open AND low <= close AND low <= high)
 );
@@ -43,7 +41,7 @@ CREATE TABLE market.adjusted_monthly (
     ticker_id integer NOT NULL REFERENCES market.ticker(ticker_id),
     date date NOT NULL,
     open real NOT NULL, high real NOT NULL, low real NOT NULL, close real NOT NULL,
-    volume double precision NOT NULL, transactions bigint NOT NULL,
+    volume double precision NOT NULL,
     left_truncated boolean NOT NULL, calendar_closed boolean NOT NULL,
     PRIMARY KEY (ticker_id, date),
     CHECK (open NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
@@ -51,7 +49,6 @@ CREATE TABLE market.adjusted_monthly (
     CHECK (low NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
     CHECK (close NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
     CHECK (volume NOT IN ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision) AND volume >= 0),
-    CHECK (transactions >= 0),
     CHECK (high >= open AND high >= close AND high >= low),
     CHECK (low <= open AND low <= close AND low <= high)
 );
@@ -60,13 +57,12 @@ CREATE TABLE market.latest_daily (
     ticker_id integer PRIMARY KEY REFERENCES market.ticker(ticker_id),
     date date NOT NULL,
     open real NOT NULL, high real NOT NULL, low real NOT NULL, close real NOT NULL,
-    volume double precision NOT NULL, transactions bigint NOT NULL,
+    volume double precision NOT NULL,
     CHECK (open NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
     CHECK (high NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
     CHECK (low NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
     CHECK (close NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
     CHECK (volume NOT IN ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision) AND volume >= 0),
-    CHECK (transactions >= 0),
     CHECK (high >= open AND high >= close AND high >= low),
     CHECK (low <= open AND low <= close AND low <= high)
 );
