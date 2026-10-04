@@ -61,7 +61,6 @@ def _seed(connection: psycopg.Connection) -> UUID:
                 "low": 9.0 + index,
                 "close": 11.0 + index,
                 "volume": 20.5 + index,
-                "transactions": 2**34 + index,
             }
             for symbol in ("ACTIVE", "INACTIVE", "UNKNOWN")
         ]
@@ -148,10 +147,6 @@ def test_rebuild_persists_golden_products_independent_of_batch_size(pg_migrated_
             ).fetchall()
             assert counts == [(symbol, 87) for symbol in ("ACTIVE", "INACTIVE", "UNKNOWN")]
             assert connection.execute(
-                "SELECT transactions FROM market.adjusted_daily WHERE ticker_id = %s AND date = %s",
-                (symbols["ACTIVE"][0], START),
-            ).fetchone() == (2**34,)
-            assert connection.execute(
                 "SELECT calendar_closed FROM market.adjusted_monthly WHERE ticker_id = %s AND date = %s",
                 (symbols["ACTIVE"][0], date(2024, 5, 1)),
             ).fetchone() == (False,)
@@ -191,7 +186,6 @@ def test_rebuild_persists_independent_numeric_goldens_for_each_frequency(pg_migr
                 "low": 16.0 if before_split else 8.0,
                 "close": 20.0 if before_split else 10.0,
                 "volume": 50.25 if before_split else 100.5,
-                "transactions": 2**34,
             }
             store_daily_outcome(
                 connection,
@@ -247,14 +241,13 @@ def test_rebuild_persists_independent_numeric_goldens_for_each_frequency(pg_migr
 
         ticker_id = connection.execute("SELECT ticker_id FROM market.ticker WHERE symbol='GOLDEN'").fetchone()[0]
         daily = connection.execute(
-            "SELECT date, open, high, low, close, volume, transactions FROM market.adjusted_daily "
-            "WHERE ticker_id=%s ORDER BY date",
+            "SELECT date, open, high, low, close, volume FROM market.adjusted_daily WHERE ticker_id=%s ORDER BY date",
             (ticker_id,),
         ).fetchall()
         assert [row[0] for row in daily] == sessions
         for row in daily:
             assert row[1:5] == pytest.approx((10.0, 12.0, 8.0, 10.0))
-            assert row[5:7] == pytest.approx((100.5, 2**34))
+            assert row[5] == pytest.approx(100.5)
 
         grouped_by_week: dict[date, list[date]] = {}
         grouped_by_month: dict[date, list[date]] = {}
@@ -266,7 +259,7 @@ def test_rebuild_persists_independent_numeric_goldens_for_each_frequency(pg_migr
                 grouped_by_week,
                 sorted(grouped_by_week),
                 (
-                    "SELECT date, open, high, low, close, volume, transactions FROM market.adjusted_weekly "
+                    "SELECT date, open, high, low, close, volume FROM market.adjusted_weekly "
                     "WHERE ticker_id=%s ORDER BY date"
                 ),
             ),
@@ -274,7 +267,7 @@ def test_rebuild_persists_independent_numeric_goldens_for_each_frequency(pg_migr
                 grouped_by_month,
                 [max(grouped_by_month[key]) for key in sorted(grouped_by_month)],
                 (
-                    "SELECT date, open, high, low, close, volume, transactions FROM market.adjusted_monthly "
+                    "SELECT date, open, high, low, close, volume FROM market.adjusted_monthly "
                     "WHERE ticker_id=%s ORDER BY date"
                 ),
             ),
@@ -286,7 +279,6 @@ def test_rebuild_persists_independent_numeric_goldens_for_each_frequency(pg_migr
             for row, count in zip(period_rows, counts, strict=True):
                 assert row[1:5] == pytest.approx((10.0, 12.0, 8.0, 10.0))
                 assert row[5] == pytest.approx(100.5 * count)
-                assert row[6] == 2**34 * count
 
 
 def test_rebuild_publishes_zero_history_identity_without_fabricating_products(pg_migrated_database) -> None:
@@ -325,7 +317,7 @@ def test_rebuild_rejects_empty_cache_without_changing_publication(pg_migrated_da
 
 
 def test_rebuild_rejects_invalid_preconditions_before_capturing_inputs(pg_migrated_database) -> None:
-    """Empty type scopes and open transactions cannot mutate captured run inputs."""
+    """Empty type scopes and an open database transaction cannot mutate captured run inputs."""
     with writer_connection(pg_migrated_database.owner_dsn) as connection:
         run_id = _seed(connection)
         before = connection.execute("SELECT input_revision FROM ingest.run WHERE run_id=%s", (run_id,)).fetchone()

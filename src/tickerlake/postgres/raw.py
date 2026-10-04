@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from tickerlake.postgres.models import FetchRequest
 
 _SOURCE_COLUMNS = tuple(DAILY_AGGS_SCHEMA)
-_COLUMNS = ("date", "symbol", "open", "high", "low", "close", "volume", "transactions")
+_COLUMNS = ("date", "symbol", "open", "high", "low", "close", "volume")
 _SAFE = "Daily fetch data is invalid"
 
 
@@ -41,12 +41,10 @@ def _validate_symbols(frame: pl.DataFrame) -> None:
 
 
 def _validate_numeric_values(frame: pl.DataFrame) -> None:
-    for name in ("open", "high", "low", "close", "volume", "transactions"):
+    for name in ("open", "high", "low", "close", "volume"):
         if frame.get_column(name).null_count():
             raise _invalid()
-    if any(value < 0 for value in frame.get_column("transactions").to_list()) or any(
-        value < 0 for value in frame.get_column("volume").to_list()
-    ):
+    if any(value < 0 for value in frame.get_column("volume").to_list()):
         raise _invalid()
     for name in ("open", "high", "low", "close", "volume"):
         for value in frame.get_column(name).drop_nulls().to_list():
@@ -107,18 +105,18 @@ def _validate(connection: psycopg.Connection, request: FetchRequest, outcome: Fe
 def _changed(connection: psycopg.Connection, day: date) -> bool:
     row = connection.execute(
         """SELECT EXISTS (
-                (SELECT date, ticker_id, open, high, low, close, volume, transactions
+                (SELECT date, ticker_id, open, high, low, close, volume
                  FROM ingest.raw_daily WHERE date = %s
                  EXCEPT
                  SELECT s.date, t.ticker_id, s.open, s.high, s.low, s.close,
-                        s.volume, s.transactions
+                        s.volume
                  FROM pg_temp.raw_stage s JOIN market.ticker t USING (symbol))
                 UNION ALL
                 (SELECT s.date, t.ticker_id, s.open, s.high, s.low, s.close,
-                        s.volume, s.transactions
+                        s.volume
                  FROM pg_temp.raw_stage s JOIN market.ticker t USING (symbol)
                  EXCEPT
-                 SELECT date, ticker_id, open, high, low, close, volume, transactions
+                 SELECT date, ticker_id, open, high, low, close, volume
                  FROM ingest.raw_daily WHERE date = %s)
            )""",
         (day, day),
@@ -146,8 +144,7 @@ def store_daily_outcome(
                     """CREATE TEMP TABLE raw_stage (
                            date date NOT NULL, symbol text NOT NULL,
                            open real NOT NULL, high real NOT NULL, low real NOT NULL,
-                           close real NOT NULL, volume double precision NOT NULL,
-                           transactions bigint NOT NULL
+                           close real NOT NULL, volume double precision NOT NULL
                        ) ON COMMIT DROP"""
                 )
                 copying.copy_frame(connection, "raw_stage", frame, _COLUMNS)
@@ -169,9 +166,8 @@ def store_daily_outcome(
                     connection.execute("DELETE FROM ingest.raw_daily WHERE date = %s", (requested_date,))
                     connection.execute(
                         """INSERT INTO ingest.raw_daily
-                               (date, ticker_id, open, high, low, close, volume, transactions)
-                           SELECT s.date, t.ticker_id, s.open, s.high, s.low, s.close, s.volume,
-                                  s.transactions
+                               (date, ticker_id, open, high, low, close, volume)
+                           SELECT s.date, t.ticker_id, s.open, s.high, s.low, s.close, s.volume
                            FROM pg_temp.raw_stage s JOIN market.ticker t USING (symbol)"""
                     )
             else:
