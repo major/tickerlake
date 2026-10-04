@@ -1,6 +1,6 @@
 # PostgreSQL storage migration plan
 
-> **Status (2026-10-04):** the seven-PR migration sequence below is complete. PRs 1-7 all merged to `main`. PostgreSQL is the only durable storage; `tickerlake backfill`/`update` now route through `src/tickerlake/postgres/`, the `info` and `compact` CLI subcommands are gone, the legacy DuckDB code path and its twelve test files are deleted from `src/` and `tests/`. Follow-ups tracked in `DUCKDB_BEHAVIOR_PORT.md` cover dependency removal (`pyproject.toml`, `uv.lock`), CI/Makefile/coderabbit sweeps, and a postgres-backed `info` command.
+> **Status (2026-10-04):** the seven-PR migration sequence below is complete. PRs 1-7 all merged to `main`. PostgreSQL is the only durable storage; `tickerlake backfill`/`update`/`info` all route through `src/tickerlake/postgres/`, the `compact` CLI subcommand is gone, and the legacy DuckDB code path is fully deleted. Follow-up cleanups (dependency removal, CI/Makefile/coderabbit sweeps, postgres-backed `info`, schema conventions) landed in PRs #61, #62, #67, and #68. Remaining work (schema collapse into `tickerlake.*`, radon rank-E refactor) is tracked separately.
 
 ## Purpose and boundaries (historical context)
 
