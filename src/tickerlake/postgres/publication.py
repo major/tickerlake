@@ -10,10 +10,9 @@ import psycopg
 from psycopg import sql
 
 from tickerlake.postgres._schema import (
-    BASE_COLUMNS,
-    PERIOD_COLUMNS,
     PERIOD_FLAG_NULL_CHECK,
     PERIOD_TRUNC_SQL,
+    PRODUCT_COLUMNS,
     PUBLICATION_TABLES,
     STAGE_KINDS,
     STAGE_NAMES,
@@ -30,11 +29,8 @@ if TYPE_CHECKING:
     from tickerlake.postgres.products import ProductBatch
 
 _STAGES: dict[str, str] = {kind: f"publication_{kind}_stage" for kind in STAGE_KINDS}
-_STAGE_COLUMNS: dict[str, tuple[str, ...]] = {
-    "daily": BASE_COLUMNS,
-    "weekly": PERIOD_COLUMNS,
-    "monthly": PERIOD_COLUMNS,
-}
+_STAGE_COLUMNS: dict[str, tuple[str, ...]] = dict.fromkeys(STAGE_KINDS, PRODUCT_COLUMNS)
+_KEY_COLUMNS: tuple[str, ...] = ("period", "ticker_id", "date")
 _SAFE = "Invalid PostgreSQL publication staging data"
 _IDLE_REQUIRED = "PostgreSQL publication requires an idle writer connection"
 _CONTEXT_MISMATCH = "PostgreSQL publication context does not match its staged build"
@@ -46,6 +42,7 @@ _PREPARE_FAILED = "Could not prepare PostgreSQL publication stages"
 _STAGE_FAILED = "Could not stage PostgreSQL product batch"
 _PUBLISH_FAILED = "Could not publish PostgreSQL products"
 _PRODUCT_TYPES: dict[str, LiteralString] = {
+    "period": "text",
     "ticker_id": "integer",
     "date": "date",
     "open": "real",
@@ -204,7 +201,7 @@ def prepare_publication(
                 sql.SQL("{} {}{} ").format(
                     sql.Identifier(column),
                     sql.SQL(_PRODUCT_TYPES[column]),
-                    sql.SQL(" NOT NULL") if column in {"ticker_id", "date"} else sql.SQL(""),
+                    sql.SQL(" NOT NULL") if column in {"period", "ticker_id", "date"} else sql.SQL(""),
                 )
                 for column in columns
             )
@@ -435,23 +432,26 @@ def _verify_run_state(connection: psycopg.Connection, context: BuildContext) -> 
 def _publish_kind(connection: psycopg.Connection, kind: str, table: str, context: BuildContext) -> None:
     """Copy one product kind into its production table and prune out-of-scope rows."""
     columns = _STAGE_COLUMNS[kind]
+    mutable = tuple(column for column in columns if column not in _KEY_COLUMNS)
     table_identifier = sql.Identifier(*table.split("."))
     stage_identifier = sql.Identifier("pg_temp", _STAGES[kind])
     names = sql.SQL(",").join(sql.Identifier(column) for column in columns)
+    key = sql.SQL(",").join(sql.Identifier(column) for column in _KEY_COLUMNS)
     assignments = sql.SQL(",").join(
-        sql.SQL("{}=EXCLUDED.{}").format(sql.Identifier(column), sql.Identifier(column)) for column in columns[2:]
+        sql.SQL("{}=EXCLUDED.{}").format(sql.Identifier(column), sql.Identifier(column)) for column in mutable
     )
-    prior_values = sql.SQL(",").join(sql.SQL("target.{}").format(sql.Identifier(column)) for column in columns[2:])
-    staged_values = sql.SQL(",").join(sql.SQL("EXCLUDED.{}").format(sql.Identifier(column)) for column in columns[2:])
+    prior_values = sql.SQL(",").join(sql.SQL("target.{}").format(sql.Identifier(column)) for column in mutable)
+    staged_values = sql.SQL(",").join(sql.SQL("EXCLUDED.{}").format(sql.Identifier(column)) for column in mutable)
     connection.execute(
         sql.SQL(
             """INSERT INTO {table} AS target ({columns}) SELECT {columns} FROM {stage}
-               ON CONFLICT (ticker_id,date) DO UPDATE SET {assignments}
+               ON CONFLICT ({key}) DO UPDATE SET {assignments}
                WHERE ROW({prior}) IS DISTINCT FROM ROW({desired})"""
         ).format(
             table=table_identifier,
             columns=names,
             stage=stage_identifier,
+            key=key,
             assignments=assignments,
             prior=prior_values,
             desired=staged_values,
@@ -461,11 +461,12 @@ def _publish_kind(connection: psycopg.Connection, kind: str, table: str, context
         sql.SQL(
             """DELETE FROM {table} AS target USING pg_temp.publication_scope AS scope
                WHERE scope.complete AND target.ticker_id=scope.ticker_id
+                 AND target.period=%s
                  AND target.date BETWEEN {lower} AND %s
                  AND NOT EXISTS (SELECT 1 FROM {stage} AS staged
                                  WHERE staged.ticker_id=target.ticker_id AND staged.date=target.date)"""
         ).format(table=table_identifier, lower=sql.SQL(PERIOD_TRUNC_SQL[kind]), stage=stage_identifier),
-        (context.retained_start or context.target_session, context.retained_end or context.target_session),
+        (kind, context.retained_start or context.target_session, context.retained_end or context.target_session),
     )
 
 

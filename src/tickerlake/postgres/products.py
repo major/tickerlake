@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 from tickerlake.extract import DAILY_AGGS_SCHEMA, SPLITS_SCHEMA
-from tickerlake.postgres._schema import BASE_COLUMNS, PERIOD_COLUMNS
+from tickerlake.postgres._schema import PRODUCT_COLUMNS
 from tickerlake.postgres._validation import is_date
 from tickerlake.transform import (
     adjust_splits,
@@ -65,13 +65,15 @@ def _with_ticker_ids(frame: pl.DataFrame, identity_map: pl.DataFrame) -> pl.Data
     )
 
 
-def _empty(
-    columns: tuple[str, ...],
-    base_schema: Mapping[str, pl.DataType | type[pl.DataType]],
-) -> pl.DataFrame:
-    fields = {"ticker_id": pl.Int32, **base_schema}
-    fields = {name: fields[name] for name in columns}
-    return pl.DataFrame(schema=fields)
+def _empty(columns: tuple[str, ...]) -> pl.DataFrame:
+    fields = {
+        "period": pl.String,
+        "ticker_id": pl.Int32,
+        "left_truncated": pl.Boolean,
+        "calendar_closed": pl.Boolean,
+        **DAILY_AGGS_SCHEMA,
+    }
+    return pl.DataFrame(schema={name: fields[name] for name in columns})
 
 
 def _validate_inputs(
@@ -117,13 +119,9 @@ def build_products(
     identity_rows = _validate_inputs(raw, splits, identities)
     if raw.is_empty():
         return ProductBatch(
-            daily=_empty(BASE_COLUMNS, DAILY_AGGS_SCHEMA),
-            weekly=_empty(
-                PERIOD_COLUMNS, DAILY_AGGS_SCHEMA | {"left_truncated": pl.Boolean, "calendar_closed": pl.Boolean}
-            ),
-            monthly=_empty(
-                PERIOD_COLUMNS, DAILY_AGGS_SCHEMA | {"left_truncated": pl.Boolean, "calendar_closed": pl.Boolean}
-            ),
+            daily=_empty(PRODUCT_COLUMNS),
+            weekly=_empty(PRODUCT_COLUMNS),
+            monthly=_empty(PRODUCT_COLUMNS),
         )
     canonical_splits = _validate_split_factors(splits)
     adjusted = adjust_splits(raw, canonical_splits).sort(["ticker", "date"])
@@ -131,17 +129,21 @@ def build_products(
     if duplicate_bars:
         raise ValueError("Duplicate")
     _finite_outputs(adjusted)
-    daily = _with_ticker_ids(adjusted, identity_rows)
+    daily = _with_ticker_ids(adjusted, identity_rows).with_columns(
+        period=pl.lit("daily"),
+        left_truncated=pl.lit(False),
+        calendar_closed=pl.lit(False),
+    )
     weekly = _with_ticker_ids(
         aggregate_to_weekly(adjusted, collection_start=collection_start, target=target), identity_rows
-    )
+    ).with_columns(period=pl.lit("weekly"))
     monthly = _with_ticker_ids(
         aggregate_to_monthly(adjusted, collection_start=collection_start, target=target), identity_rows
-    )
+    ).with_columns(period=pl.lit("monthly"))
     for result in (daily, weekly, monthly):
         _finite_outputs(result)
     return ProductBatch(
-        daily=daily.select(BASE_COLUMNS),
-        weekly=weekly.select(PERIOD_COLUMNS),
-        monthly=monthly.select(PERIOD_COLUMNS),
+        daily=daily.select(PRODUCT_COLUMNS),
+        weekly=weekly.select(PRODUCT_COLUMNS),
+        monthly=monthly.select(PRODUCT_COLUMNS),
     )

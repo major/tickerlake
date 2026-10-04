@@ -41,65 +41,21 @@ ALTER TABLE ingest.raw_daily
 ALTER TABLE ingest.raw_daily
     ADD CONSTRAINT raw_daily_ohlc_check CHECK (market.is_valid_ohlc(open, high, low, close));
 
--- market.adjusted_daily
-ALTER TABLE market.adjusted_daily
-    DROP CONSTRAINT IF EXISTS adjusted_daily_open_check,
-    DROP CONSTRAINT IF EXISTS adjusted_daily_high_check,
-    DROP CONSTRAINT IF EXISTS adjusted_daily_low_check,
-    DROP CONSTRAINT IF EXISTS adjusted_daily_close_check,
-    DROP CONSTRAINT IF EXISTS adjusted_daily_volume_check,
-    DROP CONSTRAINT IF EXISTS adjusted_daily_check,
-    DROP CONSTRAINT IF EXISTS adjusted_daily_check1;
+-- market.adjusted_bars
+ALTER TABLE market.adjusted_bars
+    DROP CONSTRAINT IF EXISTS adjusted_bars_volume_check,
+    DROP CONSTRAINT IF EXISTS adjusted_bars_check,
+    DROP CONSTRAINT IF EXISTS adjusted_bars_check1;
 
-ALTER TABLE market.adjusted_daily
+ALTER TABLE market.adjusted_bars
     ALTER COLUMN open TYPE market.finite_real,
     ALTER COLUMN high TYPE market.finite_real,
     ALTER COLUMN low TYPE market.finite_real,
     ALTER COLUMN close TYPE market.finite_real,
     ALTER COLUMN volume TYPE market.finite_volume;
 
-ALTER TABLE market.adjusted_daily
-    ADD CONSTRAINT adjusted_daily_ohlc_check CHECK (market.is_valid_ohlc(open, high, low, close));
-
--- market.adjusted_weekly
-ALTER TABLE market.adjusted_weekly
-    DROP CONSTRAINT IF EXISTS adjusted_weekly_open_check,
-    DROP CONSTRAINT IF EXISTS adjusted_weekly_high_check,
-    DROP CONSTRAINT IF EXISTS adjusted_weekly_low_check,
-    DROP CONSTRAINT IF EXISTS adjusted_weekly_close_check,
-    DROP CONSTRAINT IF EXISTS adjusted_weekly_volume_check,
-    DROP CONSTRAINT IF EXISTS adjusted_weekly_check,
-    DROP CONSTRAINT IF EXISTS adjusted_weekly_check1;
-
-ALTER TABLE market.adjusted_weekly
-    ALTER COLUMN open TYPE market.finite_real,
-    ALTER COLUMN high TYPE market.finite_real,
-    ALTER COLUMN low TYPE market.finite_real,
-    ALTER COLUMN close TYPE market.finite_real,
-    ALTER COLUMN volume TYPE market.finite_volume;
-
-ALTER TABLE market.adjusted_weekly
-    ADD CONSTRAINT adjusted_weekly_ohlc_check CHECK (market.is_valid_ohlc(open, high, low, close));
-
--- market.adjusted_monthly
-ALTER TABLE market.adjusted_monthly
-    DROP CONSTRAINT IF EXISTS adjusted_monthly_open_check,
-    DROP CONSTRAINT IF EXISTS adjusted_monthly_high_check,
-    DROP CONSTRAINT IF EXISTS adjusted_monthly_low_check,
-    DROP CONSTRAINT IF EXISTS adjusted_monthly_close_check,
-    DROP CONSTRAINT IF EXISTS adjusted_monthly_volume_check,
-    DROP CONSTRAINT IF EXISTS adjusted_monthly_check,
-    DROP CONSTRAINT IF EXISTS adjusted_monthly_check1;
-
-ALTER TABLE market.adjusted_monthly
-    ALTER COLUMN open TYPE market.finite_real,
-    ALTER COLUMN high TYPE market.finite_real,
-    ALTER COLUMN low TYPE market.finite_real,
-    ALTER COLUMN close TYPE market.finite_real,
-    ALTER COLUMN volume TYPE market.finite_volume;
-
-ALTER TABLE market.adjusted_monthly
-    ADD CONSTRAINT adjusted_monthly_ohlc_check CHECK (market.is_valid_ohlc(open, high, low, close));
+ALTER TABLE market.adjusted_bars
+    ADD CONSTRAINT adjusted_bars_ohlc_check CHECK (market.is_valid_ohlc(open, high, low, close));
 
 -- market.latest_daily
 ALTER TABLE market.latest_daily
