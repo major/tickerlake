@@ -1,4 +1,4 @@
-.PHONY: test test-postgres test-cov lint format format-check complexity check sync mutmut mutmut-results mutmut-apply
+.PHONY: test test-postgres test-cov lint format format-check typecheck complexity check sync mutmut mutmut-results mutmut-apply
 
 test:
 	uv run pytest tests/ -x --tb=short
@@ -18,7 +18,10 @@ format:
 format-check:
 	uv run ruff format --check src/ tests/
 
-check: lint format-check complexity test-cov
+typecheck:
+	uv run ty check src/
+
+check: lint format-check typecheck complexity test-cov
 
 sync:
 	uv run tickerlake sync --verbose
