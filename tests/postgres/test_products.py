@@ -30,7 +30,6 @@ def _input() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
             "low": float(index + 99),
             "close": float(index + 102),
             "volume": float(index * 100 + 0.5),
-            "transactions": 2**35 + index,
         }
         for index, day in enumerate(sessions)
     ]
@@ -64,7 +63,6 @@ def test_build_products_matches_complete_history_golden_values_and_warmups() -> 
     assert result.daily["date"].to_list() == raw.sort("date")["date"].to_list()
     assert result.daily["open"][0] == pytest.approx(50.0)
     assert result.daily["volume"][0] == pytest.approx(1.0)
-    assert result.daily["transactions"][0] == 2**35
     assert result.daily["sma_20"][18] is None
     assert result.daily["sma_20"][19] is not None
     assert result.daily["sma_50"][48] is None
@@ -74,7 +72,6 @@ def test_build_products_matches_complete_history_golden_values_and_warmups() -> 
     assert result.monthly.height > 0
     first_week = result.weekly.filter(pl.col("date") == date(2024, 1, 1)).row(0, named=True)
     assert first_week["volume"] == pytest.approx(1204.0)
-    assert first_week["transactions"] == 4 * 2**35 + 6
     assert result.weekly["left_truncated"].to_list() == [False] * result.weekly.height
     assert result.monthly["left_truncated"].to_list() == [False] * result.monthly.height
     assert result.weekly.filter(pl.col("date") == date(2024, 4, 29))["calendar_closed"].to_list() == [False]
@@ -147,7 +144,6 @@ def test_build_products_matches_constant_price_metrics_for_all_periods() -> None
                 "low": 8.0 if day >= date(2023, 1, 3) else 16.0,
                 "close": 10.0 if day >= date(2023, 1, 3) else 20.0,
                 "volume": 100.5 if day >= date(2023, 1, 3) else 50.25,
-                "transactions": 2**34,
             }
             for day in sessions
         ],
@@ -206,7 +202,6 @@ def test_build_products_matches_constant_price_metrics_for_all_periods() -> None
         counts = [len(grouped[key]) for key in sorted(grouped)]
         assert period["date"].to_list() == labels
         assert period["volume"].to_list() == pytest.approx([100.5 * count for count in counts])
-        assert period["transactions"].to_list() == [2**34 * count for count in counts]
         for metric, expected, warmup in (
             ("sma_20", 10.0, 19),
             ("atr_14", 4.0, 13),

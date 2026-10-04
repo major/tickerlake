@@ -20,13 +20,12 @@ def bars(rows: list[dict]) -> pl.DataFrame:
             "low": pl.Float32,
             "close": pl.Float32,
             "volume": pl.UInt32,
-            "transactions": pl.UInt32,
         },
     )
 
 
-def test_period_aggregation_widens_integer_sums_and_rejects_transaction_overflow() -> None:
-    """Widen aggregation inputs and reject totals outside signed Int64."""
+def test_period_aggregation_widens_integer_sums() -> None:
+    """Widen aggregation volume inputs to Float64."""
     template = {
         "ticker": "A",
         "open": 10.0,
@@ -34,19 +33,13 @@ def test_period_aggregation_widens_integer_sums_and_rejects_transaction_overflow
         "low": 9.0,
         "close": 10.0,
         "volume": 2**32 - 1,
-        "transactions": 2**31,
     }
     frame = bars([{**template, "date": datetime.date(2024, 1, 8)}, {**template, "date": datetime.date(2024, 1, 9)}])
     row = aggregate_to_weekly(frame, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 1, 12)).row(
         0, named=True
     )
     assert row["volume"] == 2 * (2**32 - 1)
-    assert row["transactions"] == 2**32
     assert type(row["volume"]) is float
-
-    overflow = frame.with_columns(pl.lit(2**63 - 1, dtype=pl.Int64).alias("transactions"))
-    with pytest.raises((ValueError, pl.exceptions.PolarsError)):
-        aggregate_to_weekly(overflow, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 1, 12))
 
 
 def test_empty_period_schema_and_calendar_flags() -> None:
@@ -60,7 +53,6 @@ def test_empty_period_schema_and_calendar_flags() -> None:
             "low": pl.Float32,
             "close": pl.Float32,
             "volume": pl.Float64,
-            "transactions": pl.Int64,
         }
     )
     assert (
@@ -79,7 +71,6 @@ def test_empty_period_schema_and_calendar_flags() -> None:
                 "low": 10,
                 "close": 10,
                 "volume": 1,
-                "transactions": 1,
             }
         ]
     )
@@ -125,7 +116,6 @@ def test_left_truncated_uses_collection_bound_not_first_ticker_bar(case, offset)
                 "low": 10,
                 "close": 10,
                 "volume": 1,
-                "transactions": 1,
             }
         ]
     )
@@ -156,7 +146,6 @@ def test_calendar_closed_uses_scheduled_last_session(aggregate, observed, last_s
                 "low": 10,
                 "close": 10,
                 "volume": 1,
-                "transactions": 1,
             }
         ]
     )
@@ -182,7 +171,6 @@ def test_invalid_collection_bounds_rejected_for_empty_and_populated(aggregate, i
                     "low": 10,
                     "close": 10,
                     "volume": 1,
-                    "transactions": 1,
                 }
             ]
         )
@@ -203,7 +191,6 @@ def test_period_schema_has_public_numeric_and_flag_types(aggregate) -> None:
             "low": pl.Float32,
             "close": pl.Float32,
             "volume": pl.Float64,
-            "transactions": pl.Int64,
         }
     )
     assert aggregate(empty, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 1, 31)).schema == {
@@ -214,7 +201,6 @@ def test_period_schema_has_public_numeric_and_flag_types(aggregate) -> None:
         "low": pl.Float32,
         "close": pl.Float32,
         "volume": pl.Float64,
-        "transactions": pl.Int64,
         "left_truncated": pl.Boolean,
         "calendar_closed": pl.Boolean,
     }
@@ -232,7 +218,6 @@ def test_period_rejects_nonfinite_float64_volume_total(aggregate) -> None:
             "low": [10.0, 10.0],
             "close": [10.0, 10.0],
             "volume": [1e308, 1e308],
-            "transactions": [1, 1],
         },
         schema_overrides={"volume": pl.Float64},
     )
@@ -252,7 +237,6 @@ def test_future_cached_periods_are_retained_and_marked_open() -> None:
                 "low": 10,
                 "close": 10,
                 "volume": 1,
-                "transactions": 1,
             }
         ]
     )
@@ -274,7 +258,6 @@ def test_split_adjustment_widens_volume_even_without_splits() -> None:
                 "low": 10,
                 "close": 10,
                 "volume": 5,
-                "transactions": 1,
             }
         ]
     )
@@ -295,7 +278,6 @@ def test_split_adjustment_accepts_finite_fractional_volume() -> None:
             "low": [10.0],
             "close": [10.0],
             "volume": [0.1],
-            "transactions": [1],
         },
         schema_overrides={"volume": pl.Float64},
     )
@@ -315,7 +297,6 @@ def test_split_adjustment_rejects_nonfinite_adjusted_volume() -> None:
             "low": [10.0],
             "close": [10.0],
             "volume": [1e308],
-            "transactions": [1],
         },
         schema_overrides={"volume": pl.Float64},
     )

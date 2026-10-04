@@ -36,7 +36,6 @@ def _row(day: date, symbol: str, close: float = 11.0) -> dict[str, object]:
         "low": close - 2.0,
         "close": close,
         "volume": 100.0,
-        "transactions": 5,
     }
 
 

@@ -31,7 +31,7 @@ def _frame(day: date, rows: list[dict[str, object]]) -> pl.DataFrame:
     return pl.DataFrame(rows, schema=DAILY_AGGS_SCHEMA)
 
 
-def _row(ticker: str, *, close: float = 10.0, volume: float = 123.75, transactions: int = 2**40) -> dict[str, object]:
+def _row(ticker: str, *, close: float = 10.0, volume: float = 123.75) -> dict[str, object]:
     return {
         "date": DAY,
         "ticker": ticker,
@@ -40,7 +40,6 @@ def _row(ticker: str, *, close: float = 10.0, volume: float = 123.75, transactio
         "low": 9.0,
         "close": close,
         "volume": volume,
-        "transactions": transactions,
     }
 
 
@@ -65,7 +64,7 @@ def _outcome(day: date, *rows: dict[str, object], status: FetchStatus = FetchSta
 
 def _daily_rows(connection: psycopg.Connection, day: date) -> list[tuple[object, ...]]:
     return connection.execute(
-        """SELECT d.date, t.symbol, d.open, d.high, d.low, d.close, d.volume, d.transactions
+        """SELECT d.date, t.symbol, d.open, d.high, d.low, d.close, d.volume
            FROM ingest.raw_daily d JOIN market.ticker t USING (ticker_id)
            WHERE d.date = %s ORDER BY t.symbol""",
         (day,),
@@ -96,7 +95,7 @@ def test_populates_empty_date_and_adds_new_symbols_to_existing_date(pg_owner_dsn
             ).fetchall()
             == []
         )
-        assert _daily_rows(connection, DAY)[1][-2:] == (123.75, 2**40)
+        assert _daily_rows(connection, DAY)[1][-1:] == (123.75,)
 
 
 def test_exact_date_replacement_preserves_other_dates_and_advances_revision_once(pg_owner_dsn: str) -> None:
@@ -176,7 +175,6 @@ def test_nonpopulated_outcomes_preserve_existing_date(pg_owner_dsn: str, status:
         (lambda frame: frame.with_columns(pl.lit(" ").alias("ticker")), FetchStatus.populated),
         (lambda frame: frame.with_columns(pl.lit(float("inf")).alias("close")), FetchStatus.populated),
         (lambda frame: frame.with_columns(pl.lit(-1.0).alias("volume")), FetchStatus.populated),
-        (lambda frame: frame.with_columns(pl.lit(-1).alias("transactions")), FetchStatus.populated),
         (lambda frame: frame.with_columns(pl.lit(8.0).alias("high")), FetchStatus.populated),
         (lambda frame: frame.with_columns(pl.lit(NEXT_DAY).alias("date")), FetchStatus.populated),
         (lambda frame: pl.DataFrame({"wrong": [1]}), FetchStatus.populated),

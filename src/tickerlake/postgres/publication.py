@@ -53,7 +53,6 @@ _PRODUCT_TYPES: dict[str, LiteralString] = {
     "low": "real",
     "close": "real",
     "volume": "double precision",
-    "transactions": "bigint",
     "sma_20": "real",
     "sma_50": "real",
     "sma_200": "real",
@@ -258,7 +257,7 @@ def stage_batch(
                     sql.SQL(
                         """SELECT 1 FROM {} WHERE ticker_id=ANY(%s) AND
                            (open IS NULL OR high IS NULL OR low IS NULL OR close IS NULL
-                            OR volume IS NULL OR volume < 0 OR transactions IS NULL OR transactions < 0
+                            OR volume IS NULL OR volume < 0
                             OR volume_sma_20 < 0 {flags}) LIMIT 1"""
                     ).format(sql.Identifier("pg_temp", _STAGES[kind]), flags=flags),
                     (ids,),
@@ -329,7 +328,7 @@ def _validate_product_stage(
              UNION ALL SELECT 1 FROM {stage} GROUP BY ticker_id,date HAVING count(*) > 1
              UNION ALL SELECT 1 FROM {stage} WHERE
                (open IS NULL OR high IS NULL OR low IS NULL OR close IS NULL
-                OR volume IS NULL OR transactions IS NULL OR transactions < 0
+                OR volume IS NULL
                 OR ticker_id <= 0
                 OR NOT market.is_valid_ohlc(open, high, low, close)
                 {flags} OR date < {period_start} OR date > %s)
@@ -481,7 +480,7 @@ def _refresh_latest_daily(connection: psycopg.Connection, context: BuildContext)
     """Upsert the current session into latest_daily and drop stale scoped rows."""
     connection.execute(
         """INSERT INTO market.latest_daily
-           SELECT d.ticker_id,d.date,d.open,d.high,d.low,d.close,d.volume,d.transactions,
+           SELECT d.ticker_id,d.date,d.open,d.high,d.low,d.close,d.volume,
                   d.sma_20,d.sma_50,d.sma_200,d.atr_14,d.atr_pct,d.adr_pct,d.volume_sma_20
            FROM pg_temp.publication_daily_stage d
            JOIN pg_temp.publication_scope s USING(ticker_id)
@@ -490,16 +489,16 @@ def _refresh_latest_daily(connection: psycopg.Connection, context: BuildContext)
              AND i.ticker_type=ANY(%s)
            ON CONFLICT(ticker_id) DO UPDATE SET date=EXCLUDED.date, open=EXCLUDED.open,
              high=EXCLUDED.high, low=EXCLUDED.low, close=EXCLUDED.close,
-             volume=EXCLUDED.volume, transactions=EXCLUDED.transactions, sma_20=EXCLUDED.sma_20,
+             volume=EXCLUDED.volume, sma_20=EXCLUDED.sma_20,
              sma_50=EXCLUDED.sma_50, sma_200=EXCLUDED.sma_200, atr_14=EXCLUDED.atr_14,
              atr_pct=EXCLUDED.atr_pct, adr_pct=EXCLUDED.adr_pct, volume_sma_20=EXCLUDED.volume_sma_20
            WHERE ROW(market.latest_daily.date, market.latest_daily.open, market.latest_daily.high,
              market.latest_daily.low, market.latest_daily.close,
-             market.latest_daily.volume, market.latest_daily.transactions, market.latest_daily.sma_20,
+             market.latest_daily.volume, market.latest_daily.sma_20,
              market.latest_daily.sma_50, market.latest_daily.sma_200, market.latest_daily.atr_14,
              market.latest_daily.atr_pct, market.latest_daily.adr_pct, market.latest_daily.volume_sma_20)
              IS DISTINCT FROM ROW(EXCLUDED.date, EXCLUDED.open, EXCLUDED.high, EXCLUDED.low,
-             EXCLUDED.close, EXCLUDED.volume, EXCLUDED.transactions, EXCLUDED.sma_20,
+             EXCLUDED.close, EXCLUDED.volume, EXCLUDED.sma_20,
              EXCLUDED.sma_50, EXCLUDED.sma_200, EXCLUDED.atr_14, EXCLUDED.atr_pct, EXCLUDED.adr_pct,
              EXCLUDED.volume_sma_20)""",
         (context.target_session, list(context.ticker_types)),

@@ -25,7 +25,6 @@ DAILY_SCHEMA = {
     "low": pl.Float32,
     "close": pl.Float32,
     "volume": pl.Float64,
-    "transactions": pl.Int64,
 }
 SPLIT_SCHEMA = {
     "ticker": pl.String,
@@ -69,7 +68,6 @@ def agg(**updates):
         "low": 184.0,
         "close": 185.5,
         "volume": 1000.0,
-        "transactions": 25,
     }
     row.update(updates)
     return Record(row)
@@ -119,14 +117,13 @@ def test_daily_rows_keep_sdk_values_and_date():
             "low": 184.0,
             "close": 185.5,
             "volume": 1000.0,
-            "transactions": 25,
         }
     ]
 
 
 @pytest.mark.parametrize(
     "records",
-    [[], None, [agg(timestamp=0)], [agg(high=100)], [agg(volume=-1)], [agg(transactions=1.5)], [agg(), agg()]],
+    [[], None, [agg(timestamp=0)], [agg(high=100)], [agg(volume=-1)], [agg(), agg()]],
 )
 def test_daily_empty_envelope_vs_bad_or_duplicate_data(records):
     """Distinguish a valid empty response from failed and invalid data."""
@@ -166,8 +163,8 @@ def test_mixed_daily_outcomes_keep_requested_date_and_independent_frames():
         (second, FetchStatus.populated),
     ]
     assert [item.frame.height for item in results] == [1, 0, 1]
-    assert results[0].frame.select("date", "ticker", "transactions").rows() == [(DAY, "AAPL", 25)]
-    assert results[2].frame.select("date", "ticker", "transactions").rows() == [(second, "AAPL", 25)]
+    assert results[0].frame.select("date", "ticker").rows() == [(DAY, "AAPL")]
+    assert results[2].frame.select("date", "ticker").rows() == [(second, "AAPL")]
 
 
 def test_daily_reference_shrink_quarantines_without_arbitrary_threshold():
@@ -181,7 +178,6 @@ def test_daily_reference_shrink_quarantines_without_arbitrary_threshold():
             "low": [1.0, 1.0],
             "close": [1.0, 1.0],
             "volume": [1.0, 1.0],
-            "transactions": [1, 1],
         },
         schema=DAILY_SCHEMA,
     )
@@ -294,7 +290,6 @@ def test_daily_and_split_frames_use_canonical_column_order():
     bars = MagicMock()
     bars.fetch_daily_aggs.return_value = [
         {
-            "transactions": 25,
             "volume": 1000.0,
             "close": 185.5,
             "low": 184.0,
@@ -472,9 +467,9 @@ def test_transport_exception_secret_never_reaches_diagnostics_or_logs(endpoint, 
     assert "sentinel-secret-123" not in caplog.text
 
 
-@pytest.mark.parametrize("updates", [{"transactions": None}, {"transactions": 2**63}, {"open": 1e100}])
+@pytest.mark.parametrize("updates", [{"open": 1e100}])
 def test_daily_unrepresentable_or_missing_required_values_are_quarantined(updates):
-    """Do not let invalid counts or lossy numeric casts produce populated data."""
+    """Do not let lossy numeric casts produce populated data."""
     client = MagicMock()
     client.fetch_daily_aggs.return_value = [agg(**updates)]
     result = extract_daily_aggs(client, [DAY])[0]

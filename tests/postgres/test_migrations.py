@@ -75,7 +75,6 @@ def test_schema_contract_and_access_grants(pg_owner_dsn: str, pg_etl_dsn: str, p
             ("low", "real", "NO"),
             ("close", "real", "NO"),
             ("volume", "double precision", "NO"),
-            ("transactions", "bigint", "NO"),
         ]
         assert connection.execute(
             "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
@@ -99,7 +98,6 @@ def test_schema_contract_and_access_grants(pg_owner_dsn: str, pg_etl_dsn: str, p
             ("low", "real", "NO"),
             ("close", "real", "NO"),
             ("volume", "double precision", "NO"),
-            ("transactions", "bigint", "NO"),
             ("sma_20", "real", "YES"),
             ("sma_50", "real", "YES"),
             ("sma_200", "real", "YES"),
@@ -159,8 +157,8 @@ def test_schema_contract_and_access_grants(pg_owner_dsn: str, pg_etl_dsn: str, p
             "INSERT INTO market.ticker (symbol) VALUES ('grant-check') RETURNING ticker_id"
         ).fetchone()[0]
         etl.execute(
-            "INSERT INTO market.adjusted_daily (ticker_id, date, open, high, low, close, volume, transactions) "
-            "VALUES (%s, '2025-01-02', 1, 1, 1, 1, 0, 0)",
+            "INSERT INTO market.adjusted_daily (ticker_id, date, open, high, low, close, volume) "
+            "VALUES (%s, '2025-01-02', 1, 1, 1, 1, 0)",
             (ticker,),
         )
         etl.execute("UPDATE market.adjusted_daily SET close = 2, high = 2 WHERE ticker_id = %s", (ticker,))
@@ -333,8 +331,8 @@ def test_invalid_raw_values_and_split_nullsafe_natural_key_are_rejected(pg_owner
             "INSERT INTO market.ticker (symbol) VALUES ('TST') RETURNING ticker_id"
         ).fetchone()[0]
         raw_insert = """INSERT INTO ingest.raw_daily
-            (date, ticker_id, open, high, low, close, volume, transactions)
-            VALUES ('2025-01-02', %s, 1, 1, 2, 1, 0, 0)"""
+            (date, ticker_id, open, high, low, close, volume)
+            VALUES ('2025-01-02', %s, 1, 1, 2, 1, 0)"""
         with pytest.raises(psycopg.errors.CheckViolation):
             connection.execute(raw_insert, (ticker_id,))
         split_insert = """INSERT INTO ingest.split_event
@@ -351,7 +349,6 @@ def test_invalid_raw_values_and_split_nullsafe_natural_key_are_rejected(pg_owner
         ("open", "'NaN'::real"),
         ("high", "'Infinity'::real"),
         ("volume", "-1::double precision"),
-        ("transactions", "-1"),
         ("sma_20", "'NaN'::real"),
         ("atr_pct", "'Infinity'::real"),
         ("volume_sma_20", "-1::double precision"),
@@ -365,8 +362,8 @@ def test_adjusted_products_reject_invalid_numeric_values(pg_owner_dsn: str, colu
             "INSERT INTO market.ticker (symbol) VALUES ('CHECK') RETURNING ticker_id"
         ).fetchone()[0]
         for table in ("adjusted_daily", "adjusted_weekly", "adjusted_monthly", "latest_daily"):
-            columns = "ticker_id, date, open, high, low, close, volume, transactions"
-            values = "%s, '2025-01-02', 9, 11, 8, 10, 1, 1"
+            columns = "ticker_id, date, open, high, low, close, volume"
+            values = "%s, '2025-01-02', 9, 11, 8, 10, 1"
             if table in {"adjusted_weekly", "adjusted_monthly"}:
                 columns += ", left_truncated, calendar_closed"
                 values += ", false, false"
@@ -397,8 +394,8 @@ def test_adjusted_products_reject_invalid_ohlc_relationships(pg_owner_dsn: str, 
         ticker_id = connection.execute(
             "INSERT INTO market.ticker (symbol) VALUES ('OHLC') RETURNING ticker_id"
         ).fetchone()[0]
-        columns = "ticker_id, date, open, high, low, close, volume, transactions"
-        values = "%s, '2025-01-02', 9, 11, 8, 10, 1, 1"
+        columns = "ticker_id, date, open, high, low, close, volume"
+        values = "%s, '2025-01-02', 9, 11, 8, 10, 1"
         if table in {"adjusted_weekly", "adjusted_monthly"}:
             columns += ", left_truncated, calendar_closed"
             values += ", false, false"

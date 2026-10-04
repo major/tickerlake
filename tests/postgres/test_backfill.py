@@ -95,7 +95,6 @@ def _daily_record(day: date, symbol: str, close: float) -> dict[str, object]:
         "low": 9.0,
         "close": close,
         "volume": 100.0,
-        "transactions": 5,
     }
 
 

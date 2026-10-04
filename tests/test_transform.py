@@ -26,13 +26,9 @@ BARS_SCHEMA = {
     "low": pl.Float32,
     "close": pl.Float32,
     "volume": pl.Float32,
-    "transactions": pl.UInt32,
 }
 
 EXPECTED_WEEKLY_ROWS = 6
-EXPECTED_TRANSACTIONS = 60
-EXPECTED_SINGLE_DAY_TRANSACTIONS = 10
-EXPECTED_MONTH_TRANSACTIONS = 21
 
 SPLITS_SCHEMA = {
     "ticker": pl.Utf8,
@@ -71,7 +67,6 @@ def make_metric_bars(
                     "low": float(close),
                     "close": float(close),
                     "volume": 1000.0,
-                    "transactions": 100,
                 }
             )
     return make_bars(rows)
@@ -116,7 +111,6 @@ class TestAggregateToWeekly:
                         "low": price - 1.0,
                         "close": price + 0.5,
                         "volume": 1000.0 + i,
-                        "transactions": 100 + i,
                     }
                 )
 
@@ -129,7 +123,7 @@ class TestAggregateToWeekly:
         assert per_ticker_counts["len"].to_list() == [3, 3]
 
     def test_ohlcv_rollup_values(self):
-        """Roll up OHLCV values and transaction totals."""
+        """Roll up OHLCV values across a week."""
         bars = make_bars(
             [
                 {
@@ -140,7 +134,6 @@ class TestAggregateToWeekly:
                     "low": 99.0,
                     "close": 101.0,
                     "volume": 1000.0,
-                    "transactions": 10,
                 },
                 {
                     "date": datetime.date(2024, 1, 9),
@@ -150,7 +143,6 @@ class TestAggregateToWeekly:
                     "low": 100.0,
                     "close": 104.0,
                     "volume": 1100.0,
-                    "transactions": 11,
                 },
                 {
                     "date": datetime.date(2024, 1, 10),
@@ -160,7 +152,6 @@ class TestAggregateToWeekly:
                     "low": 98.0,
                     "close": 99.0,
                     "volume": 1200.0,
-                    "transactions": 12,
                 },
                 {
                     "date": datetime.date(2024, 1, 11),
@@ -170,7 +161,6 @@ class TestAggregateToWeekly:
                     "low": 97.0,
                     "close": 102.0,
                     "volume": 1300.0,
-                    "transactions": 13,
                 },
                 {
                     "date": datetime.date(2024, 1, 12),
@@ -180,7 +170,6 @@ class TestAggregateToWeekly:
                     "low": 100.0,
                     "close": 103.0,
                     "volume": 1400.0,
-                    "transactions": 14,
                 },
             ]
         )
@@ -194,7 +183,6 @@ class TestAggregateToWeekly:
         assert row["low"] == pytest.approx(97.0)
         assert row["close"] == pytest.approx(103.0)
         assert row["volume"] == pytest.approx(6000.0)
-        assert row["transactions"] == EXPECTED_TRANSACTIONS
         assert row["date"] == datetime.date(2024, 1, 8)
 
     def test_date_is_week_start_monday(self):
@@ -209,7 +197,6 @@ class TestAggregateToWeekly:
                     "low": 99.0,
                     "close": 100.5,
                     "volume": 1000.0,
-                    "transactions": 10,
                 },
                 {
                     "date": datetime.date(2024, 1, 9),
@@ -219,7 +206,6 @@ class TestAggregateToWeekly:
                     "low": 100.0,
                     "close": 101.5,
                     "volume": 1000.0,
-                    "transactions": 10,
                 },
                 {
                     "date": datetime.date(2024, 1, 10),
@@ -229,7 +215,6 @@ class TestAggregateToWeekly:
                     "low": 101.0,
                     "close": 102.5,
                     "volume": 1000.0,
-                    "transactions": 10,
                 },
                 {
                     "date": datetime.date(2024, 1, 11),
@@ -239,7 +224,6 @@ class TestAggregateToWeekly:
                     "low": 102.0,
                     "close": 103.5,
                     "volume": 1000.0,
-                    "transactions": 10,
                 },
             ]
         )
@@ -262,7 +246,6 @@ class TestAggregateToWeekly:
                     "low": 99.0,
                     "close": 100.5,
                     "volume": 1000.0,
-                    "transactions": 10,
                 },
                 {
                     "date": datetime.date(2024, 1, 17),
@@ -272,7 +255,6 @@ class TestAggregateToWeekly:
                     "low": 100.0,
                     "close": 101.5,
                     "volume": 1100.0,
-                    "transactions": 11,
                 },
                 {
                     "date": datetime.date(2024, 1, 18),
@@ -282,7 +264,6 @@ class TestAggregateToWeekly:
                     "low": 101.0,
                     "close": 102.5,
                     "volume": 1200.0,
-                    "transactions": 12,
                 },
             ]
         )
@@ -306,7 +287,6 @@ class TestAggregateToWeekly:
                     "low": 99.0,
                     "close": 104.0,
                     "volume": 1000.0,
-                    "transactions": 10,
                 }
             ]
         )
@@ -320,7 +300,6 @@ class TestAggregateToWeekly:
         assert row["low"] == pytest.approx(99.0)
         assert row["close"] == pytest.approx(104.0)
         assert row["volume"] == pytest.approx(1000.0)
-        assert row["transactions"] == EXPECTED_SINGLE_DAY_TRANSACTIONS
         assert row["date"] == datetime.date(2024, 1, 8)
 
     def test_per_ticker_isolation(self):
@@ -335,7 +314,6 @@ class TestAggregateToWeekly:
                     "low": 99.0,
                     "close": 100.5,
                     "volume": 1000.0,
-                    "transactions": 10,
                 },
                 {
                     "date": datetime.date(2024, 1, 9),
@@ -345,7 +323,6 @@ class TestAggregateToWeekly:
                     "low": 100.0,
                     "close": 101.5,
                     "volume": 1100.0,
-                    "transactions": 11,
                 },
                 {
                     "date": datetime.date(2024, 1, 8),
@@ -355,7 +332,6 @@ class TestAggregateToWeekly:
                     "low": 199.0,
                     "close": 202.5,
                     "volume": 2000.0,
-                    "transactions": 20,
                 },
                 {
                     "date": datetime.date(2024, 1, 9),
@@ -365,7 +341,6 @@ class TestAggregateToWeekly:
                     "low": 201.0,
                     "close": 203.5,
                     "volume": 2100.0,
-                    "transactions": 21,
                 },
             ]
         )
@@ -395,7 +370,6 @@ class TestAggregateToWeekly:
                     "low": 99.0,
                     "close": 100.5,
                     "volume": 1000.0,
-                    "transactions": 10,
                 },
                 {
                     "date": datetime.date(2024, 1, 9),
@@ -405,7 +379,6 @@ class TestAggregateToWeekly:
                     "low": 100.0,
                     "close": 101.5,
                     "volume": 1100.0,
-                    "transactions": 11,
                 },
             ]
         )
@@ -430,7 +403,6 @@ def test_aggregate_to_monthly_values_and_last_trading_day():
                 "low": 99.0,
                 "close": 101.0,
                 "volume": 1000.0,
-                "transactions": 10,
             },
             {
                 "date": datetime.date(2024, 1, 31),
@@ -440,7 +412,6 @@ def test_aggregate_to_monthly_values_and_last_trading_day():
                 "low": 98.0,
                 "close": 104.0,
                 "volume": 1100.0,
-                "transactions": 11,
             },
             {
                 "date": datetime.date(2024, 2, 1),
@@ -450,7 +421,6 @@ def test_aggregate_to_monthly_values_and_last_trading_day():
                 "low": 103.0,
                 "close": 105.0,
                 "volume": 1200.0,
-                "transactions": 12,
             },
         ]
     )
@@ -465,7 +435,6 @@ def test_aggregate_to_monthly_values_and_last_trading_day():
     assert january["low"] == pytest.approx(98.0)
     assert january["close"] == pytest.approx(104.0)
     assert january["volume"] == pytest.approx(2100.0)
-    assert january["transactions"] == EXPECTED_MONTH_TRANSACTIONS
 
 
 def test_aggregate_to_period_empty_input_weekly_and_monthly():
@@ -500,7 +469,6 @@ class TestAggregateToMonthly:
                     "low": 99.0,
                     "close": 101.0,
                     "volume": 1000.0,
-                    "transactions": 10,
                 },
                 {
                     "date": datetime.date(2024, 1, 31),
@@ -510,7 +478,6 @@ class TestAggregateToMonthly:
                     "low": 100.0,
                     "close": 104.0,
                     "volume": 1100.0,
-                    "transactions": 11,
                 },
                 {
                     "date": datetime.date(2024, 2, 1),
@@ -520,7 +487,6 @@ class TestAggregateToMonthly:
                     "low": 98.0,
                     "close": 99.0,
                     "volume": 1200.0,
-                    "transactions": 12,
                 },
             ]
         )
@@ -575,7 +541,6 @@ def test_adjust_splits_same_day_not_adjusted():
                 "low": 495.0,
                 "close": 505.0,
                 "volume": 1000.0,
-                "transactions": 100,
             },
             {
                 "date": datetime.date(2024, 8, 31),
@@ -585,7 +550,6 @@ def test_adjust_splits_same_day_not_adjusted():
                 "low": 123.0,
                 "close": 126.0,
                 "volume": 4000.0,
-                "transactions": 400,
             },
         ]
     )
@@ -626,7 +590,6 @@ def test_adjust_splits_no_split_unchanged():
                 "low": 139.0,
                 "close": 141.0,
                 "volume": 2500.0,
-                "transactions": 150,
             }
         ]
     )
@@ -660,7 +623,6 @@ def test_adjust_splits_aapl_4to1():
                 "low": 495.0,
                 "close": 500.0,
                 "volume": 1000.0,
-                "transactions": 100,
             }
         ]
     )
@@ -695,7 +657,6 @@ def test_adjust_splits_reverse_split():
                 "low": 49.0,
                 "close": 50.0,
                 "volume": 1000.0,
-                "transactions": 50,
             }
         ]
     )
@@ -730,7 +691,6 @@ def test_adjust_splits_multiple_tickers():
                 "low": 398.0,
                 "close": 402.0,
                 "volume": 1000.0,
-                "transactions": 30,
             },
             {
                 "date": datetime.date(2024, 1, 10),
@@ -740,7 +700,6 @@ def test_adjust_splits_multiple_tickers():
                 "low": 49.0,
                 "close": 50.0,
                 "volume": 2000.0,
-                "transactions": 40,
             },
         ]
     )
@@ -861,7 +820,6 @@ def test_adjust_splits_multi_split_spot_check(ticker, splits_data, checks):
                 "low": close - 5.0,
                 "close": close,
                 "volume": volume,
-                "transactions": 100,
             }
             for date, close, volume, _, _ in checks
         ]
@@ -915,7 +873,6 @@ def test_filter_tickers_removes_unknown(sample_tickers_df: pl.DataFrame):
                 "low": 99.0,
                 "close": 100.5,
                 "volume": 1000.0,
-                "transactions": 10,
             },
             {
                 "date": datetime.date(2024, 1, 1),
@@ -925,7 +882,6 @@ def test_filter_tickers_removes_unknown(sample_tickers_df: pl.DataFrame):
                 "low": 9.0,
                 "close": 10.5,
                 "volume": 500.0,
-                "transactions": 5,
             },
         ]
     )
@@ -1058,8 +1014,7 @@ def make_ohlc_bars(
 ) -> pl.DataFrame:
     """Build a bars DataFrame from per-ticker (open, high, low, close) tuples.
 
-    Each tuple maps to one trading day. Volume is fixed at 1000.0 and
-    transactions is fixed at 100.
+    Each tuple maps to one trading day. Volume is fixed at 1000.0.
     """
     rows = []
     for ticker, ohlc_list in ticker_to_ohlc.items():
@@ -1073,7 +1028,6 @@ def make_ohlc_bars(
                     "low": float(low),
                     "close": float(close),
                     "volume": 1000.0,
-                    "transactions": 100,
                 }
             )
     return make_bars(rows)

@@ -171,7 +171,6 @@ PERIOD_AGGS_SCHEMA = {
     "low": pl.Float32,
     "close": pl.Float32,
     "volume": pl.Float64,
-    "transactions": pl.Int64,
     "left_truncated": pl.Boolean,
     "calendar_closed": pl.Boolean,
 }
@@ -226,11 +225,9 @@ def _aggregate_to_period(
                 pl.col("low").min().cast(pl.Float32).alias("low"),
                 pl.col("close").sort_by("date").last().cast(pl.Float32).alias("close"),
                 pl.col("volume").cast(pl.Float64).sum().alias("volume"),
-                pl.col("transactions").cast(pl.Decimal(precision=38, scale=0)).sum().alias("transactions"),
                 pl.col("date").max().alias("period_date"),
             ]
         )
-        .with_columns(pl.col("transactions").cast(pl.Int64, strict=True))
     )
     if is_weekly:
         result = aggregated.drop("period_date").sort(["ticker", "date"])

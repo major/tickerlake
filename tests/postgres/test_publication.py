@@ -90,7 +90,6 @@ def _stage_one(connection, target: date, *, future: bool = False, prior_history:
                             "low": 8.0,
                             "close": 10.0,
                             "volume": 10.0,
-                            "transactions": 1,
                         }
                         for symbol in ("TEST", "INACTIVE", "OUTSIDE")
                     ],
@@ -116,7 +115,6 @@ def _stage_one(connection, target: date, *, future: bool = False, prior_history:
                             "low": 10.0,
                             "close": 12.0,
                             "volume": 30.0,
-                            "transactions": 3,
                         }
                     ],
                     schema=DAILY_AGGS_SCHEMA,
@@ -139,7 +137,6 @@ def _stage_one(connection, target: date, *, future: bool = False, prior_history:
                         "low": 9.0,
                         "close": 11.0,
                         "volume": 20.0,
-                        "transactions": 2,
                     }
                 ],
                 schema=DAILY_AGGS_SCHEMA,
@@ -204,8 +201,8 @@ def test_incomplete_scope_cannot_delete_existing_history(pg_migrated_database) -
         ticker_id = connection.execute("SELECT ticker_id FROM market.ticker WHERE symbol='TEST'").fetchone()[0]
         connection.execute(
             """INSERT INTO market.adjusted_monthly
-               (ticker_id,date,open,high,low,close,volume,transactions,left_truncated,calendar_closed)
-               VALUES (%s,'2024-01-03',1,1,1,1,0,0,false,false)""",
+               (ticker_id,date,open,high,low,close,volume,left_truncated,calendar_closed)
+               VALUES (%s,'2024-01-03',1,1,1,1,0,false,false)""",
             (ticker_id,),
         )
         connection.execute("UPDATE pg_temp.publication_scope SET complete=false WHERE ticker_id=%s", (ticker_id,))
@@ -355,7 +352,6 @@ def test_new_validated_inputs_after_staging_reject_stale_generation(pg_migrated_
                             "low": 9.0,
                             "close": 12.0,
                             "volume": 25.0,
-                            "transactions": 3,
                         }
                     ],
                     schema=DAILY_AGGS_SCHEMA,
@@ -431,10 +427,10 @@ def test_period_keys_before_and_after_target_are_retained_and_obsolete_month_rem
         ticker_id = connection.execute("SELECT ticker_id FROM market.ticker WHERE symbol='TEST'").fetchone()[0]
         connection.execute(
             """INSERT INTO market.adjusted_monthly
-               (ticker_id,date,open,high,low,close,volume,transactions,left_truncated,calendar_closed)
-               VALUES (%s,'2024-01-01',1,1,1,1,0,0,false,false),
-                      (%s,'2024-02-01',1,1,1,1,0,0,false,false),
-                      (%s,'2090-01-01',1,1,1,1,0,0,false,false)""",
+               (ticker_id,date,open,high,low,close,volume,left_truncated,calendar_closed)
+               VALUES (%s,'2024-01-01',1,1,1,1,0,false,false),
+                      (%s,'2024-02-01',1,1,1,1,0,false,false),
+                      (%s,'2090-01-01',1,1,1,1,0,false,false)""",
             (ticker_id, ticker_id, ticker_id),
         )
         publish_staged(connection, _context)
@@ -468,8 +464,8 @@ def test_latest_is_exact_target_eligible_projection_but_history_keeps_other_symb
         _run_id, context = _stage_one(connection, date(2024, 1, 2))
         connection.execute(
             """INSERT INTO market.latest_daily
-               (ticker_id,date,open,high,low,close,volume,transactions)
-               SELECT ticker_id,'2024-01-01',9,11,8,10,10,1 FROM market.ticker
+               (ticker_id,date,open,high,low,close,volume)
+               SELECT ticker_id,'2024-01-01',9,11,8,10,10 FROM market.ticker
                WHERE symbol IN ('INACTIVE','OUTSIDE','UNKNOWN')"""
         )
         publish_staged(connection, context)
