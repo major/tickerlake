@@ -431,6 +431,122 @@ def _commit_is_known_rollback(connection: psycopg.Connection, run_id: UUID) -> b
     return row is not None and row[0] == "running" and row[1] != run_id
 
 
+def _verify_run_state(connection: psycopg.Connection, context: BuildContext) -> None:
+    """Validate the locked cache, run, and accepted raw session state."""
+    row = connection.execute(
+        """SELECT c.input_revision, r.input_revision, r.state, r.target_date FROM ingest.cache_state c
+           JOIN ingest.run r ON r.run_id=%s WHERE c.singleton=true FOR UPDATE OF c,r""",
+        (context.run_id,),
+    ).fetchone()
+    accepted = connection.execute(
+        """SELECT 1 FROM ingest.raw_session s JOIN ingest.fetch_manifest m USING(manifest_id)
+           WHERE s.date=%s AND s.input_revision<=%s AND s.row_count>0 AND m.status='populated'
+             AND m.source='daily' AND m.requested_date=s.date AND m.row_count=s.row_count""",
+        (context.target_session, context.input_revision),
+    ).fetchone()
+    if (
+        row is None
+        or row[0] != context.input_revision
+        or row[1] != context.input_revision
+        or row[2] != "running"
+        or row[3] != context.target_session
+        or accepted is None
+    ):
+        _fail()
+
+
+def _publish_kind(connection: psycopg.Connection, kind: str, table: str, context: BuildContext) -> None:
+    """Copy one product kind into its production table and prune out-of-scope rows."""
+    columns = _STAGE_COLUMNS[kind]
+    table_identifier = sql.Identifier(*table.split("."))
+    stage_identifier = sql.Identifier("pg_temp", _STAGES[kind])
+    names = sql.SQL(",").join(sql.Identifier(column) for column in columns)
+    assignments = sql.SQL(",").join(
+        sql.SQL("{}=EXCLUDED.{}").format(sql.Identifier(column), sql.Identifier(column)) for column in columns[2:]
+    )
+    prior_values = sql.SQL(",").join(sql.SQL("target.{}").format(sql.Identifier(column)) for column in columns[2:])
+    staged_values = sql.SQL(",").join(sql.SQL("EXCLUDED.{}").format(sql.Identifier(column)) for column in columns[2:])
+    connection.execute(
+        sql.SQL(
+            """INSERT INTO {table} AS target ({columns}) SELECT {columns} FROM {stage}
+               ON CONFLICT (ticker_id,date) DO UPDATE SET {assignments}
+               WHERE ROW({prior}) IS DISTINCT FROM ROW({desired})"""
+        ).format(
+            table=table_identifier,
+            columns=names,
+            stage=stage_identifier,
+            assignments=assignments,
+            prior=prior_values,
+            desired=staged_values,
+        )
+    )
+    connection.execute(
+        sql.SQL(
+            """DELETE FROM {table} AS target USING pg_temp.publication_scope AS scope
+               WHERE scope.complete AND target.ticker_id=scope.ticker_id
+                 AND target.date BETWEEN {lower} AND %s
+                 AND NOT EXISTS (SELECT 1 FROM {stage} AS staged
+                                 WHERE staged.ticker_id=target.ticker_id AND staged.date=target.date)"""
+        ).format(table=table_identifier, lower=sql.SQL(PERIOD_TRUNC_SQL[kind]), stage=stage_identifier),
+        (context.retained_start or context.target_session, context.retained_end or context.target_session),
+    )
+
+
+def _refresh_latest_daily(connection: psycopg.Connection, context: BuildContext) -> None:
+    """Upsert the current session into latest_daily and drop stale scoped rows."""
+    connection.execute(
+        """INSERT INTO market.latest_daily
+           SELECT d.ticker_id,d.date,d.open,d.high,d.low,d.close,d.vwap,d.volume,d.transactions,
+                  d.sma_20,d.sma_50,d.sma_200,d.atr_14,d.atr_pct,d.adr_pct,d.volume_sma_20
+           FROM pg_temp.publication_daily_stage d
+           JOIN pg_temp.publication_scope s USING(ticker_id)
+           JOIN pg_temp.publication_ticker_stage i USING(ticker_id)
+           WHERE s.complete AND d.date=%s AND i.active IS TRUE
+             AND i.ticker_type=ANY(%s)
+           ON CONFLICT(ticker_id) DO UPDATE SET date=EXCLUDED.date, open=EXCLUDED.open,
+             high=EXCLUDED.high, low=EXCLUDED.low, close=EXCLUDED.close, vwap=EXCLUDED.vwap,
+             volume=EXCLUDED.volume, transactions=EXCLUDED.transactions, sma_20=EXCLUDED.sma_20,
+             sma_50=EXCLUDED.sma_50, sma_200=EXCLUDED.sma_200, atr_14=EXCLUDED.atr_14,
+             atr_pct=EXCLUDED.atr_pct, adr_pct=EXCLUDED.adr_pct, volume_sma_20=EXCLUDED.volume_sma_20
+           WHERE ROW(market.latest_daily.date, market.latest_daily.open, market.latest_daily.high,
+             market.latest_daily.low, market.latest_daily.close, market.latest_daily.vwap,
+             market.latest_daily.volume, market.latest_daily.transactions, market.latest_daily.sma_20,
+             market.latest_daily.sma_50, market.latest_daily.sma_200, market.latest_daily.atr_14,
+             market.latest_daily.atr_pct, market.latest_daily.adr_pct, market.latest_daily.volume_sma_20)
+             IS DISTINCT FROM ROW(EXCLUDED.date, EXCLUDED.open, EXCLUDED.high, EXCLUDED.low,
+             EXCLUDED.close, EXCLUDED.vwap, EXCLUDED.volume, EXCLUDED.transactions, EXCLUDED.sma_20,
+             EXCLUDED.sma_50, EXCLUDED.sma_200, EXCLUDED.atr_14, EXCLUDED.atr_pct, EXCLUDED.adr_pct,
+             EXCLUDED.volume_sma_20)""",
+        (context.target_session, list(context.ticker_types)),
+    )
+    connection.execute(
+        """DELETE FROM market.latest_daily l USING pg_temp.publication_scope s
+           WHERE s.complete AND l.ticker_id=s.ticker_id AND NOT EXISTS
+              (SELECT 1 FROM pg_temp.publication_daily_stage d
+               JOIN pg_temp.publication_ticker_stage i USING(ticker_id)
+              WHERE d.ticker_id=l.ticker_id AND d.date=%s AND i.active IS TRUE
+                AND i.ticker_type=ANY(%s))""",
+        (context.target_session, list(context.ticker_types)),
+    )
+
+
+def _record_publication(connection: psycopg.Connection, context: BuildContext) -> None:
+    """Record the publication marker and mark the run as published."""
+    count = connection.execute("SELECT count(*) FROM pg_temp.publication_scope WHERE complete").fetchone()
+    connection.execute(
+        """INSERT INTO market.publication_state(singleton,published_session,published_at,run_id,ticker_count)
+           VALUES(true,%s,statement_timestamp(),%s,%s)
+           ON CONFLICT(singleton) DO UPDATE SET published_session=EXCLUDED.published_session,
+             published_at=EXCLUDED.published_at,run_id=EXCLUDED.run_id,ticker_count=EXCLUDED.ticker_count""",
+        (context.target_session, context.run_id, count[0] if count else 0),
+    )
+    connection.execute(
+        """UPDATE ingest.run SET state='published', ended_at=statement_timestamp(),
+           published_at=statement_timestamp() WHERE run_id=%s AND state='running'""",
+        (context.run_id,),
+    )
+
+
 def publish_staged(connection: psycopg.Connection, context: BuildContext) -> PublicationResult:
     """Atomically validate, replace scoped products, and record the publication."""
     _require_idle_writer(connection)
@@ -438,26 +554,7 @@ def publish_staged(connection: psycopg.Connection, context: BuildContext) -> Pub
     commit_started = False
     try:
         with connection.transaction():
-            row = connection.execute(
-                """SELECT c.input_revision, r.input_revision, r.state, r.target_date FROM ingest.cache_state c
-                   JOIN ingest.run r ON r.run_id=%s WHERE c.singleton=true FOR UPDATE OF c,r""",
-                (context.run_id,),
-            ).fetchone()
-            accepted = connection.execute(
-                """SELECT 1 FROM ingest.raw_session s JOIN ingest.fetch_manifest m USING(manifest_id)
-                   WHERE s.date=%s AND s.input_revision<=%s AND s.row_count>0 AND m.status='populated'
-                     AND m.source='daily' AND m.requested_date=s.date AND m.row_count=s.row_count""",
-                (context.target_session, context.input_revision),
-            ).fetchone()
-            if (
-                row is None
-                or row[0] != context.input_revision
-                or row[1] != context.input_revision
-                or row[2] != "running"
-                or row[3] != context.target_session
-                or accepted is None
-            ):
-                _fail()
+            _verify_run_state(connection, context)
             _validate_stages(connection, context)
             connection.execute(
                 """UPDATE market.ticker t SET name=i.name,ticker_type=i.ticker_type,
@@ -470,96 +567,9 @@ def publish_staged(connection: psycopg.Connection, context: BuildContext) -> Pub
                 (list(context.ticker_types), list(context.ticker_types)),
             )
             for kind, table in PUBLICATION_TABLES.items():
-                columns = _STAGE_COLUMNS[kind]
-                table_identifier = sql.Identifier(*table.split("."))
-                stage_identifier = sql.Identifier("pg_temp", _STAGES[kind])
-                names = sql.SQL(",").join(sql.Identifier(column) for column in columns)
-                assignments = sql.SQL(",").join(
-                    sql.SQL("{}=EXCLUDED.{}").format(sql.Identifier(column), sql.Identifier(column))
-                    for column in columns[2:]
-                )
-                prior_values = sql.SQL(",").join(
-                    sql.SQL("target.{}").format(sql.Identifier(column)) for column in columns[2:]
-                )
-                staged_values = sql.SQL(",").join(
-                    sql.SQL("EXCLUDED.{}").format(sql.Identifier(column)) for column in columns[2:]
-                )
-                connection.execute(
-                    sql.SQL(
-                        """INSERT INTO {table} AS target ({columns}) SELECT {columns} FROM {stage}
-                           ON CONFLICT (ticker_id,date) DO UPDATE SET {assignments}
-                           WHERE ROW({prior}) IS DISTINCT FROM ROW({desired})"""
-                    ).format(
-                        table=table_identifier,
-                        columns=names,
-                        stage=stage_identifier,
-                        assignments=assignments,
-                        prior=prior_values,
-                        desired=staged_values,
-                    )
-                )
-                scope_start = {
-                    "daily": sql.SQL("%s"),
-                    "weekly": sql.SQL("date_trunc('week', %s)::date"),
-                    "monthly": sql.SQL("date_trunc('month', %s)::date"),
-                }[kind]
-                connection.execute(
-                    sql.SQL(
-                        """DELETE FROM {table} AS target USING pg_temp.publication_scope AS scope
-                           WHERE scope.complete AND target.ticker_id=scope.ticker_id
-                             AND target.date BETWEEN {lower} AND %s
-                             AND NOT EXISTS (SELECT 1 FROM {stage} AS staged
-                                             WHERE staged.ticker_id=target.ticker_id AND staged.date=target.date)"""
-                    ).format(table=table_identifier, lower=scope_start, stage=stage_identifier),
-                    (context.retained_start or context.target_session, context.retained_end or context.target_session),
-                )
-            connection.execute(
-                """INSERT INTO market.latest_daily
-                   SELECT d.ticker_id,d.date,d.open,d.high,d.low,d.close,d.vwap,d.volume,d.transactions,
-                          d.sma_20,d.sma_50,d.sma_200,d.atr_14,d.atr_pct,d.adr_pct,d.volume_sma_20
-                   FROM pg_temp.publication_daily_stage d
-                   JOIN pg_temp.publication_scope s USING(ticker_id)
-                   JOIN pg_temp.publication_ticker_stage i USING(ticker_id)
-                   WHERE s.complete AND d.date=%s AND i.active IS TRUE
-                     AND i.ticker_type=ANY(%s)
-                   ON CONFLICT(ticker_id) DO UPDATE SET date=EXCLUDED.date, open=EXCLUDED.open,
-                     high=EXCLUDED.high, low=EXCLUDED.low, close=EXCLUDED.close, vwap=EXCLUDED.vwap,
-                     volume=EXCLUDED.volume, transactions=EXCLUDED.transactions, sma_20=EXCLUDED.sma_20,
-                     sma_50=EXCLUDED.sma_50, sma_200=EXCLUDED.sma_200, atr_14=EXCLUDED.atr_14,
-                     atr_pct=EXCLUDED.atr_pct, adr_pct=EXCLUDED.adr_pct, volume_sma_20=EXCLUDED.volume_sma_20
-                   WHERE ROW(market.latest_daily.date, market.latest_daily.open, market.latest_daily.high,
-                     market.latest_daily.low, market.latest_daily.close, market.latest_daily.vwap,
-                     market.latest_daily.volume, market.latest_daily.transactions, market.latest_daily.sma_20,
-                     market.latest_daily.sma_50, market.latest_daily.sma_200, market.latest_daily.atr_14,
-                     market.latest_daily.atr_pct, market.latest_daily.adr_pct, market.latest_daily.volume_sma_20)
-                     IS DISTINCT FROM ROW(EXCLUDED.date, EXCLUDED.open, EXCLUDED.high, EXCLUDED.low,
-                     EXCLUDED.close, EXCLUDED.vwap, EXCLUDED.volume, EXCLUDED.transactions, EXCLUDED.sma_20,
-                     EXCLUDED.sma_50, EXCLUDED.sma_200, EXCLUDED.atr_14, EXCLUDED.atr_pct, EXCLUDED.adr_pct,
-                     EXCLUDED.volume_sma_20)""",
-                (context.target_session, list(context.ticker_types)),
-            )
-            connection.execute(
-                """DELETE FROM market.latest_daily l USING pg_temp.publication_scope s
-                   WHERE s.complete AND l.ticker_id=s.ticker_id AND NOT EXISTS
-                      (SELECT 1 FROM pg_temp.publication_daily_stage d
-                       JOIN pg_temp.publication_ticker_stage i USING(ticker_id)
-                      WHERE d.ticker_id=l.ticker_id AND d.date=%s AND i.active IS TRUE
-                        AND i.ticker_type=ANY(%s))""",
-                (context.target_session, list(context.ticker_types)),
-            )
-            count = connection.execute("SELECT count(*) FROM pg_temp.publication_scope WHERE complete").fetchone()
-            connection.execute(
-                """INSERT INTO market.publication_state(singleton,published_session,published_at,run_id,ticker_count)
-                   VALUES(true,%s,statement_timestamp(),%s,%s)
-                   ON CONFLICT(singleton) DO UPDATE SET published_session=EXCLUDED.published_session,
-                     published_at=EXCLUDED.published_at,run_id=EXCLUDED.run_id,ticker_count=EXCLUDED.ticker_count""",
-                (context.target_session, context.run_id, count[0] if count else 0),
-            )
-            connection.execute(
-                """UPDATE ingest.run SET state='published', ended_at=statement_timestamp(),
-                   published_at=statement_timestamp() WHERE run_id=%s AND state='running'""",
-                (context.run_id,),
-            )
+                _publish_kind(connection, kind, table, context)
+            _refresh_latest_daily(connection, context)
+            _record_publication(connection, context)
             commit_started = True
         return PublicationResult(
             run_id=context.run_id, published_session=context.target_session, input_revision=context.input_revision
