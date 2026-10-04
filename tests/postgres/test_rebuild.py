@@ -247,8 +247,7 @@ def test_rebuild_persists_independent_numeric_goldens_for_each_frequency(pg_migr
 
         ticker_id = connection.execute("SELECT ticker_id FROM market.ticker WHERE symbol='GOLDEN'").fetchone()[0]
         daily = connection.execute(
-            "SELECT date, open, high, low, close, volume, transactions, sma_20, sma_50, sma_200, "
-            "atr_14, atr_pct, adr_pct, volume_sma_20 FROM market.adjusted_daily "
+            "SELECT date, open, high, low, close, volume, transactions FROM market.adjusted_daily "
             "WHERE ticker_id=%s ORDER BY date",
             (ticker_id,),
         ).fetchall()
@@ -256,17 +255,6 @@ def test_rebuild_persists_independent_numeric_goldens_for_each_frequency(pg_migr
         for row in daily:
             assert row[1:5] == pytest.approx((10.0, 12.0, 8.0, 10.0))
             assert row[5:7] == pytest.approx((100.5, 2**34))
-        for column, warmup, value in (
-            (7, 19, 10.0),
-            (8, 49, 10.0),
-            (9, 199, 10.0),
-            (10, 13, 4.0),
-            (11, 13, 0.4),
-            (12, 19, 0.4),
-            (13, 19, 100.5),
-        ):
-            assert all(row[column] is None for row in daily[:warmup])
-            assert all(row[column] == pytest.approx(value) for row in daily[warmup:])
 
         grouped_by_week: dict[date, list[date]] = {}
         grouped_by_month: dict[date, list[date]] = {}
@@ -278,8 +266,7 @@ def test_rebuild_persists_independent_numeric_goldens_for_each_frequency(pg_migr
                 grouped_by_week,
                 sorted(grouped_by_week),
                 (
-                    "SELECT date, open, high, low, close, volume, transactions, sma_20, sma_50, "
-                    "sma_200, atr_14, atr_pct, adr_pct, volume_sma_20 FROM market.adjusted_weekly "
+                    "SELECT date, open, high, low, close, volume, transactions FROM market.adjusted_weekly "
                     "WHERE ticker_id=%s ORDER BY date"
                 ),
             ),
@@ -287,8 +274,7 @@ def test_rebuild_persists_independent_numeric_goldens_for_each_frequency(pg_migr
                 grouped_by_month,
                 [max(grouped_by_month[key]) for key in sorted(grouped_by_month)],
                 (
-                    "SELECT date, open, high, low, close, volume, transactions, sma_20, sma_50, "
-                    "sma_200, atr_14, atr_pct, adr_pct, volume_sma_20 FROM market.adjusted_monthly "
+                    "SELECT date, open, high, low, close, volume, transactions FROM market.adjusted_monthly "
                     "WHERE ticker_id=%s ORDER BY date"
                 ),
             ),
@@ -301,21 +287,6 @@ def test_rebuild_persists_independent_numeric_goldens_for_each_frequency(pg_migr
                 assert row[1:5] == pytest.approx((10.0, 12.0, 8.0, 10.0))
                 assert row[5] == pytest.approx(100.5 * count)
                 assert row[6] == 2**34 * count
-            for column, warmup, value in (
-                (7, 19, 10.0),
-                (8, 49, 10.0),
-                (9, 199, 10.0),
-                (10, 13, 4.0),
-                (11, 13, 0.4),
-                (12, 19, 0.4),
-            ):
-                assert all(row[column] is None for row in period_rows[:warmup])
-                assert all(row[column] == pytest.approx(value) for row in period_rows[warmup:])
-            expected_volume_average = [
-                100.5 * sum(counts[index - 19 : index + 1]) / 20 for index in range(19, len(counts))
-            ]
-            assert all(row[13] is None for row in period_rows[:19])
-            assert [row[13] for row in period_rows[19:]] == pytest.approx(expected_volume_average)
 
 
 def test_rebuild_publishes_zero_history_identity_without_fabricating_products(pg_migrated_database) -> None:

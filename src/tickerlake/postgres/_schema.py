@@ -19,13 +19,6 @@ BASE_COLUMNS: tuple[str, ...] = (
     "close",
     "volume",
     "transactions",
-    "sma_20",
-    "sma_50",
-    "sma_200",
-    "atr_14",
-    "atr_pct",
-    "adr_pct",
-    "volume_sma_20",
 )
 PERIOD_COLUMNS: tuple[str, ...] = (*BASE_COLUMNS, "left_truncated", "calendar_closed")
 
