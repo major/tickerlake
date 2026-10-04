@@ -71,6 +71,25 @@ def read_raw_date(connection: psycopg.Connection, date: datetime.date) -> pl.Dat
     return _frame(rows, DAILY_AGGS_SCHEMA, _DAILY_COLUMNS)
 
 
+def read_latest_raw_dates(connection: psycopg.Connection, target: datetime.date) -> list[datetime.date]:
+    """Read at most the five latest distinct raw dates no later than target."""
+    if not isinstance(target, datetime.date) or isinstance(target, datetime.datetime):
+        _fail("Daily target must be a date")
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT DISTINCT date FROM ingest.raw_daily WHERE date <= %s ORDER BY date DESC LIMIT 5",
+                (target,),
+            )
+            rows = cursor.fetchall()
+    except psycopg.Error:
+        _fail("Could not read PostgreSQL market data")
+    dates = [row[0] for row in rows]
+    if any(not isinstance(value, datetime.date) or isinstance(value, datetime.datetime) for value in dates):
+        _fail("Stored daily dates must be dates")
+    return dates
+
+
 def read_ticker_batch(connection: psycopg.Connection, after_id: int = 0, limit: int = 1000) -> pl.DataFrame:
     """Read a bounded keyset page of public ticker identities."""
     if type(after_id) is not int or after_id < 0:

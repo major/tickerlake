@@ -23,7 +23,13 @@ from tickerlake.postgres.connection import PostgresWriterError, require_writer_c
 from tickerlake.postgres.models import FetchRequest, RunSpec
 from tickerlake.postgres.publication import PublicationOutcomeUnknownError
 from tickerlake.postgres.raw import store_daily_outcome
-from tickerlake.postgres.reading import read_raw_date, read_split_bounds, read_split_range, read_ticker_reference
+from tickerlake.postgres.reading import (
+    read_latest_raw_dates,
+    read_raw_date,
+    read_split_bounds,
+    read_split_range,
+    read_ticker_reference,
+)
 from tickerlake.postgres.rebuild import rebuild_cache
 from tickerlake.postgres.references import store_split_outcome, store_ticker_outcome
 from tickerlake.postgres.state import fail_run, read_cache_state, start_run
@@ -51,6 +57,7 @@ _SAFE_TARGET: Final = "Backfill target must be a date"
 _SAFE_CORRECTION: Final = "Backfill correction range must be two ordered dates"
 _SAFE_BATCH: Final = "Backfill batch size must be a positive integer"
 _SAFE_NOW: Final = "Backfill now must be a timezone-aware datetime"
+_SAFE_UPDATE: Final = "Update has no closed sessions to fetch"
 _SAFE_TICKERS_UNPOPULATED: Final = "Backfill ticker reference did not populate"
 _SAFE_SPLITS_UNPOPULATED: Final = "Backfill split coverage did not populate"
 _CORRECTION_PAIR_SIZE: Final = 2
@@ -67,6 +74,16 @@ class BackfillRequest:
     transform_version: str
     target: datetime.date | None = None
     correction_range: tuple[datetime.date, datetime.date] | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UpdateRequest:
+    """Frozen provenance and optional target for one PostgreSQL update."""
+
+    code_version: str
+    schema_version: str
+    transform_version: str
+    target: datetime.date | None = None
 
 
 class BackfillError(PostgresWriterError):
@@ -118,7 +135,7 @@ def _validate_config(config: Config) -> str:
     return database_url
 
 
-def _validate_request(request: BackfillRequest, *, now: datetime.datetime, batch_size: int) -> None:
+def _validate_request(request: BackfillRequest | UpdateRequest, *, now: datetime.datetime, batch_size: int) -> None:
     """Validate frozen provenance, dates, batch size, and the frozen clock."""
     if not isinstance(now, datetime.datetime) or now.tzinfo is None or now.utcoffset() is None:
         raise BackfillError(_SAFE_NOW)
@@ -131,8 +148,8 @@ def _validate_request(request: BackfillRequest, *, now: datetime.datetime, batch
         raise BackfillError(_SAFE_VERSIONS)
     if request.target is not None and not _is_date(request.target):
         raise BackfillError(_SAFE_TARGET)
-    correction = request.correction_range
-    if correction is not None:
+    if isinstance(request, BackfillRequest) and request.correction_range is not None:
+        correction = request.correction_range
         if not isinstance(correction, tuple) or len(correction) != _CORRECTION_PAIR_SIZE:
             raise BackfillError(_SAFE_CORRECTION)
         start, end = correction
@@ -142,7 +159,7 @@ def _validate_request(request: BackfillRequest, *, now: datetime.datetime, batch
 
 def _selected_dates(
     config: Config,
-    request: BackfillRequest,
+    request: BackfillRequest | UpdateRequest,
     target: datetime.date,
     *,
     now: datetime.datetime,
@@ -153,7 +170,7 @@ def _selected_dates(
     configured history or the resolved target, and an empty correction stays
     empty even when the configured range has sessions.
     """
-    correction = request.correction_range
+    correction = request.correction_range if isinstance(request, BackfillRequest) else None
     if correction is not None:
         start, end = correction
         return get_closed_sessions(start, end, now=now)
@@ -164,14 +181,14 @@ def _selected_dates(
 
 def _split_bounds(
     config: Config,
-    request: BackfillRequest,
+    request: BackfillRequest | UpdateRequest,
     target: datetime.date,
     connection: psycopg.Connection,
 ) -> tuple[datetime.date, datetime.date]:
     """Union configured, requested, target, retained raw, and stored split bounds."""
     starts: list[datetime.date] = [config.start_date, config.end_date, target]
     ends: list[datetime.date] = [config.start_date, config.end_date, target]
-    if request.correction_range is not None:
+    if isinstance(request, BackfillRequest) and request.correction_range is not None:
         start, end = request.correction_range
         starts.append(start)
         ends.append(end)
@@ -274,6 +291,41 @@ def _store_splits(
         del previous, outcome
 
 
+def _fetch_reference_and_publish(
+    config: Config,
+    request: BackfillRequest | UpdateRequest,
+    context: tuple[psycopg.Connection, MassiveClient],
+    scope: tuple[list[datetime.date], datetime.date],
+    *,
+    batch_size: int,
+) -> PublicationResult:
+    """Persist one selected scope, refresh references, and publish it."""
+    connection, client = context
+    selected, target = scope
+    spec = RunSpec(
+        target=target,
+        requested_start=selected[0],
+        requested_end=selected[-1],
+        code_version=request.code_version,
+        schema_version=request.schema_version,
+        transform_version=request.transform_version,
+    )
+    run_id = start_run(connection, spec)
+    try:
+        _fetch_daily(connection, client, run_id, selected)
+        _store_tickers(connection, client, run_id, config.ticker_types)
+        coverage_start, coverage_end = _split_bounds(config, request, target, connection)
+        _store_splits(connection, client, run_id, _calendar_year_windows(coverage_start, coverage_end))
+        return rebuild_cache(connection, run_id, ticker_types=config.ticker_types, batch_size=batch_size)
+    except PublicationOutcomeUnknownError:
+        raise
+    except BackfillError:
+        raise
+    except PostgresWriterError:
+        _fail_known(connection, run_id, _KNOWN_FAILURE_CODE)
+        raise
+
+
 def backfill(
     config: Config,
     request: BackfillRequest,
@@ -307,28 +359,38 @@ def backfill(
     if not selected:
         raise BackfillError(_SAFE_NO_SESSIONS)
 
-    spec = RunSpec(
-        target=target,
-        requested_start=selected[0],
-        requested_end=selected[-1],
-        code_version=request.code_version,
-        schema_version=request.schema_version,
-        transform_version=request.transform_version,
-    )
     client = MassiveClient(config)
 
     with writer_connection(database_url) as connection:
-        run_id = start_run(connection, spec)
-        try:
-            _fetch_daily(connection, client, run_id, selected)
-            _store_tickers(connection, client, run_id, config.ticker_types)
-            coverage_start, coverage_end = _split_bounds(config, request, target, connection)
-            _store_splits(connection, client, run_id, _calendar_year_windows(coverage_start, coverage_end))
-            return rebuild_cache(connection, run_id, ticker_types=config.ticker_types, batch_size=batch_size)
-        except PublicationOutcomeUnknownError:
-            raise
-        except BackfillError:
-            raise
-        except PostgresWriterError:
-            _fail_known(connection, run_id, _KNOWN_FAILURE_CODE)
-            raise
+        return _fetch_reference_and_publish(
+            config, request, (connection, client), (selected, target), batch_size=batch_size
+        )
+
+
+def update(
+    config: Config,
+    request: UpdateRequest,
+    *,
+    now: datetime.datetime,
+    batch_size: int = 100,
+) -> PublicationResult:
+    """Refresh recent raw revisions and references, then publish the cache."""
+    database_url = _validate_config(config)
+    _validate_request(request, now=now, batch_size=batch_size)
+
+    target = resolve_closed_target(request.target if request.target is not None else config.end_date, now=now)
+    client = MassiveClient(config)
+    with writer_connection(database_url) as connection:
+        # Scope depends on durable raw history, so choose it only after taking the
+        # same writer lock used by backfill and publication.
+        recent_dates = read_latest_raw_dates(connection, target)
+        if recent_dates:
+            selected = get_closed_sessions(min(recent_dates), target, now=now)
+        else:
+            selected = _selected_dates(config, request, target, now=now)
+        if not selected:
+            raise BackfillError(_SAFE_UPDATE)
+
+        return _fetch_reference_and_publish(
+            config, request, (connection, client), (selected, target), batch_size=batch_size
+        )
