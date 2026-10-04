@@ -43,7 +43,7 @@
         },
         "command": {
           "type": "string",
-          "enum": ["update", "backfill", "info", "compact"]
+          "enum": ["update", "backfill"]
         }
       }
     },
@@ -56,24 +56,6 @@
         "uriKey": {
           "type": "string",
           "minLength": 1
-        }
-      }
-    },
-    "persistence": {
-      "type": "object",
-      "properties": {
-        "size": {
-          "type": "string"
-        },
-        "storageClassName": {
-          "type": "string"
-        },
-        "accessModes": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany", "ReadWriteOncePod"]
-          }
         }
       }
     }

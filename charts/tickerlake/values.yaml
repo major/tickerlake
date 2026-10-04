@@ -64,20 +64,6 @@ cronjob:
   failedJobsHistoryLimit: 3
   # -- Subcommand to run. "update" for incremental, "backfill" for a first run.
   command: update
-  # -- Output directory inside the pod. Mount a PVC here for a first-time
-  # -- backfill; update-only jobs do not write much.
-  outputDir: /data
-
-# -- Persistent volume for the ETL output directory (DuckDB files). Always
-# -- created; harmless for update-only jobs.
-persistence:
-  # -- Size of the output PVC.
-  size: 1Gi
-  # -- StorageClass for the output PVC. Empty uses the cluster default.
-  storageClassName: ""
-  # -- Access modes for the output PVC.
-  accessModes:
-    - ReadWriteOnce
 
 # -- Database wiring. The chart connects to an existing CloudNativePG
 # -- Cluster; DATABASE_URL is read from the <cluster>-app Secret the operator
