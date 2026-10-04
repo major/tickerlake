@@ -30,6 +30,7 @@ dev = [
     "pytest-cov>=7.0.0",
     "pytest-randomly>=4.0.1",
     "pytest-socket>=0.8.1",
+    "pytest-xdist>=3.8.0",
     "radon>=6.0.1",
     "ruff>=0.15.6",
     "ty>=0.0.23",

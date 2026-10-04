@@ -1,13 +1,13 @@
 .PHONY: test test-postgres test-cov lint format format-check typecheck complexity check sync mutmut mutmut-results mutmut-apply
 
 test:
-	uv run pytest tests/ -x --tb=short
+	uv run pytest tests/ -x --tb=short -n auto
 
 test-postgres:
 	./scripts/test-postgres.sh
 
 test-cov:
-	uv run pytest tests/ --cov=src/tickerlake --cov-branch --cov-report=html --cov-report=xml --cov-report=term-missing -x
+	uv run pytest tests/ -n auto --cov=src/tickerlake --cov-branch --cov-report=html --cov-report=xml --cov-report=term-missing -x
 
 lint:
 	uv run ruff check src/ tests/
