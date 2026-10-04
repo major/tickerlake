@@ -329,22 +329,9 @@ def _validate_product_stage(
              UNION ALL SELECT 1 FROM {stage} GROUP BY ticker_id,date HAVING count(*) > 1
              UNION ALL SELECT 1 FROM {stage} WHERE
                (open IS NULL OR high IS NULL OR low IS NULL OR close IS NULL
-                OR volume IS NULL OR transactions IS NULL OR volume < 0 OR transactions < 0
-                OR open IN ('NaN'::real,'Infinity'::real,'-Infinity'::real)
-                OR high IN ('NaN'::real,'Infinity'::real,'-Infinity'::real)
-                OR low IN ('NaN'::real,'Infinity'::real,'-Infinity'::real)
-                OR close IN ('NaN'::real,'Infinity'::real,'-Infinity'::real)
-                OR volume IN ('NaN'::double precision,'Infinity'::double precision,'-Infinity'::double precision)
-                OR (volume_sma_20 IS NOT NULL AND volume_sma_20 IN
-                  ('NaN'::double precision,'Infinity'::double precision,'-Infinity'::double precision))
-                OR sma_20 IN ('NaN'::real,'Infinity'::real,'-Infinity'::real)
-                OR sma_50 IN ('NaN'::real,'Infinity'::real,'-Infinity'::real)
-                OR sma_200 IN ('NaN'::real,'Infinity'::real,'-Infinity'::real)
-                OR atr_14 IN ('NaN'::real,'Infinity'::real,'-Infinity'::real)
-                OR atr_pct IN ('NaN'::real,'Infinity'::real,'-Infinity'::real)
-                OR adr_pct IN ('NaN'::real,'Infinity'::real,'-Infinity'::real)
-                OR volume_sma_20 < 0 OR ticker_id <= 0
-                OR high < GREATEST(open,close,low) OR low > LEAST(open,close,high)
+                OR volume IS NULL OR transactions IS NULL OR transactions < 0
+                OR ticker_id <= 0
+                OR NOT market.is_valid_ohlc(open, high, low, close)
                 {flags} OR date < {period_start} OR date > %s)
              LIMIT 1"""
     ).format(stage=stage, flags=flags, period_start=period_start)
