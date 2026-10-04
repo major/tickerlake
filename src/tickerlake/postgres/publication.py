@@ -322,14 +322,9 @@ def _validate_product_stage(
              UNION ALL SELECT 1 FROM {stage} GROUP BY ticker_id,date HAVING count(*) > 1
              UNION ALL SELECT 1 FROM {stage} WHERE
                (open IS NULL OR high IS NULL OR low IS NULL OR close IS NULL
-                OR volume IS NULL OR transactions IS NULL OR volume < 0 OR transactions < 0
-                OR open IN ('NaN'::real,'Infinity'::real,'-Infinity'::real)
-                OR high IN ('NaN'::real,'Infinity'::real,'-Infinity'::real)
-                OR low IN ('NaN'::real,'Infinity'::real,'-Infinity'::real)
-                OR close IN ('NaN'::real,'Infinity'::real,'-Infinity'::real)
-                OR volume IN ('NaN'::double precision,'Infinity'::double precision,'-Infinity'::double precision)
-                OR ticker_id <= 0
-                OR high < GREATEST(open,close,low) OR low > LEAST(open,close,high)
+OR volume IS NULL OR transactions IS NULL OR transactions < 0
+                 OR ticker_id <= 0
+                 OR NOT market.is_valid_ohlc(open, high, low, close)
                 {flags} OR date < {period_start} OR date > %s)
              LIMIT 1"""
     ).format(stage=stage, flags=flags, period_start=period_start)
