@@ -9,9 +9,6 @@ wheels/
 # Virtual environments
 .venv
 
-# DuckDB databases
-*.duckdb
-
 # Test/coverage artifacts
 .coverage
 coverage.xml
