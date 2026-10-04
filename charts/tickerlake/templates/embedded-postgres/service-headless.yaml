@@ -1,0 +1,17 @@
+{{- if eq .Values.database.mode "embedded" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tickerlake.fullname" . }}-postgres
+  labels:
+    {{- include "tickerlake.embeddedPostgres.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    {{- include "tickerlake.embeddedPostgres.selectorLabels" . | nindent 4 }}
+{{- end }}

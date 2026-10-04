@@ -1,0 +1,49 @@
+Tickerlake has been installed as a CronJob.
+
+Release:  {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Chart:    {{ include "tickerlake.chart" . }}
+
+CronJob:
+  name:     {{ include "tickerlake.fullname" . }}
+  schedule: {{ .Values.cronjob.schedule | quote }} ({{ .Values.cronjob.timezone }})
+  command:  {{ .Values.cronjob.command }}
+
+Database mode: {{ .Values.database.mode }}
+{{- if eq .Values.database.mode "cnpg" }}
+
+DATABASE_URL is read from the CloudNativePG application Secret:
+  Secret: {{ include "tickerlake.databaseSecret" . }}
+  Key:    {{ include "tickerlake.databaseSecretKey" . }}
+Verify the Cluster exists before the first run:
+  kubectl get cluster -n {{ .Release.Namespace }}
+{{- else if eq .Values.database.mode "embedded" }}
+
+An embedded single-node Postgres StatefulSet was rendered.
+  Secret:  {{ include "tickerlake.databaseSecret" . }}
+  Service: {{ include "tickerlake.fullname" . }}-postgres-primary:5432
+{{- else }}
+
+DATABASE_URL is read from a user-managed Secret:
+  Secret: {{ include "tickerlake.databaseSecret" . }}
+  Key:    {{ include "tickerlake.databaseSecretKey" . }}
+{{- end }}
+
+MASSIVE_API_KEY:
+{{- if .Values.massive.existingSecret }}
+  Source: existing Secret {{ .Values.massive.existingSecret }} (key {{ .Values.massive.secretKey }})
+{{- else if .Values.massive.apiKey }}
+  Source: chart-created Secret (literal apiKey). This is for testing only.
+  Use massive.existingSecret in production.
+{{- else }}
+  No API key configured. Set massive.existingSecret or massive.apiKey.
+{{- end }}
+
+Run the job once, outside the schedule:
+  kubectl create job --from=cronjob/{{ include "tickerlake.fullname" . }} {{ include "tickerlake.fullname" . }}-manual -n {{ .Release.Namespace }}
+
+Check recent runs:
+  kubectl get cronjob {{ include "tickerlake.fullname" . }} -n {{ .Release.Namespace }}
+  kubectl get jobs -n {{ .Release.Namespace }}
+
+Remember to keep MASSIVE_API_KEY in a Secret for production use.

@@ -1,0 +1,119 @@
+{{- if eq .Values.database.mode "embedded" }}
+{{- $fullname := include "tickerlake.fullname" . }}
+{{- $secretName := printf "%s-postgres" $fullname }}
+{{- $renderInitdb := ne .Values.database.embedded.postgresUser "postgres" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-postgres
+  labels:
+    {{- include "tickerlake.embeddedPostgres.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $fullname }}-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "tickerlake.embeddedPostgres.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tickerlake.embeddedPostgres.selectorLabels" . | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        {{- toYaml .Values.database.embedded.podSecurityContext | nindent 8 }}
+      containers:
+        # The official Postgres entrypoint (docker-entrypoint.sh) is kept so
+        # that initdb and POSTGRES_* env handling run on first boot. Do not
+        # override command with ["postgres"]; that bypasses initialization.
+        - name: postgres
+          image: "{{ .Values.database.embedded.image.repository }}:{{ .Values.database.embedded.image.tag }}"
+          imagePullPolicy: {{ .Values.database.embedded.image.pullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: {{ .Values.database.embedded.secretKey | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.database.embedded.postgresDb | quote }}
+          resources:
+            {{- toYaml .Values.database.embedded.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.database.embedded.securityContext | nindent 12 }}
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -h 127.0.0.1 -p 5432
+            failureThreshold: 30
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -h 127.0.0.1 -p 5432
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -h 127.0.0.1 -p 5432
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    if command -v gosu >/dev/null 2>&1; then
+                      exec gosu postgres pg_ctl stop -m fast
+                    fi
+                    exec su postgres -c 'pg_ctl stop -m fast'
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql
+            {{- if $renderInitdb }}
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+            {{- end }}
+      {{- if $renderInitdb }}
+      volumes:
+        - name: initdb
+          configMap:
+            name: {{ $fullname }}-postgres-initdb
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "tickerlake.embeddedPostgres.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- with .Values.database.embedded.storageClassName }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.database.embedded.storageSize | quote }}
+{{- end }}
