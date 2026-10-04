@@ -7,22 +7,20 @@ from typing import TYPE_CHECKING
 import psycopg
 from psycopg import sql
 
+from tickerlake.postgres._schema import STAGE_NAMES
 from tickerlake.postgres.connection import PostgresWriterError, require_writer_connection
 
 if TYPE_CHECKING:
     import polars as pl
 
-_STAGE_NAMES = frozenset(
-    {
-        "raw_stage",
-        "ticker_stage",
-        "split_stage",
-        "publication_daily_stage",
-        "publication_weekly_stage",
-        "publication_monthly_stage",
-        "publication_ticker_stage",
-    }
-)
+# Publication stages come from the shared schema module; the remaining stages
+# are local to raw/reference ingestion. The full set is the copy allowlist.
+_STAGE_NAMES = STAGE_NAMES | {
+    "raw_stage",
+    "ticker_stage",
+    "split_stage",
+    "publication_ticker_stage",
+}
 _UNSUPPORTED_STAGE = "Unsupported PostgreSQL staging table"
 _INVALID_COLUMNS = "PostgreSQL staging columns must be unique and nonempty"
 _MISSING_COLUMNS = "PostgreSQL staging columns are missing from the frame"
