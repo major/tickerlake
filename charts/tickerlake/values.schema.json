@@ -49,11 +49,13 @@
     },
     "database": {
       "type": "object",
-      "required": ["mode"],
       "properties": {
-        "mode": {
+        "clusterName": {
+          "type": "string"
+        },
+        "uriKey": {
           "type": "string",
-          "enum": ["cnpg", "embedded", "external"]
+          "minLength": 1
         }
       }
     },

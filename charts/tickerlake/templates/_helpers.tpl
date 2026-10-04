@@ -70,37 +70,19 @@ Name of the Secret holding the Massive API key.
 {{- end }}
 
 {{/*
-Name of the Secret holding the database DSN, selected by database.mode.
+Name of the Secret holding the database DSN. CloudNativePG generates a
+<cluster>-app Secret of type kubernetes.io/basic-auth that carries the
+DSN under the "uri" key by default.
 */}}
 {{- define "tickerlake.databaseSecret" -}}
-{{- if eq .Values.database.mode "cnpg" -}}
-{{- printf "%s-app" (default .Release.Name .Values.database.cnpg.clusterName) -}}
-{{- else if eq .Values.database.mode "embedded" -}}
-{{- printf "%s-postgres" (include "tickerlake.fullname" .) -}}
-{{- else if eq .Values.database.mode "external" -}}
-{{- if .Values.database.existingSecret.name -}}
-{{- .Values.database.existingSecret.name -}}
-{{- else if .Values.database.url -}}
-{{- printf "%s-database" (include "tickerlake.fullname" .) -}}
-{{- else -}}
-{{- fail "database.mode=external requires database.existingSecret.name or database.url" -}}
-{{- end -}}
-{{- else -}}
-{{- fail (printf "database.mode must be one of cnpg, embedded, external (got %q)" .Values.database.mode) -}}
-{{- end -}}
+{{- printf "%s-app" (default .Release.Name .Values.database.clusterName) -}}
 {{- end }}
 
 {{/*
-Key within the database Secret that holds the DSN, selected by database.mode.
+Key within the database Secret that holds the DSN.
 */}}
 {{- define "tickerlake.databaseSecretKey" -}}
-{{- if eq .Values.database.mode "cnpg" -}}
-{{- default "uri" .Values.database.cnpg.uriKey -}}
-{{- else if eq .Values.database.mode "embedded" -}}
-uri
-{{- else -}}
-{{- default "DATABASE_URL" .Values.database.existingSecret.key -}}
-{{- end -}}
+{{- default "uri" .Values.database.uriKey -}}
 {{- end }}
 
 {{/*
@@ -118,26 +100,4 @@ DATABASE_URL, both sourced from Secrets via secretKeyRef.
     secretKeyRef:
       name: {{ include "tickerlake.databaseSecret" . }}
       key: {{ include "tickerlake.databaseSecretKey" . | quote }}
-{{- end }}
-
-{{/*
-Selector labels for the embedded Postgres StatefulSet and Services. The name
-label uses the fullname so that the embedded workload is clearly identified.
-*/}}
-{{- define "tickerlake.embeddedPostgres.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "tickerlake.fullname" . }}
-app.kubernetes.io/instance: {{ .Release.Name }}
-app.kubernetes.io/component: embedded-postgres
-{{- end }}
-
-{{/*
-Common labels for embedded Postgres resources.
-*/}}
-{{- define "tickerlake.embeddedPostgres.labels" -}}
-helm.sh/chart: {{ include "tickerlake.chart" . }}
-{{ include "tickerlake.embeddedPostgres.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}

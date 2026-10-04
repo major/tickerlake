@@ -9,25 +9,14 @@ CronJob:
   schedule: {{ .Values.cronjob.schedule | quote }} ({{ .Values.cronjob.timezone }})
   command:  {{ .Values.cronjob.command }}
 
-Database mode: {{ .Values.database.mode }}
-{{- if eq .Values.database.mode "cnpg" }}
+Database: CloudNativePG (existing Cluster required)
 
 DATABASE_URL is read from the CloudNativePG application Secret:
   Secret: {{ include "tickerlake.databaseSecret" . }}
   Key:    {{ include "tickerlake.databaseSecretKey" . }}
+
 Verify the Cluster exists before the first run:
   kubectl get cluster -n {{ .Release.Namespace }}
-{{- else if eq .Values.database.mode "embedded" }}
-
-An embedded single-node Postgres StatefulSet was rendered.
-  Secret:  {{ include "tickerlake.databaseSecret" . }}
-  Service: {{ include "tickerlake.fullname" . }}-postgres-primary:5432
-{{- else }}
-
-DATABASE_URL is read from a user-managed Secret:
-  Secret: {{ include "tickerlake.databaseSecret" . }}
-  Key:    {{ include "tickerlake.databaseSecretKey" . }}
-{{- end }}
 
 MASSIVE_API_KEY:
 {{- if .Values.massive.existingSecret }}
