@@ -50,6 +50,13 @@ def test_migrations_apply_repeat_and_ledger_checksums(pg_owner_dsn: str) -> None
                     resources.files("tickerlake.migrations").joinpath("0002_publication.sql").read_bytes()
                 ).hexdigest(),
             ),
+            (
+                3,
+                "0003_domains.sql",
+                hashlib.sha256(
+                    resources.files("tickerlake.migrations").joinpath("0003_domains.sql").read_bytes()
+                ).hexdigest(),
+            ),
         ]
 
 
@@ -176,6 +183,41 @@ def test_schema_contract_and_access_grants(pg_owner_dsn: str, pg_etl_dsn: str, p
             reader.execute("SELECT count(*) FROM ingest.schema_migration")
 
 
+def test_numeric_domains_and_ohlc_function_back_affected_columns(pg_owner_dsn: str) -> None:
+    """The numeric domains and OHLC function replace per-column inline checks."""
+    with writer_connection(pg_owner_dsn) as connection:
+        apply_migrations(connection)
+        assert connection.execute(
+            "SELECT domain_name, data_type FROM information_schema.domains "
+            "WHERE domain_schema = 'market' AND domain_name IN ('finite_real', 'finite_volume') "
+            "ORDER BY domain_name"
+        ).fetchall() == [("finite_real", "real"), ("finite_volume", "double precision")]
+        assert connection.execute(
+            "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+            "WHERE n.nspname = 'market' AND p.proname = 'is_valid_ohlc'"
+        ).fetchone() == (1,)
+        expected = {
+            "open": "finite_real",
+            "high": "finite_real",
+            "low": "finite_real",
+            "close": "finite_real",
+            "volume": "finite_volume",
+        }
+        for schema, table in (
+            ("ingest", "raw_daily"),
+            ("market", "adjusted_daily"),
+            ("market", "adjusted_weekly"),
+            ("market", "adjusted_monthly"),
+            ("market", "latest_daily"),
+        ):
+            columns = connection.execute(
+                "SELECT column_name, domain_name FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = %s AND column_name = ANY(%s)",
+                (schema, table, list(expected)),
+            ).fetchall()
+            assert dict(columns) == expected, f"{schema}.{table} uses {columns}"
+
+
 def test_migration_revokes_default_acl_grants(pg_owner_dsn: str, pg_etl_dsn: str, pg_reader_dsn: str) -> None:
     """Remove effective default grants before assigning the foundation ACLs."""
     with writer_connection(pg_owner_dsn) as connection:
@@ -269,7 +311,7 @@ def test_corrupt_applied_checksum_and_unknown_version_are_rejected(pg_owner_dsn:
             apply_migrations(connection)
         connection.execute("UPDATE ingest.schema_migration SET checksum = %s WHERE version = 1", ("0" * 64,))
         connection.execute(
-            "INSERT INTO ingest.schema_migration (version, filename, checksum) VALUES (3, '0003_unknown.sql', %s)",
+            "INSERT INTO ingest.schema_migration (version, filename, checksum) VALUES (4, '0004_unknown.sql', %s)",
             ("1" * 64,),
         )
         with pytest.raises(PostgresWriterError, match="unknown"):
