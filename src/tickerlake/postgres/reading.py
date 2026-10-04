@@ -117,6 +117,39 @@ def read_split_history(connection: psycopg.Connection, ticker_ids: Sequence[int]
     return _frame(rows, SPLITS_SCHEMA, _SPLIT_COLUMNS)
 
 
+def read_split_range(
+    connection: psycopg.Connection, start_date: datetime.date, end_date: datetime.date
+) -> pl.DataFrame:
+    """Read splits whose execution date falls within an inclusive date range."""
+    for value in (start_date, end_date):
+        if not isinstance(value, datetime.date) or isinstance(value, datetime.datetime):
+            _fail("Split range bounds must be dates")
+    if start_date > end_date:
+        _fail("Split range start must not be after end")
+    rows = _query(
+        connection,
+        """SELECT t.symbol, s.execution_date, s.split_from, s.split_to,
+                  s.adjustment_factor, s.adjustment_type
+           FROM ingest.split_event AS s JOIN market.ticker AS t USING (ticker_id)
+           WHERE s.execution_date BETWEEN %s AND %s
+           ORDER BY t.symbol, s.execution_date, s.split_id""",
+        (start_date, end_date),
+    )
+    return _frame(rows, SPLITS_SCHEMA, _SPLIT_COLUMNS)
+
+
+def read_split_bounds(connection: psycopg.Connection) -> tuple[datetime.date | None, datetime.date | None]:
+    """Return the earliest and latest stored split execution dates."""
+    rows = _query(connection, "SELECT min(execution_date), max(execution_date) FROM ingest.split_event", ())
+    earliest = rows[0][0]
+    latest = rows[0][1]
+    if earliest is not None and (not isinstance(earliest, datetime.date) or isinstance(earliest, datetime.datetime)):
+        _fail("Stored split bounds must be dates")
+    if latest is not None and (not isinstance(latest, datetime.date) or isinstance(latest, datetime.datetime)):
+        _fail("Stored split bounds must be dates")
+    return earliest, latest
+
+
 def read_ticker_reference(connection: psycopg.Connection, ticker_types: Sequence[str]) -> pl.DataFrame:
     """Read references limited to a small explicit set of ticker types."""
     if isinstance(ticker_types, (str, bytes)) or len(ticker_types) > _MAX_REFERENCE_TYPES:
