@@ -30,16 +30,20 @@ class _RecordingPipeline:
         """Record an update dispatch."""
         self.calls.append(("update", config))
 
+    def info(self, config: Config) -> None:
+        """Record an info dispatch."""
+        self.calls.append(("info", config))
+
 
 @pytest.fixture
 def fake_pipeline(monkeypatch: pytest.MonkeyPatch) -> _RecordingPipeline:
-    """Replace the two pipeline entry points with a recording double.
+    """Replace the pipeline entry points with a recording double.
 
     ``tickerlake.main`` looks each entry point up on the ``pipeline`` module at
     call time, so patching the attributes on the real module object is enough.
     """
     recorder = _RecordingPipeline()
-    for name in ("backfill", "update"):
+    for name in ("backfill", "update", "info"):
         monkeypatch.setattr(pipeline, name, getattr(recorder, name))
     return recorder
 
@@ -57,7 +61,7 @@ def test_help_lists_every_subcommand(monkeypatch: pytest.MonkeyPatch, capsys) ->
 
     assert exc_info.value.code == 0
     captured = capsys.readouterr()
-    for command in ("backfill", "update"):
+    for command in ("backfill", "update", "info"):
         assert command in captured.out
 
 
@@ -134,6 +138,13 @@ def test_backfill_without_options_uses_config_defaults(
     _run_cli(monkeypatch, "backfill")
 
     assert fake_pipeline.calls == [("backfill", Config())]
+
+
+def test_info_dispatches_to_pipeline(monkeypatch: pytest.MonkeyPatch, fake_pipeline: _RecordingPipeline) -> None:
+    """Bare info builds a Config and forwards it to the read-only pipeline entry."""
+    _run_cli(monkeypatch, "info")
+
+    assert fake_pipeline.calls == [("info", Config())]
 
 
 @pytest.mark.parametrize("command", ["backfill", "update"])

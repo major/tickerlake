@@ -15,6 +15,7 @@ console = Console(stderr=True)
 from tickerlake import pipeline  # noqa: E402
 from tickerlake.config import Config  # noqa: E402
 from tickerlake.postgres.backfill import BackfillError  # noqa: E402
+from tickerlake.postgres.connection import PostgresWriterError  # noqa: E402
 
 
 def _parse_date(s: str) -> datetime.date:
@@ -41,6 +42,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("update", help="Incremental update")
 
+    subparsers.add_parser("info", help="Show database info")
+
     return parser
 
 
@@ -55,10 +58,10 @@ def _make_config(args: argparse.Namespace) -> Config:
 
 
 def _dispatch_etl(parser: argparse.ArgumentParser, config: Config, command: str) -> None:
-    """Dispatch backfill/update to the pipeline, wrapping expected errors."""
+    """Dispatch backfill/update/info to the pipeline, wrapping expected errors."""
     try:
-        {"backfill": pipeline.backfill, "update": pipeline.update}[command](config)
-    except (ValueError, BackfillError) as err:
+        {"backfill": pipeline.backfill, "update": pipeline.update, "info": pipeline.info}[command](config)
+    except (ValueError, BackfillError, PostgresWriterError) as err:
         parser.error(str(err))
 
 
@@ -74,5 +77,5 @@ def main() -> None:
     )
     config = _make_config(args)
 
-    if args.command in {"backfill", "update"}:
+    if args.command in {"backfill", "update", "info"}:
         _dispatch_etl(parser, config, args.command)

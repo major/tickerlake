@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from tickerlake.postgres.backfill import BackfillRequest, UpdateRequest
 from tickerlake.postgres.backfill import backfill as postgres_backfill
 from tickerlake.postgres.backfill import update as postgres_update
+from tickerlake.postgres.info import collect_info
 
 if TYPE_CHECKING:
     from tickerlake.config import Config
@@ -70,3 +71,21 @@ def update(config: Config) -> None:
     )
     result = postgres_update(config, request, now=datetime.datetime.now(tz=datetime.UTC))
     _log_run_summary("Update", config, request, result)
+
+
+def info(config: Config) -> None:
+    """Log a read-only summary of the PostgreSQL database."""
+    database_url = config.database_url
+    if not isinstance(database_url, str) or not database_url.strip():
+        msg = "DATABASE_URL is required for info"
+        raise ValueError(msg)
+    result = collect_info(database_url)
+    logger.info(
+        "Database info: schemas=%s tables=%d tickers=%d splits=%d raw_daily=%d publication=%s",
+        ",".join(result.schemas),
+        len(result.tables),
+        result.counts.tickers,
+        result.counts.splits,
+        result.counts.raw_daily,
+        result.publication.target_session if result.publication is not None else "none",
+    )

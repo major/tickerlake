@@ -9,7 +9,7 @@ from unittest.mock import patch
 import psycopg
 import pytest
 
-from tickerlake.config import Config
+from tickerlake.config import DATABASE_URL_DEFAULT, Config
 
 
 def _config_datetime_on(day: datetime.date) -> types.SimpleNamespace:
@@ -133,11 +133,21 @@ class TestDatabaseUrl:
     """Test optional PostgreSQL connection configuration."""
 
     def test_database_url_is_optional_and_loaded_from_environment(self) -> None:
-        """The setting may be omitted or loaded from DATABASE_URL."""
+        """The setting falls back to the default or loads DATABASE_URL when set."""
         with patch.dict(os.environ, {}, clear=True):
-            assert Config().database_url is None
+            assert Config().database_url == DATABASE_URL_DEFAULT
         with patch.dict(os.environ, {"DATABASE_URL": "postgresql://localhost/market"}):
             assert Config().database_url == "postgresql://localhost/market"
+
+    def test_database_url_default_falls_back_when_env_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Config falls back to the default URL when DATABASE_URL is unset."""
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        assert Config().database_url == DATABASE_URL_DEFAULT
+
+    def test_database_url_env_overrides_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A configured DATABASE_URL wins over the default."""
+        monkeypatch.setenv("DATABASE_URL", "postgresql://example/db")
+        assert Config().database_url == "postgresql://example/db"
 
     def test_explicit_database_url_overrides_environment(self) -> None:
         """An explicit constructor value takes precedence over the environment."""
@@ -150,8 +160,8 @@ class TestDatabaseUrl:
         """Invalid input fails without exposing connection credentials."""
         credential = "private-value"
         value = f"{database_url} password={credential}" if database_url.startswith("not") else database_url
-        with patch.dict(os.environ, {"DATABASE_URL": value}), pytest.raises(ValueError, match="DATABASE_URL") as error:
-            Config()
+        with pytest.raises(ValueError, match="DATABASE_URL") as error:
+            Config(database_url=value)
         rendered = "".join(traceback.format_exception(error.type, error.value, error.tb))
         assert credential not in rendered
         if value:

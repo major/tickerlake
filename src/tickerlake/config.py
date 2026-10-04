@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
+DATABASE_URL_DEFAULT = "postgresql://localhost/tickerlake"
+
 
 def _default_start_date() -> datetime.date:
     """Return today minus 10 years, falling back to Feb 28 on leap-day edge."""
@@ -31,6 +33,9 @@ class Config:
         end_date: End date for data collection (defaults to today)
         ticker_types: List of ticker types to process (defaults to
             ["CS", "ETF", "ETV", "ETN", "ADRC"])
+        database_url: PostgreSQL connection URL. Falls back to the
+            DATABASE_URL environment variable, then to DATABASE_URL_DEFAULT
+            (``postgresql://localhost/tickerlake``) for local development.
     """
 
     api_key: str = field(default="", repr=False)
@@ -44,7 +49,7 @@ class Config:
         if not self.api_key:
             self.api_key = os.environ.get("MASSIVE_API_KEY", "")
         if self.database_url is None:
-            self.database_url = os.environ.get("DATABASE_URL")
+            self.database_url = os.environ.get("DATABASE_URL") or DATABASE_URL_DEFAULT
         if self.database_url is not None:
             if not self.database_url.strip():
                 message = "blank DATABASE_URL"
