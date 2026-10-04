@@ -17,8 +17,9 @@ first-time load.
   `Cluster` resource in the release namespace. The chart does **not** render
   the Cluster; it only consumes the `<cluster>-app` Secret that CNPG manages.
 - A container image that contains the tickerlake CLI (Python 3.14). The chart
-  does **not** ship or pin an image, so you **must provide your own** image via
-  `image.repository` and `image.tag`.
+  defaults `image.repository` to `ghcr.io/major/tickerlake`. Build it with
+  `make docker-build` from the repo root, or override
+  `--set image.repository=...` to use your own image.
 - A Massive API key. For production, put it in a pre-created Secret and point
   `massive.existingSecret` at it.
 
@@ -88,6 +89,24 @@ first-time load.
    kubectl logs -l job-name=tickerlake-manual -f
    ```
 
+## Building the image
+
+The chart defaults `image.repository` to `ghcr.io/major/tickerlake`, which is
+built from the `Containerfile` at the repo root (Red Hat UBI 9 Python 3.14,
+multi-stage, runs as non-root UID 1000). Build it locally with:
+
+```bash
+make docker-build
+```
+
+Override the registry and tag with `IMAGE_REPO` and `IMAGE_TAG`:
+
+```bash
+make docker-build IMAGE_REPO=ghcr.io/you/tickerlake IMAGE_TAG=0.1.0
+```
+
+`make docker-push` pushes both the pinned tag and `latest`.
+
 ## Configuration reference
 
 The full set of values is documented inline in `values.yaml` with `# --`
@@ -102,7 +121,7 @@ Key values:
 
 | Value | Description | Default |
 | --- | --- | --- |
-| `image.repository` | tickerlake container image repository (required) | `""` |
+| `image.repository` | tickerlake container image repository | `ghcr.io/major/tickerlake` |
 | `image.tag` | Image tag; falls back to `.Chart.AppVersion` | `""` |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `cronjob.schedule` | Cron schedule | `0 20 * * 1-5` |

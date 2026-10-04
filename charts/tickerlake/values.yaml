@@ -1,14 +1,16 @@
 # Default values for the tickerlake chart.
 #
-# The chart does NOT ship a container image. You must provide your own
-# tickerlake image (Python 3.14) via image.repository and image.tag.
+# The chart ships a recommended default image (ghcr.io/major/tickerlake) but
+# you should still pin your own tag via image.tag. Build an image from the
+# repo root with `make docker-build`, or override image.repository to use one
+# that you publish yourself.
 
-# -- Default image settings. The chart does NOT pin an image; users must set
-# -- image.repository and image.tag.
+# -- Default image settings. The chart defaults image.repository to the
+# -- project's published image; set image.tag to pin a specific build.
 image:
-  # -- Container image repository (for example ghcr.io/you/tickerlake). No
-  # -- default is provided on purpose.
-  repository: ""
+  # -- Container image repository. Defaults to the project image; override it
+  # -- to use your own (for example ghcr.io/you/tickerlake).
+  repository: ghcr.io/major/tickerlake
   # -- Container image tag. When empty the chart falls back to .Chart.AppVersion.
   tag: ""
   # -- Image pull policy for the CronJob container.
