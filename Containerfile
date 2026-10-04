@@ -41,7 +41,7 @@
 #   (runAsUser, runAsGroup, runAsNonRoot). ENTRYPOINT is the tickerlake
 #   binary; the subcommand (backfill or update) is supplied as an argument.
 
-FROM ghcr.io/astral-sh/uv:0.12.18@sha256:3adc3706091ce7c2fe595e669628caedd6d951551b92b258b7e7dbe06d9440bc AS uv
+FROM ghcr.io/astral-sh/uv:0.12.23@sha256:61d393e44e249f2e4b526b6c7ddcecce245946826e608e11c93ad4f5bba55b21 AS uv
 
 FROM registry.access.redhat.com/ubi9/python-314:9.8@sha256:28f564643c2fe7d4607562f1f4057f162654316f9226530a34925a792edf2263 AS builder
 USER root
