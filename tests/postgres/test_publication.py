@@ -90,7 +90,6 @@ def _stage_one(connection, target: date, *, future: bool = False, prior_history:
                             "low": 8.0,
                             "close": 10.0,
                             "volume": 10.0,
-                            "vwap": None,
                             "transactions": 1,
                         }
                         for symbol in ("TEST", "INACTIVE", "OUTSIDE")
@@ -117,7 +116,6 @@ def _stage_one(connection, target: date, *, future: bool = False, prior_history:
                             "low": 10.0,
                             "close": 12.0,
                             "volume": 30.0,
-                            "vwap": None,
                             "transactions": 3,
                         }
                     ],
@@ -141,7 +139,6 @@ def _stage_one(connection, target: date, *, future: bool = False, prior_history:
                         "low": 9.0,
                         "close": 11.0,
                         "volume": 20.0,
-                        "vwap": None,
                         "transactions": 2,
                     }
                 ],
@@ -358,7 +355,6 @@ def test_new_validated_inputs_after_staging_reject_stale_generation(pg_migrated_
                             "low": 9.0,
                             "close": 12.0,
                             "volume": 25.0,
-                            "vwap": None,
                             "transactions": 3,
                         }
                     ],

@@ -40,7 +40,6 @@ def _row(ticker: str, *, close: float = 10.0, volume: float = 123.75, transactio
         "low": 9.0,
         "close": close,
         "volume": volume,
-        "vwap": None,
         "transactions": transactions,
     }
 
@@ -66,7 +65,7 @@ def _outcome(day: date, *rows: dict[str, object], status: FetchStatus = FetchSta
 
 def _daily_rows(connection: psycopg.Connection, day: date) -> list[tuple[object, ...]]:
     return connection.execute(
-        """SELECT d.date, t.symbol, d.open, d.high, d.low, d.close, d.vwap, d.volume, d.transactions
+        """SELECT d.date, t.symbol, d.open, d.high, d.low, d.close, d.volume, d.transactions
            FROM ingest.raw_daily d JOIN market.ticker t USING (ticker_id)
            WHERE d.date = %s ORDER BY t.symbol""",
         (day,),
@@ -98,7 +97,6 @@ def test_populates_empty_date_and_adds_new_symbols_to_existing_date(pg_owner_dsn
             == []
         )
         assert _daily_rows(connection, DAY)[1][-2:] == (123.75, 2**40)
-        assert _daily_rows(connection, DAY)[0][6] is None
 
 
 def test_exact_date_replacement_preserves_other_dates_and_advances_revision_once(pg_owner_dsn: str) -> None:

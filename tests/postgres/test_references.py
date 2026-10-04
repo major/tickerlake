@@ -189,8 +189,8 @@ def test_populated_ticker_replacement_removes_omitted_private_member_only(pg_mig
             ).fetchone()[0]
             conn.execute(
                 "INSERT INTO ingest.raw_daily "
-                "(date, ticker_id, open, high, low, close, vwap, volume, transactions) "
-                "VALUES ('2025-01-03', %s, 1, 2, 1, 2, NULL, 10, 3)",
+                "(date, ticker_id, open, high, low, close, volume, transactions) "
+                "VALUES ('2025-01-03', %s, 1, 2, 1, 2, 10, 3)",
                 (ticker_ids[symbol],),
             )
 
@@ -226,7 +226,7 @@ def test_populated_ticker_replacement_removes_omitted_private_member_only(pg_mig
             "FROM market.ticker ORDER BY ticker_id"
         ).fetchall()
         before_bars = conn.execute(
-            "SELECT date, ticker_id, open, high, low, close, vwap, volume, transactions "
+            "SELECT date, ticker_id, open, high, low, close, volume, transactions "
             "FROM ingest.raw_daily ORDER BY date, ticker_id"
         ).fetchall()
         before_references = conn.execute(
@@ -257,7 +257,7 @@ def test_populated_ticker_replacement_removes_omitted_private_member_only(pg_mig
         )
         assert (
             conn.execute(
-                "SELECT date, ticker_id, open, high, low, close, vwap, volume, transactions "
+                "SELECT date, ticker_id, open, high, low, close, volume, transactions "
                 "FROM ingest.raw_daily ORDER BY date, ticker_id"
             ).fetchall()
             == before_bars

@@ -18,7 +18,6 @@ BASE_COLUMNS: tuple[str, ...] = (
     "low",
     "close",
     "volume",
-    "vwap",
     "transactions",
     "sma_20",
     "sma_50",

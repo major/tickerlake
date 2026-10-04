@@ -37,7 +37,6 @@ def aggregate(**updates):
         "low": 184.0,
         "close": 185.5,
         "volume": 1000.0,
-        "vwap": 185.2,
         "transactions": 25,
     }
     row.update(updates)

@@ -3,14 +3,10 @@
 import datetime
 import importlib
 import math
-from typing import TYPE_CHECKING
 
 import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 transform = importlib.import_module("tickerlake.transform")
 extract = importlib.import_module("tickerlake.extract")
@@ -30,7 +26,6 @@ BARS_SCHEMA = {
     "low": pl.Float32,
     "close": pl.Float32,
     "volume": pl.Float32,
-    "vwap": pl.Float32,
     "transactions": pl.UInt32,
 }
 
@@ -76,69 +71,10 @@ def make_metric_bars(
                     "low": float(close),
                     "close": float(close),
                     "volume": 1000.0,
-                    "vwap": float(close),
                     "transactions": 100,
                 }
             )
     return make_bars(rows)
-
-
-@pytest.mark.parametrize(
-    ("aggregate", "expected_date"),
-    [
-        (aggregate_to_weekly, datetime.date(2024, 1, 8)),
-        (aggregate_to_monthly, datetime.date(2024, 1, 9)),
-    ],
-    ids=["weekly", "monthly"],
-)
-@pytest.mark.parametrize(
-    ("volumes", "vwaps", "expected_vwap"),
-    [
-        ([0.0, 0.0], [91.0, 109.0], None),
-        ([0.0, 1.0], [17.0, 103.0], 103.0),
-    ],
-    ids=["all-zero-volume", "single-unit-volume"],
-)
-def test_period_aggregation_vwap_at_zero_and_unit_total_volume(
-    aggregate: Callable[[pl.DataFrame], pl.DataFrame],
-    expected_date: datetime.date,
-    volumes: list[float],
-    vwaps: list[float],
-    expected_vwap: float | None,
-) -> None:
-    """Weekly and monthly VWAP handle zero and unit total volume correctly."""
-    dates = [datetime.date(2024, 1, 8), datetime.date(2024, 1, 9)]
-    bars = make_bars(
-        [
-            {
-                "date": date,
-                "ticker": "AAPL",
-                "open": 10.0 + index,
-                "high": 12.0 + index,
-                "low": 9.0 + index,
-                "close": 11.0 + index,
-                "volume": volume,
-                "vwap": vwap,
-                "transactions": 3 + index,
-            }
-            for index, (date, volume, vwap) in enumerate(zip(dates, volumes, vwaps, strict=True))
-        ]
-    )
-    row = aggregate(bars, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 12, 31)).row(
-        0, named=True
-    )
-
-    assert row["date"] == expected_date
-    assert row["open"] == pytest.approx(10.0)
-    assert row["high"] == pytest.approx(13.0)
-    assert row["low"] == pytest.approx(9.0)
-    assert row["close"] == pytest.approx(12.0)
-    assert row["volume"] == pytest.approx(sum(volumes))
-    if expected_vwap is None:
-        assert row["vwap"] is None
-    else:
-        assert row["vwap"] == pytest.approx(expected_vwap)
-    assert row["transactions"] == sum(3 + index for index in range(len(dates)))
 
 
 class TestAggregateToWeekly:
@@ -180,7 +116,6 @@ class TestAggregateToWeekly:
                         "low": price - 1.0,
                         "close": price + 0.5,
                         "volume": 1000.0 + i,
-                        "vwap": price + 0.25,
                         "transactions": 100 + i,
                     }
                 )
@@ -194,7 +129,7 @@ class TestAggregateToWeekly:
         assert per_ticker_counts["len"].to_list() == [3, 3]
 
     def test_ohlcv_rollup_values(self):
-        """Roll up OHLCV values and compute volume-weighted VWAP."""
+        """Roll up OHLCV values and transaction totals."""
         bars = make_bars(
             [
                 {
@@ -205,7 +140,6 @@ class TestAggregateToWeekly:
                     "low": 99.0,
                     "close": 101.0,
                     "volume": 1000.0,
-                    "vwap": 100.7,
                     "transactions": 10,
                 },
                 {
@@ -216,7 +150,6 @@ class TestAggregateToWeekly:
                     "low": 100.0,
                     "close": 104.0,
                     "volume": 1100.0,
-                    "vwap": 103.1,
                     "transactions": 11,
                 },
                 {
@@ -227,7 +160,6 @@ class TestAggregateToWeekly:
                     "low": 98.0,
                     "close": 99.0,
                     "volume": 1200.0,
-                    "vwap": 100.2,
                     "transactions": 12,
                 },
                 {
@@ -238,7 +170,6 @@ class TestAggregateToWeekly:
                     "low": 97.0,
                     "close": 102.0,
                     "volume": 1300.0,
-                    "vwap": 101.5,
                     "transactions": 13,
                 },
                 {
@@ -249,7 +180,6 @@ class TestAggregateToWeekly:
                     "low": 100.0,
                     "close": 103.0,
                     "volume": 1400.0,
-                    "vwap": 102.8,
                     "transactions": 14,
                 },
             ]
@@ -264,10 +194,6 @@ class TestAggregateToWeekly:
         assert row["low"] == pytest.approx(97.0)
         assert row["close"] == pytest.approx(103.0)
         assert row["volume"] == pytest.approx(6000.0)
-        expected_vwap = (
-            (100.7 * 1000.0) + (103.1 * 1100.0) + (100.2 * 1200.0) + (101.5 * 1300.0) + (102.8 * 1400.0)
-        ) / 6000.0
-        assert row["vwap"] == pytest.approx(expected_vwap)
         assert row["transactions"] == EXPECTED_TRANSACTIONS
         assert row["date"] == datetime.date(2024, 1, 8)
 
@@ -283,7 +209,6 @@ class TestAggregateToWeekly:
                     "low": 99.0,
                     "close": 100.5,
                     "volume": 1000.0,
-                    "vwap": 100.2,
                     "transactions": 10,
                 },
                 {
@@ -294,7 +219,6 @@ class TestAggregateToWeekly:
                     "low": 100.0,
                     "close": 101.5,
                     "volume": 1000.0,
-                    "vwap": 101.2,
                     "transactions": 10,
                 },
                 {
@@ -305,7 +229,6 @@ class TestAggregateToWeekly:
                     "low": 101.0,
                     "close": 102.5,
                     "volume": 1000.0,
-                    "vwap": 102.2,
                     "transactions": 10,
                 },
                 {
@@ -316,7 +239,6 @@ class TestAggregateToWeekly:
                     "low": 102.0,
                     "close": 103.5,
                     "volume": 1000.0,
-                    "vwap": 103.2,
                     "transactions": 10,
                 },
             ]
@@ -340,7 +262,6 @@ class TestAggregateToWeekly:
                     "low": 99.0,
                     "close": 100.5,
                     "volume": 1000.0,
-                    "vwap": 100.2,
                     "transactions": 10,
                 },
                 {
@@ -351,7 +272,6 @@ class TestAggregateToWeekly:
                     "low": 100.0,
                     "close": 101.5,
                     "volume": 1100.0,
-                    "vwap": 101.2,
                     "transactions": 11,
                 },
                 {
@@ -362,7 +282,6 @@ class TestAggregateToWeekly:
                     "low": 101.0,
                     "close": 102.5,
                     "volume": 1200.0,
-                    "vwap": 102.2,
                     "transactions": 12,
                 },
             ]
@@ -387,7 +306,6 @@ class TestAggregateToWeekly:
                     "low": 99.0,
                     "close": 104.0,
                     "volume": 1000.0,
-                    "vwap": 103.0,
                     "transactions": 10,
                 }
             ]
@@ -402,7 +320,6 @@ class TestAggregateToWeekly:
         assert row["low"] == pytest.approx(99.0)
         assert row["close"] == pytest.approx(104.0)
         assert row["volume"] == pytest.approx(1000.0)
-        assert row["vwap"] == pytest.approx(103.0)
         assert row["transactions"] == EXPECTED_SINGLE_DAY_TRANSACTIONS
         assert row["date"] == datetime.date(2024, 1, 8)
 
@@ -418,7 +335,6 @@ class TestAggregateToWeekly:
                     "low": 99.0,
                     "close": 100.5,
                     "volume": 1000.0,
-                    "vwap": 100.2,
                     "transactions": 10,
                 },
                 {
@@ -429,7 +345,6 @@ class TestAggregateToWeekly:
                     "low": 100.0,
                     "close": 101.5,
                     "volume": 1100.0,
-                    "vwap": 101.2,
                     "transactions": 11,
                 },
                 {
@@ -440,7 +355,6 @@ class TestAggregateToWeekly:
                     "low": 199.0,
                     "close": 202.5,
                     "volume": 2000.0,
-                    "vwap": 201.2,
                     "transactions": 20,
                 },
                 {
@@ -451,7 +365,6 @@ class TestAggregateToWeekly:
                     "low": 201.0,
                     "close": 203.5,
                     "volume": 2100.0,
-                    "vwap": 202.2,
                     "transactions": 21,
                 },
             ]
@@ -482,7 +395,6 @@ class TestAggregateToWeekly:
                     "low": 99.0,
                     "close": 100.5,
                     "volume": 1000.0,
-                    "vwap": 100.2,
                     "transactions": 10,
                 },
                 {
@@ -493,7 +405,6 @@ class TestAggregateToWeekly:
                     "low": 100.0,
                     "close": 101.5,
                     "volume": 1100.0,
-                    "vwap": 101.2,
                     "transactions": 11,
                 },
             ]
@@ -519,7 +430,6 @@ def test_aggregate_to_monthly_values_and_last_trading_day():
                 "low": 99.0,
                 "close": 101.0,
                 "volume": 1000.0,
-                "vwap": 100.5,
                 "transactions": 10,
             },
             {
@@ -530,7 +440,6 @@ def test_aggregate_to_monthly_values_and_last_trading_day():
                 "low": 98.0,
                 "close": 104.0,
                 "volume": 1100.0,
-                "vwap": 103.5,
                 "transactions": 11,
             },
             {
@@ -541,7 +450,6 @@ def test_aggregate_to_monthly_values_and_last_trading_day():
                 "low": 103.0,
                 "close": 105.0,
                 "volume": 1200.0,
-                "vwap": 104.5,
                 "transactions": 12,
             },
         ]
@@ -549,7 +457,6 @@ def test_aggregate_to_monthly_values_and_last_trading_day():
 
     result = aggregate_to_monthly(bars, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 12, 31))
     january = result.row(0, named=True)
-    expected_vwap = (100.5 * 1000.0 + 103.5 * 1100.0) / 2100.0
 
     assert result.columns == list(transform.PERIOD_AGGS_SCHEMA.keys())
     assert january["date"] == datetime.date(2024, 1, 31)
@@ -558,7 +465,6 @@ def test_aggregate_to_monthly_values_and_last_trading_day():
     assert january["low"] == pytest.approx(98.0)
     assert january["close"] == pytest.approx(104.0)
     assert january["volume"] == pytest.approx(2100.0)
-    assert january["vwap"] == pytest.approx(expected_vwap)
     assert january["transactions"] == EXPECTED_MONTH_TRANSACTIONS
 
 
@@ -594,7 +500,6 @@ class TestAggregateToMonthly:
                     "low": 99.0,
                     "close": 101.0,
                     "volume": 1000.0,
-                    "vwap": 100.7,
                     "transactions": 10,
                 },
                 {
@@ -605,7 +510,6 @@ class TestAggregateToMonthly:
                     "low": 100.0,
                     "close": 104.0,
                     "volume": 1100.0,
-                    "vwap": 103.1,
                     "transactions": 11,
                 },
                 {
@@ -616,7 +520,6 @@ class TestAggregateToMonthly:
                     "low": 98.0,
                     "close": 99.0,
                     "volume": 1200.0,
-                    "vwap": 100.2,
                     "transactions": 12,
                 },
             ]
@@ -631,8 +534,6 @@ class TestAggregateToMonthly:
             datetime.date(2024, 2, 1),
         ]
         assert result["volume"].to_list() == pytest.approx([2100.0, 1200.0])
-        expected_january_vwap = ((100.7 * 1000.0) + (103.1 * 1100.0)) / 2100.0
-        assert result["vwap"].to_list() == pytest.approx([expected_january_vwap, 100.2])
         assert result.columns == list(transform.PERIOD_AGGS_SCHEMA.keys())
         assert result.dtypes == list(transform.PERIOD_AGGS_SCHEMA.values())
 
@@ -659,7 +560,6 @@ def test_adjust_splits_basic(sample_bars_df: pl.DataFrame, sample_splits_df: pl.
 
     assert aapl_row["open"] == pytest.approx(300.0)
     assert aapl_row["close"] == pytest.approx(303.0)
-    assert aapl_row["vwap"] == pytest.approx(302.4)
     assert aapl_row["volume"] == pytest.approx(500000.0)
 
 
@@ -675,7 +575,6 @@ def test_adjust_splits_same_day_not_adjusted():
                 "low": 495.0,
                 "close": 505.0,
                 "volume": 1000.0,
-                "vwap": 502.0,
                 "transactions": 100,
             },
             {
@@ -686,7 +585,6 @@ def test_adjust_splits_same_day_not_adjusted():
                 "low": 123.0,
                 "close": 126.0,
                 "volume": 4000.0,
-                "vwap": 125.5,
                 "transactions": 400,
             },
         ]
@@ -714,7 +612,6 @@ def test_adjust_splits_same_day_not_adjusted():
     assert split_day_row["open"] == pytest.approx(125.0)
     assert split_day_row["close"] == pytest.approx(126.0)
     assert split_day_row["volume"] == pytest.approx(4000.0)
-    assert split_day_row["vwap"] == pytest.approx(125.5)
 
 
 def test_adjust_splits_no_split_unchanged():
@@ -729,7 +626,6 @@ def test_adjust_splits_no_split_unchanged():
                 "low": 139.0,
                 "close": 141.0,
                 "volume": 2500.0,
-                "vwap": 140.5,
                 "transactions": 150,
             }
         ]
@@ -764,7 +660,6 @@ def test_adjust_splits_aapl_4to1():
                 "low": 495.0,
                 "close": 500.0,
                 "volume": 1000.0,
-                "vwap": 499.0,
                 "transactions": 100,
             }
         ]
@@ -800,7 +695,6 @@ def test_adjust_splits_reverse_split():
                 "low": 49.0,
                 "close": 50.0,
                 "volume": 1000.0,
-                "vwap": 50.5,
                 "transactions": 50,
             }
         ]
@@ -824,41 +718,6 @@ def test_adjust_splits_reverse_split():
     assert row["volume"] == pytest.approx(500.0)
 
 
-def test_adjust_splits_vwap_adjusted():
-    """Adjust VWAP with other historical prices."""
-    bars = make_bars(
-        [
-            {
-                "date": datetime.date(2024, 3, 14),
-                "ticker": "AAPL",
-                "open": 100.0,
-                "high": 104.0,
-                "low": 98.0,
-                "close": 102.0,
-                "volume": 1000.0,
-                "vwap": 101.5,
-                "transactions": 20,
-            }
-        ]
-    )
-    splits = make_splits(
-        [
-            {
-                "ticker": "AAPL",
-                "execution_date": datetime.date(2024, 3, 15),
-                "split_from": 2.0,
-                "split_to": 1.0,
-                "adjustment_factor": 0.5,
-                "adjustment_type": "split",
-            }
-        ]
-    )
-
-    row = adjust_splits(bars, splits).row(0, named=True)
-
-    assert row["vwap"] == pytest.approx(50.75)
-
-
 def test_adjust_splits_multiple_tickers():
     """Apply each ticker's split only to its own bars."""
     bars = make_bars(
@@ -871,7 +730,6 @@ def test_adjust_splits_multiple_tickers():
                 "low": 398.0,
                 "close": 402.0,
                 "volume": 1000.0,
-                "vwap": 401.0,
                 "transactions": 30,
             },
             {
@@ -882,7 +740,6 @@ def test_adjust_splits_multiple_tickers():
                 "low": 49.0,
                 "close": 50.0,
                 "volume": 2000.0,
-                "vwap": 50.5,
                 "transactions": 40,
             },
         ]
@@ -1004,7 +861,6 @@ def test_adjust_splits_multi_split_spot_check(ticker, splits_data, checks):
                 "low": close - 5.0,
                 "close": close,
                 "volume": volume,
-                "vwap": close,
                 "transactions": 100,
             }
             for date, close, volume, _, _ in checks
@@ -1059,7 +915,6 @@ def test_filter_tickers_removes_unknown(sample_tickers_df: pl.DataFrame):
                 "low": 99.0,
                 "close": 100.5,
                 "volume": 1000.0,
-                "vwap": 100.2,
                 "transactions": 10,
             },
             {
@@ -1070,7 +925,6 @@ def test_filter_tickers_removes_unknown(sample_tickers_df: pl.DataFrame):
                 "low": 9.0,
                 "close": 10.5,
                 "volume": 500.0,
-                "vwap": 10.2,
                 "transactions": 5,
             },
         ]
@@ -1204,8 +1058,8 @@ def make_ohlc_bars(
 ) -> pl.DataFrame:
     """Build a bars DataFrame from per-ticker (open, high, low, close) tuples.
 
-    Each tuple maps to one trading day. Volume is fixed at 1000.0, vwap equals
-    close, and transactions is fixed at 100.
+    Each tuple maps to one trading day. Volume is fixed at 1000.0 and
+    transactions is fixed at 100.
     """
     rows = []
     for ticker, ohlc_list in ticker_to_ohlc.items():
@@ -1219,7 +1073,6 @@ def make_ohlc_bars(
                     "low": float(low),
                     "close": float(close),
                     "volume": 1000.0,
-                    "vwap": float(close),
                     "transactions": 100,
                 }
             )

@@ -18,7 +18,6 @@ def sample_bars_df() -> pl.DataFrame:
     - low: pl.Float32
     - close: pl.Float32
     - volume: pl.Float64
-    - vwap: pl.Float32
     - transactions: pl.Int64
     """
     return pl.DataFrame(
@@ -44,7 +43,6 @@ def sample_bars_df() -> pl.DataFrame:
                 1050000.0,
                 1250000.0,
             ],
-            "vwap": [151.2, 381.2, 152.2, 382.2, 153.2, 383.2],
             "transactions": [5000, 6000, 5500, 6500, 5250, 6250],
         }
     ).with_columns(
@@ -55,7 +53,6 @@ def sample_bars_df() -> pl.DataFrame:
         pl.col("low").cast(pl.Float32),
         pl.col("close").cast(pl.Float32),
         pl.col("volume").cast(pl.Float64),
-        pl.col("vwap").cast(pl.Float32),
         pl.col("transactions").cast(pl.Int64),
     )
 

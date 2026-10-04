@@ -24,7 +24,6 @@ DAILY_AGGS_SCHEMA = {
     "low": pl.Float32,
     "close": pl.Float32,
     "volume": pl.Float64,
-    "vwap": pl.Float32,
     "transactions": pl.Int64,
 }
 SPLITS_SCHEMA = {
@@ -85,7 +84,7 @@ def _outcome(
     except pl.exceptions.PolarsError, OverflowError, TypeError, ValueError:
         return FetchOutcome(FetchStatus.quarantined, pl.DataFrame(schema=schema), date, "invalid_record")
     if schema is DAILY_AGGS_SCHEMA:
-        float_columns = ("open", "high", "low", "close", "volume", "vwap")
+        float_columns = ("open", "high", "low", "close", "volume")
     elif schema is SPLITS_SCHEMA:
         float_columns = ("split_from", "split_to", "adjustment_factor")
     else:
@@ -117,12 +116,8 @@ def _daily_rows(records: list[Any], date: datetime.date) -> list[dict[str, Any]]
             record_date = datetime.datetime.fromtimestamp(stamp / 1000, tz=datetime.UTC).date()
             o, h, low, close = (_value(record, key) for key in ("open", "high", "low", "close"))
             volume = _value(record, "volume")
-            try:
-                vwap = _value(record, "vwap")
-            except AttributeError:
-                vwap = None
             transactions = _value(record, "transactions")
-            numeric = (o, h, low, close, volume) + (() if vwap is None else (vwap,))
+            numeric = (o, h, low, close, volume)
             if (
                 not isinstance(ticker, str)
                 or not ticker.strip()
@@ -146,7 +141,6 @@ def _daily_rows(records: list[Any], date: datetime.date) -> list[dict[str, Any]]
                     "low": low,
                     "close": close,
                     "volume": volume,
-                    "vwap": vwap,
                     "transactions": transactions,
                 }
             )

@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 _MAX_BATCH = 1000
 _MAX_REFERENCE_TYPES = 20
-_DAILY_COLUMNS = ("date", "ticker", "open", "high", "low", "close", "volume", "vwap", "transactions")
+_DAILY_COLUMNS = ("date", "ticker", "open", "high", "low", "close", "volume", "transactions")
 _SPLIT_COLUMNS = ("ticker", "execution_date", "split_from", "split_to", "adjustment_factor", "adjustment_type")
 type FrameSchemaValue = type[pl.DataType] | pl.DataType
 
@@ -64,7 +64,7 @@ def read_raw_date(connection: psycopg.Connection, date: datetime.date) -> pl.Dat
         _fail("Daily date must be a date")
     rows = _query(
         connection,
-        """SELECT r.date, t.symbol, r.open, r.high, r.low, r.close, r.volume, r.vwap, r.transactions
+        """SELECT r.date, t.symbol, r.open, r.high, r.low, r.close, r.volume, r.transactions
            FROM ingest.raw_daily AS r JOIN market.ticker AS t USING (ticker_id)
            WHERE r.date = %s ORDER BY t.symbol""",
         (date,),
@@ -113,7 +113,7 @@ def read_raw_history(connection: psycopg.Connection, ticker_ids: Sequence[int]) 
         return _empty(DAILY_AGGS_SCHEMA, _DAILY_COLUMNS)
     rows = _query(
         connection,
-        """SELECT r.date, t.symbol, r.open, r.high, r.low, r.close, r.volume, r.vwap, r.transactions
+        """SELECT r.date, t.symbol, r.open, r.high, r.low, r.close, r.volume, r.transactions
            FROM ingest.raw_daily AS r JOIN market.ticker AS t USING (ticker_id)
            WHERE r.ticker_id = ANY(%s) ORDER BY t.symbol, r.date""",
         (ids,),

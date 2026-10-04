@@ -1,7 +1,6 @@
 """Regression coverage for numeric precision and period boundary contracts."""
 
 import datetime
-import math
 
 import polars as pl
 import pytest
@@ -21,7 +20,6 @@ def bars(rows: list[dict]) -> pl.DataFrame:
             "low": pl.Float32,
             "close": pl.Float32,
             "volume": pl.UInt32,
-            "vwap": pl.Float32,
             "transactions": pl.UInt32,
         },
     )
@@ -36,7 +34,6 @@ def test_period_aggregation_widens_integer_sums_and_rejects_transaction_overflow
         "low": 9.0,
         "close": 10.0,
         "volume": 2**32 - 1,
-        "vwap": 10.0,
         "transactions": 2**31,
     }
     frame = bars([{**template, "date": datetime.date(2024, 1, 8)}, {**template, "date": datetime.date(2024, 1, 9)}])
@@ -52,39 +49,6 @@ def test_period_aggregation_widens_integer_sums_and_rejects_transaction_overflow
         aggregate_to_weekly(overflow, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 1, 12))
 
 
-@pytest.mark.parametrize("aggregate", [aggregate_to_weekly, aggregate_to_monthly], ids=["weekly", "monthly"])
-@pytest.mark.parametrize(
-    ("daily", "expected"),
-    [
-        ([{"volume": 3, "vwap": None}, {"volume": 0, "vwap": None}], None),
-        ([{"volume": 3, "vwap": 10}, {"volume": 0, "vwap": None}], 10.0),
-        ([{"volume": 3, "vwap": 10}, {"volume": 2, "vwap": None}], None),
-    ],
-    ids=["positive-missing", "zero-missing-ignored", "positive-missing-among-valid"],
-)
-def test_period_vwap_missing_input_contract(aggregate, daily, expected) -> None:
-    """Positive missing VWAP nulls the period; zero-volume missing VWAP is ignored."""
-    source = bars(
-        [
-            {
-                "date": datetime.date(2024, 1, 8) + datetime.timedelta(days=index),
-                "ticker": "A",
-                "open": 10,
-                "high": 10,
-                "low": 10,
-                "close": 10,
-                "volume": row["volume"],
-                "vwap": row["vwap"],
-                "transactions": 1,
-            }
-            for index, row in enumerate(daily)
-        ]
-    )
-    values = aggregate(source, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 1, 31))
-    assert values["vwap"].item() == expected
-    assert values.schema == PERIOD_AGGS_SCHEMA
-
-
 def test_empty_period_schema_and_calendar_flags() -> None:
     """Preserve typed empty output and derive flags from schedule bounds."""
     empty = pl.DataFrame(
@@ -96,7 +60,6 @@ def test_empty_period_schema_and_calendar_flags() -> None:
             "low": pl.Float32,
             "close": pl.Float32,
             "volume": pl.Float64,
-            "vwap": pl.Float32,
             "transactions": pl.Int64,
         }
     )
@@ -116,7 +79,6 @@ def test_empty_period_schema_and_calendar_flags() -> None:
                 "low": 10,
                 "close": 10,
                 "volume": 1,
-                "vwap": 10,
                 "transactions": 1,
             }
         ]
@@ -163,7 +125,6 @@ def test_left_truncated_uses_collection_bound_not_first_ticker_bar(case, offset)
                 "low": 10,
                 "close": 10,
                 "volume": 1,
-                "vwap": 10,
                 "transactions": 1,
             }
         ]
@@ -195,7 +156,6 @@ def test_calendar_closed_uses_scheduled_last_session(aggregate, observed, last_s
                 "low": 10,
                 "close": 10,
                 "volume": 1,
-                "vwap": 10,
                 "transactions": 1,
             }
         ]
@@ -222,7 +182,6 @@ def test_invalid_collection_bounds_rejected_for_empty_and_populated(aggregate, i
                     "low": 10,
                     "close": 10,
                     "volume": 1,
-                    "vwap": 10,
                     "transactions": 1,
                 }
             ]
@@ -244,7 +203,6 @@ def test_period_schema_has_public_numeric_and_flag_types(aggregate) -> None:
             "low": pl.Float32,
             "close": pl.Float32,
             "volume": pl.Float64,
-            "vwap": pl.Float32,
             "transactions": pl.Int64,
         }
     )
@@ -256,37 +214,10 @@ def test_period_schema_has_public_numeric_and_flag_types(aggregate) -> None:
         "low": pl.Float32,
         "close": pl.Float32,
         "volume": pl.Float64,
-        "vwap": pl.Float32,
         "transactions": pl.Int64,
         "left_truncated": pl.Boolean,
         "calendar_closed": pl.Boolean,
     }
-
-
-@pytest.mark.parametrize("aggregate", [aggregate_to_weekly, aggregate_to_monthly], ids=["weekly", "monthly"])
-@pytest.mark.parametrize(
-    ("volume", "vwap", "expected"),
-    [(1e308, 100.0, 100.0), (1e-320, 1e-20, 1e-20)],
-    ids=["large-volume-no-product-overflow", "tiny-volume-no-weight-underflow"],
-)
-def test_period_vwap_normalizes_weights_before_price_multiplication(aggregate, volume, vwap, expected) -> None:
-    """Normalize volume weights to preserve VWAP at Float64 extremes."""
-    source = pl.DataFrame(
-        {
-            "date": [datetime.date(2024, 1, 8)],
-            "ticker": ["A"],
-            "open": [10.0],
-            "high": [10.0],
-            "low": [10.0],
-            "close": [10.0],
-            "volume": [volume],
-            "vwap": [vwap],
-            "transactions": [1],
-        },
-        schema_overrides={"volume": pl.Float64},
-    )
-    result = aggregate(source, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 1, 31))
-    assert result["vwap"].item() == pytest.approx(expected, rel=1e-6, abs=0)
 
 
 @pytest.mark.parametrize("aggregate", [aggregate_to_weekly, aggregate_to_monthly], ids=["weekly", "monthly"])
@@ -301,39 +232,12 @@ def test_period_rejects_nonfinite_float64_volume_total(aggregate) -> None:
             "low": [10.0, 10.0],
             "close": [10.0, 10.0],
             "volume": [1e308, 1e308],
-            "vwap": [10.0, 10.0],
             "transactions": [1, 1],
         },
         schema_overrides={"volume": pl.Float64},
     )
     with pytest.raises(ValueError, match=r".*"):
         aggregate(source, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 1, 31))
-
-
-@pytest.mark.parametrize("aggregate", [aggregate_to_weekly, aggregate_to_monthly], ids=["weekly", "monthly"])
-def test_fractional_volume_rollup_and_vwap_use_float64_accumulators(aggregate) -> None:
-    """Fractional, high-magnitude volume sums accurately and casts VWAP last."""
-    inputs = [1_000_000_000.125, 2_000_000_000.25, 0.375]
-    prices = [10.125, 20.25, 30.5]
-    expected_volume = math.fsum(inputs)
-    expected_vwap = math.fsum(volume * price for volume, price in zip(inputs, prices, strict=True)) / expected_volume
-    frame = pl.DataFrame(
-        {
-            "date": [datetime.date(2024, 1, 8), datetime.date(2024, 1, 9), datetime.date(2024, 1, 10)],
-            "ticker": ["A"] * 3,
-            "open": prices,
-            "high": prices,
-            "low": prices,
-            "close": prices,
-            "volume": inputs,
-            "vwap": prices,
-            "transactions": [1, 2, 3],
-        },
-        schema_overrides={"volume": pl.Float64},
-    )
-    result = aggregate(frame, collection_start=datetime.date(2024, 1, 1), target=datetime.date(2024, 1, 31))
-    assert result["volume"].to_list() == [expected_volume]
-    assert result["vwap"].to_list() == pytest.approx([expected_vwap], rel=1e-7)
 
 
 def test_future_cached_periods_are_retained_and_marked_open() -> None:
@@ -348,7 +252,6 @@ def test_future_cached_periods_are_retained_and_marked_open() -> None:
                 "low": 10,
                 "close": 10,
                 "volume": 1,
-                "vwap": 10,
                 "transactions": 1,
             }
         ]
@@ -371,7 +274,6 @@ def test_split_adjustment_widens_volume_even_without_splits() -> None:
                 "low": 10,
                 "close": 10,
                 "volume": 5,
-                "vwap": 10,
                 "transactions": 1,
             }
         ]
@@ -393,7 +295,6 @@ def test_split_adjustment_accepts_finite_fractional_volume() -> None:
             "low": [10.0],
             "close": [10.0],
             "volume": [0.1],
-            "vwap": [10.0],
             "transactions": [1],
         },
         schema_overrides={"volume": pl.Float64},
@@ -414,7 +315,6 @@ def test_split_adjustment_rejects_nonfinite_adjusted_volume() -> None:
             "low": [10.0],
             "close": [10.0],
             "volume": [1e308],
-            "vwap": [10.0],
             "transactions": [1],
         },
         schema_overrides={"volume": pl.Float64},
