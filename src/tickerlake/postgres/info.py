@@ -26,9 +26,9 @@ _INVALID_DATABASE_URL: Final = "PostgreSQL database URL must be a nonblank strin
 _CONNECTION_FAILED: Final = "Could not connect to PostgreSQL"
 _READ_FAILED: Final = "Could not read PostgreSQL database info"
 
-# User-owned tables reported by ``info``, in display order. Row counts come from
-# ``pg_stat_user_tables.n_live_tup``, which is an estimate maintained by the
-# statistics collector: fast and safe, but not an exact ``count(*)``.
+# User-owned tables reported by ``info``, in display order. Row counts come
+# from ``count(*)`` against each table: exact, fast on small tables, and
+# matches what an operator would see if they queried the table directly.
 _KNOWN_TABLES: Final = (
     ("ingest", "raw_daily"),
     ("ingest", "split_event"),
@@ -130,11 +130,22 @@ def _read_schemas(connection: psycopg.Connection) -> tuple[str, ...]:
 
 
 def _read_table_counts(connection: psycopg.Connection) -> dict[tuple[str, str], int]:
-    """Return estimated live row counts keyed by (schema, table)."""
-    rows = connection.execute(
-        "SELECT schemaname, relname, n_live_tup FROM pg_stat_user_tables WHERE schemaname IN ('ingest', 'market')"
-    ).fetchall()
-    return {(str(schema), str(table)): int(count) for schema, table, count in rows}
+    """Return exact row counts keyed by (schema, table).
+
+    Uses ``count(*)`` rather than ``pg_stat_user_tables.n_live_tup`` so the
+    returned counts match what an operator would see if they queried the
+    table directly. ``count(*)`` is fast on the small user-owned tables
+    reported by ``info`` and avoids the drift that statistics-based
+    estimates show at low row counts.
+    """
+    counts: dict[tuple[str, str], int] = {}
+    for schema, table in _KNOWN_TABLES:
+        # Identifiers come from _KNOWN_TABLES above (programmer-controlled),
+        # not user input, so static SQL composition is safe here.
+        sql = f"SELECT count(*) FROM {schema}.{table}"  # noqa: S608 -- identifiers from _KNOWN_TABLES
+        rows = connection.execute(sql).fetchone()
+        counts[(schema, table)] = int(rows[0]) if rows else 0
+    return counts
 
 
 def _read_publication(connection: psycopg.Connection) -> PublicationInfo | None:
