@@ -22,8 +22,10 @@ quarantined, and successful-empty results preserve any prior cached date.
 Every expected trading date must have an acceptable result before rebuilding
 the consumer database. If a run has failures or suspicious results, any
 successful raw replacements are persisted first, then the run fails without
-publishing a new consumer database. This interim DuckDB workflow has separate
-raw and consumer files and is not a cross-file atomic transaction.
+publishing a new consumer database. In the current PostgreSQL path raw and
+consumer publication share the same writer lock and transaction; the
+historical DuckDB split was replaced by atomic `input_revision` advancement
+and single-transaction publication.
 
 Ticker and split outcomes are both validated before split cache writes or
 consumer publication. Failed or quarantined reference results block a rebuild;
@@ -52,6 +54,6 @@ retry checkpoints. This design does not promise exact replay of past cache or
 reference versions.
 
 There is no raw/reference archive, approval workflow, or operator adjudication
-machinery in this contract. The current DuckDB implementation is an interim
-flow and cannot provide PostgreSQL's atomic cache revision and publication
-guarantees.
+machinery in this contract. PostgreSQL publication is atomic; the legacy
+DuckDB flow (separate raw and consumer files, no cross-file atomic
+transaction) has been replaced.
