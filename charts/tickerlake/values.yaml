@@ -1,0 +1,111 @@
+# Default values for the tickerlake chart.
+#
+# The chart does NOT ship a container image. You must provide your own
+# tickerlake image (Python 3.14) via image.repository and image.tag.
+
+# -- Default image settings. The chart does NOT pin an image; users must set
+# -- image.repository and image.tag.
+image:
+  # -- Container image repository (for example ghcr.io/you/tickerlake). No
+  # -- default is provided on purpose.
+  repository: ""
+  # -- Container image tag. When empty the chart falls back to .Chart.AppVersion.
+  tag: ""
+  # -- Image pull policy for the CronJob container.
+  pullPolicy: IfNotPresent
+
+# -- Override the chart name used to build resource names.
+nameOverride: ""
+# -- Override the full generated resource name.
+fullnameOverride: ""
+
+# -- Resource requests and limits for the CronJob container.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# -- Massive API credential source. existingSecret is the name of a Secret the
+# -- user pre-creates with the key named by secretKey. If existingSecret is
+# -- empty, the chart creates a Secret from massive.apiKey (literal, NOT
+# -- recommended and documented as testing-only).
+massive:
+  # -- Name of a pre-created Secret holding the Massive API key. Preferred.
+  existingSecret: ""
+  # -- Key inside the Secret that holds the API key.
+  secretKey: MASSIVE_API_KEY
+  # -- Literal API key used only when existingSecret is empty. Testing only.
+  apiKey: ""
+
+# -- CronJob schedule and behavior.
+cronjob:
+  # -- Cron schedule. Default is 8:00 PM America/New_York Monday to Friday,
+  # -- after the US market close.
+  schedule: "0 20 * * 1-5"
+  # -- Time zone for the schedule (Kubernetes 1.27+). "America/New_York"
+  # -- follows US Eastern Time with automatic DST handling.
+  timezone: "America/New_York"
+  # -- Concurrency policy. Allow | Forbid | Replace.
+  concurrencyPolicy: Forbid
+  # -- Suspend the CronJob without deleting it.
+  suspend: false
+  # -- Deadline in seconds for starting the job if it misses its schedule.
+  startingDeadlineSeconds: 600
+  # -- Pod restart policy. OnFailure | Never.
+  restartPolicy: OnFailure
+  # -- Job backoff limit.
+  backoffLimit: 1
+  # -- Number of successful finished Jobs to keep.
+  successfulJobsHistoryLimit: 1
+  # -- Number of failed finished Jobs to keep.
+  failedJobsHistoryLimit: 3
+  # -- Subcommand to run. "update" for incremental, "backfill" for a first run.
+  command: update
+  # -- Output directory inside the pod. Mount a PVC here for a first-time
+  # -- backfill; update-only jobs do not write much.
+  outputDir: /data
+
+# -- Persistent volume for the ETL output directory (DuckDB files). Always
+# -- created; harmless for update-only jobs.
+persistence:
+  # -- Size of the output PVC.
+  size: 1Gi
+  # -- StorageClass for the output PVC. Empty uses the cluster default.
+  storageClassName: ""
+  # -- Access modes for the output PVC.
+  accessModes:
+    - ReadWriteOnce
+
+# -- Database wiring. The chart connects to an existing CloudNativePG
+# -- Cluster; DATABASE_URL is read from the <cluster>-app Secret the operator
+# -- manages. Install and own the CloudNativePG operator and Cluster yourself;
+# -- this chart only renders the application workload.
+database:
+  # -- Name of the Cluster CR. Defaults to the release name.
+  clusterName: ""
+  # -- Key in the <cluster>-app Secret holding the full DSN.
+  uriKey: uri
+
+# -- Service account settings.
+serviceAccount:
+  # -- Create a ServiceAccount for the CronJob.
+  create: true
+  # -- Name to use. Defaults to the fullname-derived name when empty.
+  name: ""
+
+# -- Annotations added to the CronJob pod.
+podAnnotations: {}
+# -- Pod-level security context for the CronJob pod.
+podSecurityContext: {}
+# -- Container-level security context for the CronJob container.
+securityContext:
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]

@@ -1,0 +1,10 @@
+apiVersion: v2
+name: tickerlake
+description: CronJob for the tickerlake US equity market ETL
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.29.0-0"
+maintainers:
+  - name: Major Hayden
+    email: major@mhtx.net

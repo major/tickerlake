@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "tickerlake chart values",
+  "description": "Validation schema for the tickerlake Helm chart.",
+  "$comment": "image.repository is required but intentionally has no minLength constraint so that 'helm lint' passes against the chart defaults (empty repository). The README documents that users must supply a non-empty repository; an empty value produces an invalid image reference at install time.",
+  "type": "object",
+  "required": ["image", "cronjob", "database"],
+  "properties": {
+    "image": {
+      "type": "object",
+      "required": ["repository"],
+      "properties": {
+        "repository": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      }
+    },
+    "cronjob": {
+      "type": "object",
+      "required": ["schedule"],
+      "properties": {
+        "schedule": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "concurrencyPolicy": {
+          "type": "string",
+          "enum": ["Allow", "Forbid", "Replace"]
+        },
+        "restartPolicy": {
+          "type": "string",
+          "enum": ["OnFailure", "Never"]
+        },
+        "command": {
+          "type": "string",
+          "enum": ["update", "backfill", "info", "compact"]
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "properties": {
+        "clusterName": {
+          "type": "string"
+        },
+        "uriKey": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "string"
+        },
+        "storageClassName": {
+          "type": "string"
+        },
+        "accessModes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany", "ReadWriteOncePod"]
+          }
+        }
+      }
+    }
+  }
+}
