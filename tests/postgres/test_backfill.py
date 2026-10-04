@@ -50,7 +50,6 @@ from tickerlake.postgres.publication import PublicationOutcomeUnknownError
 if TYPE_CHECKING:
     from collections.abc import Callable
     from datetime import date
-    from pathlib import Path
     from typing import Any
     from uuid import UUID
 
@@ -222,7 +221,6 @@ def massive(monkeypatch: pytest.MonkeyPatch) -> FakeMassiveClient:
 
 def _config(
     database_url: str,
-    output_dir: Path,
     *,
     start: date = SESSION_START,
     end: date = SESSION_TARGET,
@@ -231,7 +229,6 @@ def _config(
     return Config(
         api_key=api_key,
         database_url=database_url,
-        output_dir=output_dir,
         start_date=start,
         end_date=end,
         ticker_types=["CS"],
@@ -309,9 +306,9 @@ def _mutation_snapshot(database_url: str) -> tuple[list[tuple[object, ...]], ...
         return tuple(connection.execute(query).fetchall() for query in queries)
 
 
-def _bootstrap(database_url: str, output_dir: Path, massive: FakeMassiveClient) -> UUID:
+def _bootstrap(database_url: str, massive: FakeMassiveClient) -> UUID:
     _seed_feed(massive, SESSIONS)
-    result = backfill_module.backfill(_config(database_url, output_dir), _request(), now=AFTER_CLOSE)
+    result = backfill_module.backfill(_config(database_url), _request(), now=AFTER_CLOSE)
     assert result.published_session == SESSION_TARGET
     return result.run_id
 
@@ -337,7 +334,7 @@ def test_fresh_bootstrap_fetches_every_closed_session_and_publishes_target(
     dsn = pg_migrated_database.owner_dsn
     _seed_feed(massive, SESSIONS)
 
-    result = backfill_module.backfill(_config(dsn, tmp_path), _request(), now=AFTER_CLOSE, batch_size=BATCH_SIZE)
+    result = backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, batch_size=BATCH_SIZE)
 
     assert result.published_session == SESSION_TARGET
     assert massive.daily_calls == list(SESSIONS)
@@ -390,7 +387,7 @@ def test_fresh_bootstrap_writes_no_local_database_files(
     dsn = pg_migrated_database.owner_dsn
     _seed_feed(massive, SESSIONS)
 
-    backfill_module.backfill(_config(dsn, tmp_path), _request(), now=AFTER_CLOSE)
+    backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
 
     assert list(tmp_path.iterdir()) == []
 
@@ -401,7 +398,7 @@ def test_repeated_backfill_preserves_symbol_identity(
     """Republishing the same universe keeps stable ticker IDs instead of renumbering."""
     dsn = pg_migrated_database.owner_dsn
     _seed_feed(massive, SESSIONS)
-    config = _config(dsn, tmp_path)
+    config = _config(dsn)
 
     backfill_module.backfill(config, _request(), now=AFTER_CLOSE)
     first = dict(_rows(dsn, "SELECT symbol, ticker_id FROM market.ticker ORDER BY ticker_id"))
@@ -418,7 +415,7 @@ def test_run_records_versions_and_requested_bounds(pg_migrated_database, tmp_pat
     dsn = pg_migrated_database.owner_dsn
     _seed_feed(massive, SESSIONS)
 
-    result = backfill_module.backfill(_config(dsn, tmp_path), _request(), now=AFTER_CLOSE)
+    result = backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
 
     row = _rows(
         dsn,
@@ -457,7 +454,7 @@ def test_frozen_now_selects_target_and_fetch_scope(  # noqa: PLR0913, PLR0917
     dsn = pg_migrated_database.owner_dsn
     _seed_feed(massive, SESSIONS)
 
-    result = backfill_module.backfill(_config(dsn, tmp_path), _request(), now=now)
+    result = backfill_module.backfill(_config(dsn), _request(), now=now)
 
     assert result.published_session == expected_target
     assert massive.daily_calls == list(expected_calls)
@@ -473,7 +470,7 @@ def test_correction_refetches_explicit_range_including_cached_dates(
 ) -> None:
     """A correction range fetches its every closed date, including cached ones, with no implicit window."""
     dsn = pg_migrated_database.owner_dsn
-    _bootstrap(dsn, tmp_path, massive)
+    _bootstrap(dsn, massive)
     massive.daily_calls.clear()
 
     replacement = [
@@ -486,7 +483,7 @@ def test_correction_refetches_explicit_range_including_cached_dates(
         massive.daily[day] = _daily_records(day)
 
     backfill_module.backfill(
-        _config(dsn, tmp_path),
+        _config(dsn),
         _request(target=SESSION_TARGET, correction_range=(CORRECTION_START, CORRECTION_END)),
         now=AFTER_CLOSE,
     )
@@ -519,7 +516,7 @@ def test_correction_target_must_have_existing_acceptance(
 
     with pytest.raises(PostgresWriterError):
         backfill_module.backfill(
-            _config(dsn, tmp_path),
+            _config(dsn),
             _request(target=SESSION_TARGET, correction_range=(CORRECTION_START, CORRECTION_END)),
             now=AFTER_CLOSE,
         )
@@ -556,14 +553,14 @@ def test_unacceptable_target_preserves_public_generation_and_cached_raw(
 ) -> None:
     """A failed, quarantined, or empty target never replaces the published generation or cached target raw."""
     dsn = pg_migrated_database.owner_dsn
-    run_id = _bootstrap(dsn, tmp_path, massive)
+    run_id = _bootstrap(dsn, massive)
     before = _public_snapshot(dsn)
     target_rows = _rows(dsn, "SELECT * FROM ingest.raw_daily WHERE date = %s ORDER BY ticker_id", (SESSION_TARGET,))
     massive.daily_override = _bad_daily(kind)
     massive.daily_calls.clear()
 
     with pytest.raises(PostgresWriterError):
-        backfill_module.backfill(_config(dsn, tmp_path), _request(), now=AFTER_CLOSE)
+        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
 
     assert _public_snapshot(dsn) == before
     assert (
@@ -601,7 +598,7 @@ def test_middle_session_failure_persists_accepted_raw_but_never_publishes(
     manifest, but nothing is published.
     """
     dsn = pg_migrated_database.owner_dsn
-    _bootstrap(dsn, tmp_path, massive)
+    _bootstrap(dsn, massive)
     before_public = _public_snapshot(dsn)
     before_revision = _cache_revision(dsn)
     failing = SESSIONS[1]
@@ -622,7 +619,7 @@ def test_middle_session_failure_persists_accepted_raw_but_never_publishes(
     massive.daily_calls.clear()
 
     with pytest.raises(PostgresWriterError):
-        backfill_module.backfill(_config(dsn, tmp_path), _request(), now=AFTER_CLOSE)
+        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
 
     assert massive.daily_calls == list(SESSIONS)
     failed_run = _failed_run(dsn)[0]
@@ -661,7 +658,7 @@ def test_initial_empty_split_history_is_valid_and_published(
     _seed_feed(massive, SESSIONS)
     massive.splits = []
 
-    result = backfill_module.backfill(_config(dsn, tmp_path), _request(), now=AFTER_CLOSE)
+    result = backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
 
     assert result.published_session == SESSION_TARGET
     assert _rows(dsn, "SELECT count(*) FROM ingest.split_event") == [(0,)]
@@ -673,13 +670,13 @@ def test_split_removal_blocks_publication(pg_migrated_database, tmp_path, massiv
     """An empty refresh that would delete existing split events is quarantined and blocks publishing."""
     dsn = pg_migrated_database.owner_dsn
     massive.splits = [_split_record(datetime.date(2024, 1, 3))]
-    _bootstrap(dsn, tmp_path, massive)
+    _bootstrap(dsn, massive)
     before = _public_snapshot(dsn)
     assert _rows(dsn, "SELECT count(*) FROM ingest.split_event") == [(1,)]
 
     massive.splits = []
     with pytest.raises(PostgresWriterError):
-        backfill_module.backfill(_config(dsn, tmp_path), _request(), now=AFTER_CLOSE)
+        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
 
     assert _public_snapshot(dsn) == before
     assert _rows(dsn, "SELECT count(*) FROM ingest.split_event") == [(1,)]
@@ -690,14 +687,14 @@ def test_ticker_metadata_shrink_blocks_and_preserves_references(
 ) -> None:
     """A shrinking metadata refresh is quarantined and never deletes existing references."""
     dsn = pg_migrated_database.owner_dsn
-    _bootstrap(dsn, tmp_path, massive)
+    _bootstrap(dsn, massive)
     before = _public_snapshot(dsn)
     assert _rows(dsn, "SELECT count(*) FROM ingest.ticker_reference") == [(2,)]
 
     massive.ticker_override = lambda types: _ticker_records(types)[:1]
 
     with pytest.raises(PostgresWriterError):
-        backfill_module.backfill(_config(dsn, tmp_path), _request(), now=AFTER_CLOSE)
+        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
 
     assert _public_snapshot(dsn) == before
     assert _rows(dsn, "SELECT count(*) FROM ingest.ticker_reference") == [(2,)]
@@ -726,7 +723,7 @@ def test_split_coverage_uses_exact_contiguous_calendar_year_windows(
     known_events = {prior_event, outside_event, future_event}
 
     massive.splits = [_split_record(prior_event)]
-    _bootstrap(dsn, tmp_path, massive)
+    _bootstrap(dsn, massive)
     assert _rows(dsn, "SELECT execution_date FROM ingest.split_event") == [(prior_event,)]
 
     # A real wide-config correction stores an event outside the retained raw
@@ -735,7 +732,7 @@ def test_split_coverage_uses_exact_contiguous_calendar_year_windows(
     massive.daily = correction_days
     massive.splits = [_split_record(day) for day in sorted(known_events)]
     backfill_module.backfill(
-        _config(dsn, tmp_path, start=datetime.date(2023, 1, 3), end=datetime.date(2026, 12, 31)),
+        _config(dsn, start=datetime.date(2023, 1, 3), end=datetime.date(2026, 12, 31)),
         _request(target=SESSION_TARGET, correction_range=(outside_event, datetime.date(2023, 3, 2))),
         now=AFTER_CLOSE,
     )
@@ -749,7 +746,7 @@ def test_split_coverage_uses_exact_contiguous_calendar_year_windows(
     massive.daily = dict(correction_days)
     massive.splits = [_split_record(day) for day in sorted(known_events)]
     massive.split_calls.clear()
-    narrow = _config(dsn, tmp_path, start=outside_event, end=datetime.date(2023, 3, 2))
+    narrow = _config(dsn, start=outside_event, end=datetime.date(2023, 3, 2))
     backfill_module.backfill(
         narrow,
         _request(target=SESSION_TARGET, correction_range=(outside_event, datetime.date(2023, 3, 2))),
@@ -791,7 +788,7 @@ def test_missing_api_key_is_rejected_before_mutation(
 
     with pytest.raises(ValueError, match="MASSIVE_API_KEY"):
         backfill_module.backfill(
-            _config(dsn, tmp_path, api_key=""),
+            _config(dsn, api_key=""),
             _request(),
             now=AFTER_CLOSE,
         )
@@ -805,7 +802,7 @@ def test_naive_now_is_rejected_before_mutation(pg_migrated_database, tmp_path, m
     baseline = _mutation_snapshot(dsn)
 
     with pytest.raises(BackfillError, match="timezone-aware"):
-        backfill_module.backfill(_config(dsn, tmp_path), _request(), now=datetime.datetime(2024, 1, 5, 22, 0))  # noqa: DTZ001
+        backfill_module.backfill(_config(dsn), _request(), now=datetime.datetime(2024, 1, 5, 22, 0))  # noqa: DTZ001
 
     assert _mutation_snapshot(dsn) == baseline
 
@@ -819,7 +816,7 @@ def test_non_date_target_is_rejected_before_mutation(
 
     with pytest.raises(BackfillError, match="target must be a date"):
         backfill_module.backfill(
-            _config(dsn, tmp_path),
+            _config(dsn),
             _request(target=datetime.datetime(2024, 1, 5, tzinfo=UTC)),
             now=AFTER_CLOSE,
         )
@@ -834,7 +831,7 @@ def test_empty_range_is_rejected_before_mutation(pg_migrated_database, tmp_path,
 
     with pytest.raises(BackfillError, match="ordered dates"):
         backfill_module.backfill(
-            _config(dsn, tmp_path, start=SESSION_TARGET, end=SESSION_START),
+            _config(dsn, start=SESSION_TARGET, end=SESSION_START),
             _request(target=SESSION_START),
             now=AFTER_CLOSE,
         )
@@ -850,7 +847,7 @@ def test_batch_size_above_max_is_rejected_before_client_and_writes(
     baseline = _mutation_snapshot(dsn)
 
     with pytest.raises(BackfillError, match="batch size"):
-        backfill_module.backfill(_config(dsn, tmp_path), _request(), now=AFTER_CLOSE, batch_size=1001)
+        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, batch_size=1001)
 
     assert _mutation_snapshot(dsn) == baseline
     assert massive.config is None
@@ -869,7 +866,6 @@ def test_too_many_ticker_types_is_rejected_before_client_and_writes(
     config = Config(
         api_key="test-key",
         database_url=dsn,
-        output_dir=tmp_path,
         start_date=SESSION_START,
         end_date=SESSION_TARGET,
         ticker_types=too_many,
@@ -895,7 +891,7 @@ def test_empty_weekend_correction_is_rejected_instead_of_falling_back_to_full(
 
     with pytest.raises(BackfillError, match="no closed sessions"):
         backfill_module.backfill(
-            _config(dsn, tmp_path),
+            _config(dsn),
             _request(target=SESSION_TARGET, correction_range=(datetime.date(2024, 1, 6), datetime.date(2024, 1, 7))),
             now=AFTER_CLOSE,
         )
@@ -915,7 +911,7 @@ def test_writer_connection_is_idle_while_the_provider_is_fetched(
     _seed_feed(massive, SESSIONS)
     massive.observe_writer = True
 
-    backfill_module.backfill(_config(dsn, tmp_path), _request(), now=AFTER_CLOSE)
+    backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
 
     total_provider_calls = len(massive.daily_calls) + len(massive.split_calls) + len(massive.ticker_calls)
     assert total_provider_calls > len(SESSIONS), "the writer must also stay idle for ticker and split fetches"
@@ -937,7 +933,7 @@ def test_unknown_commit_propagates_without_marking_the_run_failed(
     monkeypatch.setattr(backfill_module, "rebuild_cache", lose_commit)
 
     with pytest.raises(PublicationOutcomeUnknownError) as caught:
-        backfill_module.backfill(_config(dsn, tmp_path), _request(), now=AFTER_CLOSE)
+        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
 
     assert caught.value.run_id is not None
     assert _rows(dsn, "SELECT state, failure_code FROM ingest.run") == [("running", None)]
@@ -957,7 +953,7 @@ def test_second_writer_cannot_acquire_lock_during_fetch(
 
     def run() -> None:
         try:
-            backfill_module.backfill(_config(dsn, tmp_path), _request(), now=AFTER_CLOSE)
+            backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
         except BaseException as error:  # noqa: BLE001
             errors.append(error)
 

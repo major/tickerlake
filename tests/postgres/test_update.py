@@ -19,7 +19,6 @@ from tickerlake.postgres.state import read_cache_state, start_run
 
 if TYPE_CHECKING:
     from datetime import date
-    from pathlib import Path
 
 
 NOW = datetime.datetime(2026, 1, 2, 22, 0, tzinfo=datetime.UTC)
@@ -46,11 +45,10 @@ def _rows(day: date, close: float = 11.0) -> list[dict[str, object]]:
     return [_row(day, symbol, close) for symbol in SYMBOLS]
 
 
-def _config(database_url: str, output_dir: Path, start: date, end: date) -> Config:
+def _config(database_url: str, start: date, end: date) -> Config:
     return Config(
         api_key="test-key",
         database_url=database_url,
-        output_dir=output_dir,
         start_date=start,
         end_date=end,
         ticker_types=["CS"],
@@ -131,13 +129,12 @@ def massive(monkeypatch: pytest.MonkeyPatch) -> FakeMassiveClient:
 
 def _seed_date(
     database_url: str,
-    output_dir: Path,
     massive: FakeMassiveClient,
     day: date,
     close: float = 11.0,
 ) -> None:
     massive.daily = {day: _rows(day, close)}
-    backfill_module.backfill(_config(database_url, output_dir, day, day), _request(day), now=NOW)
+    backfill_module.backfill(_config(database_url, day, day), _request(day), now=NOW)
 
 
 def test_update_refreshes_five_cached_sessions_preserves_gaps_and_retained_bounds(
@@ -149,11 +146,11 @@ def test_update_refreshes_five_cached_sessions_preserves_gaps_and_retained_bound
     omitted = {sessions[-8], sessions[-3]}
     cached = tuple(day for day in sessions if day not in omitted)
     for day in cached:
-        _seed_date(dsn, tmp_path, massive, day)
+        _seed_date(dsn, massive, day)
     retained = _query(dsn, "SELECT retained_start,retained_end FROM ingest.cache_state WHERE singleton=true")[0]
 
     target = sessions[-1]
-    config = _config(dsn, tmp_path, sessions[-10], target)
+    config = _config(dsn, sessions[-10], target)
     # Provider has revised values for cached dates and supplies the uncached
     # dates inside the trailing calendar interval.
     massive.daily = {day: _rows(day, 12.0) for day in sessions}
@@ -187,7 +184,7 @@ def test_rejected_refresh_keeps_publication_but_persists_accepted_neighbor_revis
     dsn = pg_migrated_database.owner_dsn
     sessions = tuple(get_closed_sessions(datetime.date(2024, 1, 2), datetime.date(2024, 1, 17), now=NOW))
     massive.daily = {day: _rows(day) for day in sessions}
-    backfill_module.backfill(_config(dsn, tmp_path, sessions[0], sessions[-1]), _request(sessions[-1]), now=NOW)
+    backfill_module.backfill(_config(dsn, sessions[0], sessions[-1]), _request(sessions[-1]), now=NOW)
     snapshot_before = _public_snapshot(dsn)
     revision_before = _query(dsn, "SELECT input_revision FROM ingest.cache_state WHERE singleton=true")[0][0]
     failed_day = sessions[-3]
@@ -197,7 +194,7 @@ def test_rejected_refresh_keeps_publication_but_persists_accepted_neighbor_revis
     massive.failed_dates = {failed_day}
 
     with pytest.raises(backfill_module.BackfillIncompleteError):
-        backfill_module.update(_config(dsn, tmp_path, sessions[0], sessions[-1]), _update_request(), now=NOW)
+        backfill_module.update(_config(dsn, sessions[0], sessions[-1]), _update_request(), now=NOW)
 
     failed_run = _query(
         dsn, "SELECT run_id,failure_code FROM ingest.run WHERE state='failed' ORDER BY started_at DESC LIMIT 1"
@@ -237,9 +234,7 @@ def test_update_correction_matches_full_rebuild_with_independent_sma(pg_migrated
     assert len(sessions) > SMA_PERIOD
     close_by_day = {day: 20.0 + index / 20 for index, day in enumerate(sessions)}
     massive.daily = {day: _rows(day, close) for day, close in close_by_day.items()}
-    backfill_module.backfill(
-        _config(dsn, tmp_path, sessions[0], sessions[-1]), _request(sessions[-1]), now=NOW, batch_size=37
-    )
+    backfill_module.backfill(_config(dsn, sessions[0], sessions[-1]), _request(sessions[-1]), now=NOW, batch_size=37)
 
     corrected = sessions[-3]
     newly_cached = sessions[-1] + datetime.timedelta(days=1)
@@ -250,7 +245,7 @@ def test_update_correction_matches_full_rebuild_with_independent_sma(pg_migrated
     close_by_day[corrected] = 42.0
     close_by_day[newly_cached] = 31.0
     massive.daily = {day: _rows(day, close) for day, close in close_by_day.items()}
-    config = _config(dsn, tmp_path, sessions[0], newly_cached)
+    config = _config(dsn, sessions[0], newly_cached)
     backfill_module.update(config, _update_request(newly_cached), now=NOW)
 
     active_id = _query(dsn, "SELECT ticker_id FROM market.ticker WHERE symbol='ACTIVE'")[0][0]
