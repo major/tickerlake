@@ -107,6 +107,10 @@ make docker-build IMAGE_REPO=ghcr.io/you/tickerlake IMAGE_TAG=0.1.0
 
 `make docker-push` pushes both the pinned tag and `latest`.
 
+Before running `helm install`, push the built image to your own registry (for
+example `ghcr.io/<you>/tickerlake`), because the chart's default
+`ghcr.io/major/tickerlake` may not be publicly available.
+
 ## Configuration reference
 
 The full set of values is documented inline in `values.yaml` with `# --`
