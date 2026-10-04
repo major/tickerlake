@@ -80,3 +80,44 @@ jobs:
 
       - name: Test PostgreSQL integration
         run: make test-postgres
+
+  helm:
+    name: Helm chart validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Helm
+        uses: azure/setup-helm@916d0e51931c3e90ee43075f5c193e2e49e4b976 # v4.3.1
+        with:
+          version: v3.17.0
+
+      - name: Render Helm templates (defaults)
+        run: |
+          helm template test charts/tickerlake \
+            --set image.repository=ghcr.io/example/tickerlake \
+            --set image.tag=test \
+            --set massive.existingSecret=tickerlake-massive \
+            --set database.clusterName=tickerlake-db > /tmp/render.yaml
+          test -s /tmp/render.yaml
+          grep -q '^kind: CronJob' /tmp/render.yaml
+          grep -q '^kind: ServiceAccount' /tmp/render.yaml
+          # CronJob args must be just [update] (post-cutover CLI has no --output-dir)
+          awk '/^  jobTemplate:/,/^---/' /tmp/render.yaml | grep -q '"update"'
+
+      - name: Lint Helm chart
+        run: helm lint charts/tickerlake --strict
+
+      - name: Verify schema rejects removed subcommands
+        run: |
+          if helm template test charts/tickerlake \
+               --set image.repository=ghcr.io/example/tickerlake \
+               --set image.tag=test \
+               --set massive.existingSecret=tickerlake-massive \
+               --set database.clusterName=tickerlake-db \
+               --set cronjob.command=info > /dev/null 2>&1; then
+            echo "ERROR: schema accepted removed subcommand 'info'" >&2
+            exit 1
+          fi
