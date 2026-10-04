@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING
 
 import psycopg
 import pytest
+import pytest_postgresql.factories
 from psycopg import sql
-from testcontainers.community.postgres import PostgresContainer
 
 from tickerlake.postgres.connection import writer_connection
 from tickerlake.postgres.migrations import apply_migrations
@@ -19,13 +19,23 @@ from tickerlake.postgres.migrations import apply_migrations
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from pytest_postgresql.executors import PostgreSQLExecutor
+
 _DATABASE_NAME = re.compile(r"tickerlake_test_[a-f0-9]{16}\Z")
-_CONTAINER_IMAGE = "docker.io/library/postgres:18"
+_BOOTSTRAP_DATABASE = "postgres"
+
+# pytest-postgresql starts and owns the PostgreSQL cluster for this session. Selecting
+# the always-present maintenance database as the bootstrap target keeps the superuser
+# and admin connections valid for the whole session.
+postgresql_proc = pytest_postgresql.factories.postgresql_proc(
+    dbname=_BOOTSTRAP_DATABASE,
+    password=secrets.token_urlsafe(32),
+)
 
 
 @dataclass(frozen=True)
 class PostgresTestDatabase:
-    """Connections scoped to one fresh container-owned database."""
+    """Connections scoped to one fresh test-owned database."""
 
     name: str
     owner_dsn: str
@@ -36,7 +46,7 @@ class PostgresTestDatabase:
 
 @dataclass(frozen=True)
 class PostgresTestHarness:
-    """Container endpoint and generated role credentials for one pytest session."""
+    """Cluster endpoint and generated role credentials for one pytest session."""
 
     host: str
     port: int
@@ -54,65 +64,60 @@ def pytest_configure() -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def require_owned_postgres_harness() -> Iterator[PostgresTestHarness]:
+def require_owned_postgres_harness(request: pytest.FixtureRequest) -> PostgresTestHarness:
     """Start isolated PostgreSQL only when explicitly requested by the caller."""
     if os.environ.get("TICKERLAKE_TEST_POSTGRES") != "1":
         pytest.skip("set TICKERLAKE_TEST_POSTGRES=1 to run PostgreSQL tests")
 
+    # Resolve the process fixture lazily so the gate above skips before PostgreSQL starts.
+    proc: PostgreSQLExecutor = request.getfixturevalue("postgresql_proc")
+
     credentials = {
-        "postgres": secrets.token_urlsafe(32),
         "owner": secrets.token_urlsafe(32),
         "etl": secrets.token_urlsafe(32),
         "reader": secrets.token_urlsafe(32),
         "admin": secrets.token_urlsafe(32),
     }
-    container = PostgresContainer(
-        _CONTAINER_IMAGE,
-        username="postgres",
-        password=credentials["postgres"],
-        dbname="tickerlake_harness",
-        driver=None,
-    )
+    host = proc.host
+    port = proc.port
+    superuser_dsn = _conninfo(host, port, proc.user, proc.password or "", proc.dbname)
 
-    with container:
-        host = container.get_container_host_ip()
-        port = container.get_exposed_port(5432)
-        admin_dsn = _conninfo(host, port, "postgres", credentials["postgres"], "tickerlake_harness")
-        with psycopg.connect(admin_dsn, autocommit=True) as conn:
-            conn.execute("CREATE ROLE tickerlake_etl NOLOGIN")
-            conn.execute("CREATE ROLE tickerlake_reader NOLOGIN")
-            conn.execute(
-                sql.SQL("CREATE ROLE tickerlake_owner LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB NOCREATEROLE").format(
-                    sql.Literal(credentials["owner"])
-                )
+    with psycopg.connect(superuser_dsn, autocommit=True) as conn:
+        conn.execute("CREATE ROLE tickerlake_etl NOLOGIN")
+        conn.execute("CREATE ROLE tickerlake_reader NOLOGIN")
+        conn.execute(
+            sql.SQL("CREATE ROLE tickerlake_owner LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB NOCREATEROLE").format(
+                sql.Literal(credentials["owner"])
             )
-            conn.execute(
-                sql.SQL(
-                    "CREATE ROLE tickerlake_etl_login LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB NOCREATEROLE "
-                    "IN ROLE tickerlake_etl"
-                ).format(sql.Literal(credentials["etl"]))
-            )
-            conn.execute(
-                sql.SQL(
-                    "CREATE ROLE tickerlake_reader_login LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB NOCREATEROLE "
-                    "IN ROLE tickerlake_reader"
-                ).format(sql.Literal(credentials["reader"]))
-            )
-            conn.execute(
-                sql.SQL("CREATE ROLE tickerlake_test_admin LOGIN PASSWORD {} NOSUPERUSER CREATEDB NOCREATEROLE").format(
-                    sql.Literal(credentials["admin"])
-                )
-            )
-            conn.execute("GRANT tickerlake_owner TO tickerlake_test_admin")
-            conn.execute("GRANT pg_signal_backend TO tickerlake_test_admin")
-        yield PostgresTestHarness(
-            host,
-            port,
-            credentials["owner"],
-            credentials["etl"],
-            credentials["reader"],
-            credentials["admin"],
         )
+        conn.execute(
+            sql.SQL(
+                "CREATE ROLE tickerlake_etl_login LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB NOCREATEROLE "
+                "IN ROLE tickerlake_etl"
+            ).format(sql.Literal(credentials["etl"]))
+        )
+        conn.execute(
+            sql.SQL(
+                "CREATE ROLE tickerlake_reader_login LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB NOCREATEROLE "
+                "IN ROLE tickerlake_reader"
+            ).format(sql.Literal(credentials["reader"]))
+        )
+        conn.execute(
+            sql.SQL("CREATE ROLE tickerlake_test_admin LOGIN PASSWORD {} NOSUPERUSER CREATEDB NOCREATEROLE").format(
+                sql.Literal(credentials["admin"])
+            )
+        )
+        conn.execute("GRANT tickerlake_owner TO tickerlake_test_admin")
+        conn.execute("GRANT pg_signal_backend TO tickerlake_test_admin")
+
+    return PostgresTestHarness(
+        host,
+        port,
+        credentials["owner"],
+        credentials["etl"],
+        credentials["reader"],
+        credentials["admin"],
+    )
 
 
 @pytest.fixture
@@ -133,7 +138,7 @@ def pg_database(require_owned_postgres_harness: PostgresTestHarness) -> Iterator
     owner_dsn = dsn("tickerlake_owner", require_owned_postgres_harness.owner_password)
     etl_dsn = dsn("tickerlake_etl_login", require_owned_postgres_harness.etl_password)
     reader_dsn = dsn("tickerlake_reader_login", require_owned_postgres_harness.reader_password)
-    maintenance_dsn = _conninfo(host, port, "tickerlake_test_admin", admin_password, "tickerlake_harness")
+    maintenance_dsn = _conninfo(host, port, "tickerlake_test_admin", admin_password, _BOOTSTRAP_DATABASE)
 
     with psycopg.connect(maintenance_dsn, autocommit=True) as conn:
         conn.execute(sql.SQL("CREATE DATABASE {} OWNER tickerlake_owner").format(sql.Identifier(name)))

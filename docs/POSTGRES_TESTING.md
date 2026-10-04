@@ -7,47 +7,39 @@ uv sync --locked
 make test-postgres
 ```
 
-The tests run in the host Python environment and use Testcontainers to start
-the official `postgres:18` image. Docker must be available. To use rootless
-Podman instead, configure its API socket and point Testcontainers to it, for
-example:
-
-```sh
-systemctl --user start podman.socket
-export DOCKER_HOST="unix://${XDG_RUNTIME_DIR}/podman/podman.sock"
-```
-
-Testcontainers uses Ryuk to clean up containers. Rootless Podman or restricted
-container environments may prevent Ryuk from starting or connecting. On one
-SELinux-enabled local Docker 29.7.2 setup, Ryuk exited with status 2 and
-Testcontainers reported that its container did not become running. The verified
-workaround there was:
-
-```sh
-TESTCONTAINERS_RYUK_PRIVILEGED=true make test-postgres
-```
-
-This grants Ryuk broader privileges. Use it only with a trusted container
-runtime and trusted images. It is environment-specific, is not needed by default
-in CI, and must not be used as a reason to disable Ryuk.
+pytest-postgresql starts and owns an isolated PostgreSQL cluster for the pytest
+session. It needs the PostgreSQL server binaries (`initdb`, `pg_ctl`, and
+`postgres`) on the host. Install them with `postgresql-server` on Fedora or
+`postgresql` on Debian and Ubuntu.
 
 The script accepts pytest arguments and passes them through. It defaults to two
 xdist workers; use `./scripts/test-postgres.sh -n 0 tests/postgres/` to run
 without xdist. With no arguments, it runs `tests/postgres/ -x --tb=short`.
-PostgreSQL tests remain skipped in the standard test suite unless
-`TICKERLAKE_TEST_POSTGRES=1` is set.
 
-The session fixture starts one isolated PostgreSQL server per xdist worker and
-creates test-only roles. Each test gets a fresh database named with the
-`tickerlake_test_` prefix on its worker's server. `pg_owner_dsn`, `pg_etl_dsn`,
-`pg_reader_dsn`, `pg_admin_dsn`, and `pg_database` are provided by
-`tests/postgres/conftest.py`. `pg_database` contains all four DSNs and the
-database name. `pg_migrated_database` is the explicit fixture for tests that
-need the production schema; ordinary database tests start empty. This fixture
-applies the repository migration set before yielding the database.
+`TICKERLAKE_TEST_POSTGRES=1` is set by `scripts/test-postgres.sh`. PostgreSQL
+tests are skipped during `make test` and `make test-cov` unless this gate is
+set.
 
-Running pytest directly does not connect to PostgreSQL. PostgreSQL tests are
-skipped unless `TICKERLAKE_TEST_POSTGRES=1` is set. This flag only enables the
-container fixture; inherited database URLs or DSNs never select the test
-server. Tests use only the server and credentials created by the
-Testcontainers fixture. Never provide a production database URL to these tests.
+The session fixture in `tests/postgres/conftest.py` starts one isolated
+PostgreSQL server per xdist worker and creates test-only roles. Each test gets a
+fresh database named with the `tickerlake_test_` prefix on its worker's server.
+The following fixtures are provided:
+
+- `pg_owner_dsn`, `pg_etl_dsn`, `pg_reader_dsn`, and `pg_admin_dsn`: one DSN per
+  test role.
+- `pg_database`: a `PostgresTestDatabase` dataclass holding the database name
+  and all four DSNs.
+- `pg_migrated_database`: the explicit fixture for tests that need the
+  production schema; ordinary database tests start empty. It applies the
+  repository migration set before yielding the database.
+
+The `PostgresTestHarness` dataclass holds the cluster endpoint and generated
+role credentials for one pytest session.
+
+CI installs PostgreSQL 18 via the `ankane/setup-postgres@v1` action, and
+pytest-postgresql starts a cluster from those binaries. See
+`.github/workflows/ci.yml`.
+
+Safety note: "Tests use only the server and credentials created by the
+pytest-postgresql fixture. Never provide a production database URL to these
+tests."

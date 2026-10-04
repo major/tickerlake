@@ -73,5 +73,10 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      # zizmor: ignore[unpinned-uses]
+      - uses: ankane/setup-postgres@v1
+        with:
+          postgres-version: '18'
+
       - name: Test PostgreSQL integration
         run: make test-postgres

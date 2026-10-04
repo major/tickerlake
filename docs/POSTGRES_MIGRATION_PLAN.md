@@ -129,7 +129,7 @@ Benchmark representative parameterized screener SQL (filters, sort, limit, ticke
 
 ### Initial cutover
 
-1. Run migrations and backfill validation with host Python pytest using a disposable PostgreSQL 18 Testcontainers container. Do not use or alter a local or live PostgreSQL service for plan validation.
+1. Run migrations and backfill validation with host Python pytest using the disposable PostgreSQL 18 cluster created by pytest-postgresql. Do not use or alter a local or live PostgreSQL service for plan validation.
 2. Bootstrap by fetching the full configured history from Massive into PostgreSQL raw storage. Fetch ticker metadata and splits, seed stable ticker IDs from raw symbols as well as metadata, and record per-date outcomes. Massive usage is unlimited, so do not add a DuckDB import path or compatibility backend for bootstrap.
 3. Transform raw bars and split data with Polars in bounded ticker batches. Validate keys, date coverage, null patterns, finite values, representative daily/weekly/monthly outputs, and source completeness checks before publishing.
 4. Build all public period products and latest session in staging. Initial cutover targets the expected last-closed XNYS session at or before the persisted frozen target, independently of current freshness. Publish only if that target session is validated; otherwise preserve the prior publication. Calendar and vendor metadata do not prove completeness.
@@ -197,7 +197,7 @@ Dependencies: PR 1 defines signatures first; PRs 2 and 3 can then proceed indepe
 
 ## Test matrix
 
-Run tests with host Python pytest. Database-free unit tests do not require Docker. PostgreSQL integration tests and migration checks use a disposable PostgreSQL 18 Testcontainers container. Never run tests against a local or live PostgreSQL service. Pipeline integration tests use real extraction, Polars transformations and calendar logic with that database; fake Massive only at its client boundary. Patch internal functions only for explicit fault injection. Preserve existing focused and golden behavioral protection while adding persistence assertions.
+Run tests with host Python pytest. Database-free unit tests do not require a PostgreSQL server. PostgreSQL integration tests and migration checks use the disposable PostgreSQL 18 cluster created by pytest-postgresql. Never run tests against a local or live PostgreSQL service. Pipeline integration tests use real extraction, Polars transformations and calendar logic with that database; fake Massive only at its client boundary. Patch internal functions only for explicit fault injection. Preserve existing focused and golden behavioral protection while adding persistence assertions.
 
 | Scenario | Required assertion |
 |---|---|
