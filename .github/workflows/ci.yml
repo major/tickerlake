@@ -36,6 +36,9 @@ jobs:
       - name: Format check
         run: make format-check
 
+      - name: Type check
+        run: make typecheck
+
       - name: Complexity
         run: make complexity
 
