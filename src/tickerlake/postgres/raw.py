@@ -139,6 +139,7 @@ def store_daily_outcome(
         raise _invalid()
     try:
         with connection.transaction():
+            manifest_id = None
             if outcome.status == FetchStatus.populated:
                 connection.execute("DROP TABLE IF EXISTS pg_temp.raw_stage")
                 connection.execute(
@@ -180,7 +181,15 @@ def store_daily_outcome(
                 if changed
                 else read_cache_state(connection).input_revision
             )
-            record_fetch_outcome(connection, request, outcome)
+            manifest_id = record_fetch_outcome(connection, request, outcome)
+            if outcome.status == FetchStatus.populated:
+                connection.execute(
+                    """INSERT INTO ingest.raw_session (date, input_revision, manifest_id, row_count)
+                       VALUES (%s, %s, %s, %s)
+                       ON CONFLICT (date) DO UPDATE SET input_revision = EXCLUDED.input_revision,
+                           manifest_id = EXCLUDED.manifest_id, row_count = EXCLUDED.row_count""",
+                    (requested_date, revision, manifest_id, frame.height),
+                )
             return revision
     except PostgresWriterError:
         raise
