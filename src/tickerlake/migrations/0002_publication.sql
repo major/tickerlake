@@ -53,9 +53,6 @@ CREATE TABLE market.publication_state (
     ticker_count bigint NOT NULL CHECK (ticker_count >= 0)
 );
 
-REVOKE ALL ON ingest.raw_session FROM PUBLIC, tickerlake_etl, tickerlake_reader;
-REVOKE ALL ON market.adjusted_daily, market.adjusted_weekly, market.adjusted_monthly,
-    market.latest_daily, market.publication_state FROM PUBLIC, tickerlake_etl, tickerlake_reader;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ingest.raw_session TO tickerlake_etl;
 GRANT SELECT, INSERT, UPDATE, DELETE ON market.adjusted_daily, market.adjusted_weekly,
     market.adjusted_monthly, market.latest_daily, market.publication_state TO tickerlake_etl;
