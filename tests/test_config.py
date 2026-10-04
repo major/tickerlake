@@ -4,7 +4,6 @@ import datetime
 import os
 import traceback
 import types
-from pathlib import Path
 from unittest.mock import patch
 
 import psycopg
@@ -39,9 +38,8 @@ class TestApiKey:
     def test_missing_api_key_allowed(self) -> None:
         """Config() without env var is valid for read-only commands."""
         with patch.dict(os.environ, {}, clear=True):
-            config = Config(output_dir=Path("./relative/path"))
+            config = Config()
         assert config.api_key == ""
-        assert config.output_dir == Path("./relative/path").resolve()
 
 
 class TestDates:
@@ -129,24 +127,6 @@ class TestDates:
             config = Config(start_date=custom_start, end_date=custom_end)
             assert config.start_date == custom_start
             assert config.end_date == custom_end
-
-
-class TestOutputDir:
-    """Test output directory configuration."""
-
-    def test_output_dir_default(self) -> None:
-        """output_dir defaults to current working directory."""
-        with patch.dict(os.environ, {"MASSIVE_API_KEY": "test"}):
-            config = Config()
-            assert config.output_dir == Path.cwd().resolve()
-            assert isinstance(config.output_dir, Path)
-
-    def test_output_dir_absolute(self) -> None:
-        """output_dir is always absolute (resolve relative paths)."""
-        with patch.dict(os.environ, {"MASSIVE_API_KEY": "test"}):
-            config = Config(output_dir=Path("./relative/path"))
-            assert config.output_dir.is_absolute()
-            assert config.output_dir == Path("./relative/path").resolve()
 
 
 class TestDatabaseUrl:

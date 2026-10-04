@@ -90,7 +90,6 @@ def sample_config(tmp_path: Path) -> Config:
     """Build a representative client configuration."""
     return Config(
         api_key="test-api-key",
-        output_dir=tmp_path,
         start_date=datetime.date(2024, 1, 1),
         end_date=datetime.date(2024, 12, 31),
         ticker_types=["CS", "ETF", "ETV", "ETN", "ADRC"],

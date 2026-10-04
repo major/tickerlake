@@ -3,7 +3,6 @@
 import argparse
 import datetime
 import logging
-from pathlib import Path
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -15,6 +14,7 @@ console = Console(stderr=True)
 
 from tickerlake import pipeline  # noqa: E402
 from tickerlake.config import Config  # noqa: E402
+from tickerlake.postgres.backfill import BackfillError  # noqa: E402
 
 
 def _parse_date(s: str) -> datetime.date:
@@ -38,16 +38,8 @@ def _build_parser() -> argparse.ArgumentParser:
     backfill_parser = subparsers.add_parser("backfill", help="Full historical backfill")
     backfill_parser.add_argument("--start-date", type=_parse_date, metavar="YYYY-MM-DD")
     backfill_parser.add_argument("--end-date", type=_parse_date, metavar="YYYY-MM-DD")
-    backfill_parser.add_argument("--output-dir", type=Path, metavar="DIR")
 
-    update_parser = subparsers.add_parser("update", help="Incremental update")
-    update_parser.add_argument("--output-dir", type=Path, metavar="DIR")
-
-    info_parser = subparsers.add_parser("info", help="Show database info")
-    info_parser.add_argument("--output-dir", type=Path, metavar="DIR")
-
-    compact_parser = subparsers.add_parser("compact", help="Rebuild raw.duckdb to reclaim space")
-    compact_parser.add_argument("--output-dir", type=Path, metavar="DIR")
+    subparsers.add_parser("update", help="Incremental update")
 
     return parser
 
@@ -59,16 +51,14 @@ def _make_config(args: argparse.Namespace) -> Config:
         kwargs["start_date"] = args.start_date
     if hasattr(args, "end_date") and args.end_date is not None:
         kwargs["end_date"] = args.end_date
-    if args.output_dir is not None:
-        kwargs["output_dir"] = args.output_dir
     return Config(**kwargs)
 
 
 def _dispatch_etl(parser: argparse.ArgumentParser, config: Config, command: str) -> None:
-    """Dispatch backfill/update to the pipeline, wrapping ValueErrors."""
+    """Dispatch backfill/update to the pipeline, wrapping expected errors."""
     try:
         {"backfill": pipeline.backfill, "update": pipeline.update}[command](config)
-    except ValueError as err:
+    except (ValueError, BackfillError) as err:
         parser.error(str(err))
 
 
@@ -86,7 +76,3 @@ def main() -> None:
 
     if args.command in {"backfill", "update"}:
         _dispatch_etl(parser, config, args.command)
-    elif args.command == "info":
-        pipeline.info(config)
-    elif args.command == "compact":
-        pipeline.compact(config)

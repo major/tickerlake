@@ -3,7 +3,6 @@
 import datetime
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
@@ -28,7 +27,6 @@ class Config:
         api_key: MASSIVE API key (loaded from MASSIVE_API_KEY env var when set;
             may be empty for read-only commands. Massive-backed commands enforce
             the requirement at their own boundary.)
-        output_dir: Directory for output files (defaults to current working directory)
         start_date: Start date for data collection (defaults to 10 years ago)
         end_date: End date for data collection (defaults to today)
         ticker_types: List of ticker types to process (defaults to
@@ -36,7 +34,6 @@ class Config:
     """
 
     api_key: str = field(default="", repr=False)
-    output_dir: Path = field(default_factory=Path.cwd)
     start_date: datetime.date = field(default_factory=_default_start_date)
     end_date: datetime.date = field(default_factory=lambda: datetime.datetime.now(tz=datetime.UTC).date())
     ticker_types: list[str] = field(default_factory=lambda: ["CS", "ETF", "ETV", "ETN", "ADRC"])
@@ -57,4 +54,3 @@ class Config:
             except psycopg.Error:
                 message = "invalid DATABASE_URL"
                 raise ValueError(message) from None
-        self.output_dir = Path(self.output_dir).resolve()

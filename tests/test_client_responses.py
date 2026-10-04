@@ -38,7 +38,7 @@ def response(payload: Any, *, status: int = 200) -> HTTPResponse:
 
 @pytest.fixture
 def client_and_transport(tmp_path: Any) -> tuple[MassiveClient, FakeTransport]:
-    config = Config(api_key="test-key", output_dir=tmp_path)
+    config = Config(api_key="test-key")
     client = MassiveClient(config)
     transport = FakeTransport([])
     client._client.client = transport  # noqa: SLF001
