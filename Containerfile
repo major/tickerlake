@@ -3,20 +3,20 @@
 # tickerlake container image
 #
 # Base images:
-#   Red Hat UBI 9 Python 3.14, pinned to Red Hat's stream tag :1. The builder
-#   uses the full python-314 image and the runtime uses the smaller
-#   python-314-minimal variant.
+#   Red Hat UBI 9 Python 3.14. The builder uses the full python-314 image and
+#   the runtime uses the smaller python-314-minimal variant.
 #
 #   Registry: registry.access.redhat.com is Red Hat's official anonymous
 #   mirror for UBI content, so no Red Hat login is required to pull the base
 #   images. The same content is also published on registry.redhat.io, but that
 #   registry requires a Red Hat account.
 #
-#   Tag: :1 is Red Hat's rolling minor-release stream tag, so the image tracks
-#   the current 9.x microline instead of going EOL when the next microline
-#   ships. The microline tags (:9.8, :9.9, ...) also work but are replaced over
-#   time. For reproducible builds, pin the base images to a digest in
-#   production.
+#   Tag: :9.8 is the current UBI 9 microline as of 2026-10. The full image
+#   also serves the stream tag :1, but the -minimal variant only publishes
+#   microline tags (verified via a HEAD probe against the v2 manifest
+#   endpoint), so both stages use :9.8 to keep their base image in lockstep.
+#   Bump the tag together when upgrading. For reproducible builds, pin the
+#   base images to a digest in production.
 #
 # Build tool:
 #   uv is copied from the official ghcr.io/astral-sh/uv image, pinned to
@@ -43,7 +43,7 @@
 
 FROM ghcr.io/astral-sh/uv:0.12.18 AS uv
 
-FROM registry.access.redhat.com/ubi9/python-314:1 AS builder
+FROM registry.access.redhat.com/ubi9/python-314:9.8 AS builder
 USER root
 COPY --from=uv /uv /uvx /usr/local/bin/
 WORKDIR /build
@@ -58,7 +58,7 @@ ENV PATH="/build/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-FROM registry.access.redhat.com/ubi9/python-314-minimal:1 AS runtime
+FROM registry.access.redhat.com/ubi9/python-314-minimal:9.8 AS runtime
 USER root
 # Create tickerlake with UID/GID 1000 instead of using the image's built-in
 # "default" user (UID 1001). This keeps the Helm chart's runAsUser: 1000
