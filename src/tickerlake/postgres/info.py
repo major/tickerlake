@@ -1,7 +1,8 @@
 """Read-only inspection of the PostgreSQL ingest and market schemas.
 
-The ``info`` command is a diagnostic view: it reads schema names, estimated
-table row counts, the latest publication, and the current cache revision. It
+The ``info`` command is a diagnostic view: it reads schema names, exact table
+row counts via ``count(*)``, the latest publication, and the current cache
+revision. It
 never opens the exclusive writer connection and never mutates state.
 """
 
@@ -46,7 +47,7 @@ _KNOWN_TABLES: Final = (
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TableInfo:
-    """Estimated live row count for one user table."""
+    """Exact row count for one user table, computed via ``count(*)``."""
 
     schema: str
     table_name: str
