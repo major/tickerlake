@@ -62,7 +62,7 @@ def _request(target: date):
 
 
 def _update_request(target: date | None = None):
-    return backfill_module.UpdateRequest(
+    return backfill_module.BackfillRequest(
         code_version="update-test", schema_version="1", transform_version="1", target=target
     )
 
