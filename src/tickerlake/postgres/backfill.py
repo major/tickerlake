@@ -77,16 +77,6 @@ class BackfillRequest:
     correction_range: tuple[datetime.date, datetime.date] | None = None
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class UpdateRequest:
-    """Frozen provenance and optional target for one PostgreSQL update."""
-
-    code_version: str
-    schema_version: str
-    transform_version: str
-    target: datetime.date | None = None
-
-
 class BackfillError(PostgresWriterError):
     """A safe error raised by the PostgreSQL backfill orchestration."""
 
@@ -129,7 +119,7 @@ def _validate_config(config: Config) -> str:
     return database_url
 
 
-def _validate_request(request: BackfillRequest | UpdateRequest, *, now: datetime.datetime, batch_size: int) -> None:
+def _validate_request(request: BackfillRequest, *, now: datetime.datetime, batch_size: int) -> None:
     """Validate frozen provenance, dates, batch size, and the frozen clock."""
     if not isinstance(now, datetime.datetime) or now.tzinfo is None or now.utcoffset() is None:
         raise BackfillError(_SAFE_NOW)
@@ -142,7 +132,7 @@ def _validate_request(request: BackfillRequest | UpdateRequest, *, now: datetime
         raise BackfillError(_SAFE_VERSIONS)
     if request.target is not None and not is_date(request.target):
         raise BackfillError(_SAFE_TARGET)
-    if isinstance(request, BackfillRequest) and request.correction_range is not None:
+    if request.correction_range is not None:
         correction = request.correction_range
         if not isinstance(correction, tuple) or len(correction) != _CORRECTION_PAIR_SIZE:
             raise BackfillError(_SAFE_CORRECTION)
@@ -153,7 +143,7 @@ def _validate_request(request: BackfillRequest | UpdateRequest, *, now: datetime
 
 def _selected_dates(
     config: Config,
-    request: BackfillRequest | UpdateRequest,
+    request: BackfillRequest,
     target: datetime.date,
     *,
     now: datetime.datetime,
@@ -164,7 +154,7 @@ def _selected_dates(
     configured history or the resolved target, and an empty correction stays
     empty even when the configured range has sessions.
     """
-    correction = request.correction_range if isinstance(request, BackfillRequest) else None
+    correction = request.correction_range
     if correction is not None:
         start, end = correction
         return get_closed_sessions(start, end, now=now)
@@ -175,14 +165,14 @@ def _selected_dates(
 
 def _split_bounds(
     config: Config,
-    request: BackfillRequest | UpdateRequest,
+    request: BackfillRequest,
     target: datetime.date,
     connection: psycopg.Connection,
 ) -> tuple[datetime.date, datetime.date]:
     """Union configured, requested, target, retained raw, and stored split bounds."""
     starts: list[datetime.date] = [config.start_date, config.end_date, target]
     ends: list[datetime.date] = [config.start_date, config.end_date, target]
-    if isinstance(request, BackfillRequest) and request.correction_range is not None:
+    if request.correction_range is not None:
         start, end = request.correction_range
         starts.append(start)
         ends.append(end)
@@ -287,7 +277,7 @@ def _store_splits(
 
 def _fetch_reference_and_publish(
     config: Config,
-    request: BackfillRequest | UpdateRequest,
+    request: BackfillRequest,
     context: tuple[psycopg.Connection, MassiveClient],
     scope: tuple[list[datetime.date], datetime.date],
     *,
@@ -363,7 +353,7 @@ def backfill(
 
 def update(
     config: Config,
-    request: UpdateRequest,
+    request: BackfillRequest,
     *,
     now: datetime.datetime,
     batch_size: int = 100,

@@ -6,12 +6,14 @@ import datetime
 import logging
 from typing import TYPE_CHECKING
 
-from tickerlake.postgres.backfill import BackfillRequest, UpdateRequest
+from tickerlake.postgres.backfill import BackfillRequest
 from tickerlake.postgres.backfill import backfill as postgres_backfill
 from tickerlake.postgres.backfill import update as postgres_update
 from tickerlake.postgres.info import collect_info
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from tickerlake.config import Config
     from tickerlake.postgres.publication import PublicationResult
 
@@ -34,7 +36,7 @@ def _require_api_key(config: Config) -> None:
 def _log_run_summary(
     action: str,
     config: Config,
-    request: BackfillRequest | UpdateRequest,
+    request: BackfillRequest,
     result: PublicationResult,
 ) -> None:
     """Log the run target and published cache state after a postgres run."""
@@ -49,28 +51,32 @@ def _log_run_summary(
     )
 
 
-def backfill(config: Config) -> None:
-    """Run a full backfill through the PostgreSQL backend."""
-    _require_api_key(config)
+def _run(
+    config: Config,
+    *,
+    action: str,
+    runner: Callable[..., PublicationResult],
+) -> None:
+    """Run a postgres-backed action and log the summary."""
     request = BackfillRequest(
         code_version=_CODE_VERSION,
         schema_version=_SCHEMA_VERSION,
         transform_version=_TRANSFORM_VERSION,
     )
-    result = postgres_backfill(config, request, now=datetime.datetime.now(tz=datetime.UTC))
-    _log_run_summary("Backfill", config, request, result)
+    result = runner(config, request, now=datetime.datetime.now(tz=datetime.UTC))
+    _log_run_summary(action, config, request, result)
+
+
+def backfill(config: Config) -> None:
+    """Run a full backfill through the PostgreSQL backend."""
+    _require_api_key(config)
+    _run(config, action="Backfill", runner=postgres_backfill)
 
 
 def update(config: Config) -> None:
     """Refresh recent revisions through the PostgreSQL backend."""
     _require_api_key(config)
-    request = UpdateRequest(
-        code_version=_CODE_VERSION,
-        schema_version=_SCHEMA_VERSION,
-        transform_version=_TRANSFORM_VERSION,
-    )
-    result = postgres_update(config, request, now=datetime.datetime.now(tz=datetime.UTC))
-    _log_run_summary("Update", config, request, result)
+    _run(config, action="Update", runner=postgres_update)
 
 
 def info(config: Config) -> None:
