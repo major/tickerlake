@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 #
 # tickerlake container image
 #
@@ -41,9 +41,9 @@
 #   (runAsUser, runAsGroup, runAsNonRoot). ENTRYPOINT is the tickerlake
 #   binary; the subcommand (backfill or update) is supplied as an argument.
 
-FROM ghcr.io/astral-sh/uv:0.12.18 AS uv
+FROM ghcr.io/astral-sh/uv:0.12.18@sha256:3adc3706091ce7c2fe595e669628caedd6d951551b92b258b7e7dbe06d9440bc AS uv
 
-FROM registry.access.redhat.com/ubi9/python-314:9.8 AS builder
+FROM registry.access.redhat.com/ubi9/python-314:9.8@sha256:28f564643c2fe7d4607562f1f4057f162654316f9226530a34925a792edf2263 AS builder
 USER root
 COPY --from=uv /uv /uvx /usr/local/bin/
 WORKDIR /build
@@ -58,7 +58,7 @@ ENV PATH="/build/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-FROM registry.access.redhat.com/ubi9/python-314-minimal:9.8 AS runtime
+FROM registry.access.redhat.com/ubi9/python-314-minimal:9.8@sha256:e54394f1363659f28a9cde6e7467a0a16fd16d67c27416304ccc51e046655ba0 AS runtime
 USER root
 # Create tickerlake with UID/GID 1000 instead of using the image's built-in
 # "default" user (UID 1001). This keeps the Helm chart's runAsUser: 1000
