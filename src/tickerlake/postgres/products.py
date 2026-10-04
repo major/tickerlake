@@ -18,18 +18,7 @@ from tickerlake.transform import (
     adjust_splits,
     aggregate_to_monthly,
     aggregate_to_weekly,
-    compute_metrics,
 )
-
-_METRIC_SCHEMA = {
-    "sma_20": pl.Float32,
-    "sma_50": pl.Float32,
-    "sma_200": pl.Float32,
-    "atr_14": pl.Float32,
-    "atr_pct": pl.Float32,
-    "adr_pct": pl.Float32,
-    "volume_sma_20": pl.Float64,
-}
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -81,7 +70,6 @@ def _empty(
     base_schema: Mapping[str, pl.DataType | type[pl.DataType]],
 ) -> pl.DataFrame:
     fields = {"ticker_id": pl.Int32, **base_schema}
-    fields.update(_METRIC_SCHEMA)
     fields = {name: fields[name] for name in columns}
     return pl.DataFrame(schema=fields)
 
@@ -143,21 +131,13 @@ def build_products(
     if duplicate_bars:
         raise ValueError("Duplicate")
     _finite_outputs(adjusted)
-    metrics = compute_metrics(adjusted)
-    daily = _with_ticker_ids(adjusted.join(metrics, on=["ticker", "date"], how="inner", validate="1:1"), identity_rows)
+    daily = _with_ticker_ids(adjusted, identity_rows)
     weekly = _with_ticker_ids(
         aggregate_to_weekly(adjusted, collection_start=collection_start, target=target), identity_rows
     )
     monthly = _with_ticker_ids(
         aggregate_to_monthly(adjusted, collection_start=collection_start, target=target), identity_rows
     )
-    for period_name, period_frame in (("weekly", weekly), ("monthly", monthly)):
-        period_metrics = compute_metrics(period_frame.rename({"ticker_id": "ticker"})).rename({"ticker": "ticker_id"})
-        measured_frame = period_frame.join(period_metrics, on=["ticker_id", "date"], how="inner", validate="1:1")
-        if period_name == "weekly":
-            weekly = measured_frame
-        else:
-            monthly = measured_frame
     for result in (daily, weekly, monthly):
         _finite_outputs(result)
     return ProductBatch(

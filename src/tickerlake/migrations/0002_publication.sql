@@ -13,8 +13,6 @@ CREATE TABLE market.adjusted_daily (
     date date NOT NULL,
     open real NOT NULL, high real NOT NULL, low real NOT NULL, close real NOT NULL,
     volume double precision NOT NULL, transactions bigint NOT NULL,
-    sma_20 real, sma_50 real, sma_200 real, atr_14 real, atr_pct real, adr_pct real,
-    volume_sma_20 double precision,
     PRIMARY KEY (ticker_id, date),
     CHECK (open NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
     CHECK (high NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
@@ -23,22 +21,13 @@ CREATE TABLE market.adjusted_daily (
     CHECK (volume NOT IN ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision) AND volume >= 0),
     CHECK (transactions >= 0),
     CHECK (high >= open AND high >= close AND high >= low),
-    CHECK (low <= open AND low <= close AND low <= high),
-    CHECK (sma_20 IS NULL OR sma_20 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (sma_50 IS NULL OR sma_50 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (sma_200 IS NULL OR sma_200 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (atr_14 IS NULL OR atr_14 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (atr_pct IS NULL OR atr_pct NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (adr_pct IS NULL OR adr_pct NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (volume_sma_20 IS NULL OR (volume_sma_20 NOT IN ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision) AND volume_sma_20 >= 0))
+    CHECK (low <= open AND low <= close AND low <= high)
 );
 CREATE TABLE market.adjusted_weekly (
     ticker_id integer NOT NULL REFERENCES market.ticker(ticker_id),
     date date NOT NULL,
     open real NOT NULL, high real NOT NULL, low real NOT NULL, close real NOT NULL,
     volume double precision NOT NULL, transactions bigint NOT NULL,
-    sma_20 real, sma_50 real, sma_200 real, atr_14 real, atr_pct real, adr_pct real,
-    volume_sma_20 double precision,
     left_truncated boolean NOT NULL, calendar_closed boolean NOT NULL,
     PRIMARY KEY (ticker_id, date),
     CHECK (open NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
@@ -48,22 +37,13 @@ CREATE TABLE market.adjusted_weekly (
     CHECK (volume NOT IN ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision) AND volume >= 0),
     CHECK (transactions >= 0),
     CHECK (high >= open AND high >= close AND high >= low),
-    CHECK (low <= open AND low <= close AND low <= high),
-    CHECK (sma_20 IS NULL OR sma_20 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (sma_50 IS NULL OR sma_50 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (sma_200 IS NULL OR sma_200 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (atr_14 IS NULL OR atr_14 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (atr_pct IS NULL OR atr_pct NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (adr_pct IS NULL OR adr_pct NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (volume_sma_20 IS NULL OR (volume_sma_20 NOT IN ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision) AND volume_sma_20 >= 0))
+    CHECK (low <= open AND low <= close AND low <= high)
 );
 CREATE TABLE market.adjusted_monthly (
     ticker_id integer NOT NULL REFERENCES market.ticker(ticker_id),
     date date NOT NULL,
     open real NOT NULL, high real NOT NULL, low real NOT NULL, close real NOT NULL,
     volume double precision NOT NULL, transactions bigint NOT NULL,
-    sma_20 real, sma_50 real, sma_200 real, atr_14 real, atr_pct real, adr_pct real,
-    volume_sma_20 double precision,
     left_truncated boolean NOT NULL, calendar_closed boolean NOT NULL,
     PRIMARY KEY (ticker_id, date),
     CHECK (open NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
@@ -73,14 +53,7 @@ CREATE TABLE market.adjusted_monthly (
     CHECK (volume NOT IN ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision) AND volume >= 0),
     CHECK (transactions >= 0),
     CHECK (high >= open AND high >= close AND high >= low),
-    CHECK (low <= open AND low <= close AND low <= high),
-    CHECK (sma_20 IS NULL OR sma_20 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (sma_50 IS NULL OR sma_50 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (sma_200 IS NULL OR sma_200 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (atr_14 IS NULL OR atr_14 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (atr_pct IS NULL OR atr_pct NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (adr_pct IS NULL OR adr_pct NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (volume_sma_20 IS NULL OR (volume_sma_20 NOT IN ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision) AND volume_sma_20 >= 0))
+    CHECK (low <= open AND low <= close AND low <= high)
 );
 
 CREATE TABLE market.latest_daily (
@@ -88,8 +61,6 @@ CREATE TABLE market.latest_daily (
     date date NOT NULL,
     open real NOT NULL, high real NOT NULL, low real NOT NULL, close real NOT NULL,
     volume double precision NOT NULL, transactions bigint NOT NULL,
-    sma_20 real, sma_50 real, sma_200 real, atr_14 real, atr_pct real, adr_pct real,
-    volume_sma_20 double precision,
     CHECK (open NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
     CHECK (high NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
     CHECK (low NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
@@ -97,14 +68,7 @@ CREATE TABLE market.latest_daily (
     CHECK (volume NOT IN ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision) AND volume >= 0),
     CHECK (transactions >= 0),
     CHECK (high >= open AND high >= close AND high >= low),
-    CHECK (low <= open AND low <= close AND low <= high),
-    CHECK (sma_20 IS NULL OR sma_20 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (sma_50 IS NULL OR sma_50 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (sma_200 IS NULL OR sma_200 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (atr_14 IS NULL OR atr_14 NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (atr_pct IS NULL OR atr_pct NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (adr_pct IS NULL OR adr_pct NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (volume_sma_20 IS NULL OR (volume_sma_20 NOT IN ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision) AND volume_sma_20 >= 0))
+    CHECK (low <= open AND low <= close AND low <= high)
 );
 
 CREATE TABLE market.publication_state (

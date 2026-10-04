@@ -93,13 +93,6 @@ def test_schema_contract_and_access_grants(pg_owner_dsn: str, pg_etl_dsn: str, p
             ("close", "real", "NO"),
             ("volume", "double precision", "NO"),
             ("transactions", "bigint", "NO"),
-            ("sma_20", "real", "YES"),
-            ("sma_50", "real", "YES"),
-            ("sma_200", "real", "YES"),
-            ("atr_14", "real", "YES"),
-            ("atr_pct", "real", "YES"),
-            ("adr_pct", "real", "YES"),
-            ("volume_sma_20", "double precision", "YES"),
         ]
         for table in ("adjusted_daily", "adjusted_weekly", "adjusted_monthly", "latest_daily"):
             columns = connection.execute(
@@ -310,9 +303,6 @@ def test_invalid_raw_values_and_split_nullsafe_natural_key_are_rejected(pg_owner
         ("high", "'Infinity'::real"),
         ("volume", "-1::double precision"),
         ("transactions", "-1"),
-        ("sma_20", "'NaN'::real"),
-        ("atr_pct", "'Infinity'::real"),
-        ("volume_sma_20", "-1::double precision"),
     ],
 )
 def test_adjusted_products_reject_invalid_numeric_values(pg_owner_dsn: str, column: str, value: str) -> None:

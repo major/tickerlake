@@ -23,7 +23,6 @@ if TYPE_CHECKING:
 
 NOW = datetime.datetime(2026, 1, 2, 22, 0, tzinfo=datetime.UTC)
 SYMBOLS = ("ACTIVE", "INACTIVE")
-SMA_PERIOD = 200
 
 
 def _row(day: date, symbol: str, close: float = 11.0) -> dict[str, object]:
@@ -226,11 +225,10 @@ def test_rejected_refresh_keeps_publication_but_persists_accepted_neighbor_revis
     )
 
 
-def test_update_correction_matches_full_rebuild_with_independent_sma(pg_migrated_database, tmp_path, massive) -> None:
+def test_update_correction_matches_full_rebuild(pg_migrated_database, tmp_path, massive) -> None:
     """Refresh a trailing correction, then prove the published products match a fresh rebuild."""
     dsn = pg_migrated_database.owner_dsn
     sessions = tuple(get_closed_sessions(datetime.date(2023, 1, 3), datetime.date(2023, 10, 31), now=NOW))
-    assert len(sessions) > SMA_PERIOD
     close_by_day = {day: 20.0 + index / 20 for index, day in enumerate(sessions)}
     massive.daily = {day: _rows(day, close) for day, close in close_by_day.items()}
     backfill_module.backfill(_config(dsn, sessions[0], sessions[-1]), _request(sessions[-1]), now=NOW, batch_size=37)
@@ -260,17 +258,13 @@ def test_update_correction_matches_full_rebuild_with_independent_sma(pg_migrated
     ) == [(31.0,)]
     rows = _query(
         dsn,
-        "SELECT date,sma_200 FROM market.adjusted_daily WHERE ticker_id=%s ORDER BY date",
+        "SELECT date, close FROM market.adjusted_daily WHERE ticker_id=%s ORDER BY date",
         (active_id,),
     )
     expected_closes = [close_by_day[day] for day in (*sessions, newly_cached)]
-    expected_sma = [None] * (SMA_PERIOD - 1) + [
-        sum(expected_closes[index - SMA_PERIOD + 1 : index + 1]) / SMA_PERIOD
-        for index in range(SMA_PERIOD - 1, len(expected_closes))
-    ]
     assert [row[0] for row in rows] == [*sessions, newly_cached]
-    for (_, actual), expected in zip(rows, expected_sma, strict=True):
-        assert actual == pytest.approx(expected) if expected is not None else actual is None
+    for (_, actual), expected in zip(rows, expected_closes, strict=True):
+        assert actual == pytest.approx(expected)
 
     product_queries = {
         "daily": "SELECT * FROM market.adjusted_daily ORDER BY ticker_id,date",
