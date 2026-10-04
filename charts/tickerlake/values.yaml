@@ -42,10 +42,12 @@ massive:
 
 # -- CronJob schedule and behavior.
 cronjob:
-  # -- Cron schedule. Default is 22:30 UTC Monday to Friday, after the US close.
-  schedule: "30 22 * * 1-5"
-  # -- Time zone for the schedule (Kubernetes 1.27+).
-  timezone: "UTC"
+  # -- Cron schedule. Default is 8:00 PM America/New_York Monday to Friday,
+  # -- after the US market close.
+  schedule: "0 20 * * 1-5"
+  # -- Time zone for the schedule (Kubernetes 1.27+). "America/New_York"
+  # -- follows US Eastern Time with automatic DST handling.
+  timezone: "America/New_York"
   # -- Concurrency policy. Allow | Forbid | Replace.
   concurrencyPolicy: Forbid
   # -- Suspend the CronJob without deleting it.

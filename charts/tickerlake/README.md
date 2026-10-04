@@ -4,9 +4,10 @@ A Helm chart that runs the [tickerlake](https://github.com/major/tickerlake) US
 equity market ETL as a Kubernetes CronJob. The chart connects to a Postgres
 database owned by an existing CloudNativePG (CNPG) Cluster.
 
-The job runs the `update` subcommand on a schedule (22:30 UTC Monday to Friday
-by default, after the US market close) and refreshes the trailing revision
-window. You can override the subcommand to `backfill` for a first-time load.
+The job runs the `update` subcommand on a schedule (8:00 PM America/New_York
+Monday to Friday by default, after the US market close) and refreshes the
+trailing revision window. You can override the subcommand to `backfill` for a
+first-time load.
 
 ## Prerequisites
 
@@ -106,8 +107,8 @@ Key values:
 | `image.repository` | tickerlake container image repository (required) | `""` |
 | `image.tag` | Image tag; falls back to `.Chart.AppVersion` | `""` |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
-| `cronjob.schedule` | Cron schedule | `30 22 * * 1-5` |
-| `cronjob.timezone` | Cron time zone | `UTC` |
+| `cronjob.schedule` | Cron schedule | `0 20 * * 1-5` |
+| `cronjob.timezone` | Cron time zone | `America/New_York` |
 | `cronjob.command` | Subcommand to run (`update`, `backfill`, `info`, `compact`) | `update` |
 | `cronjob.outputDir` | Output directory inside the pod | `/data` |
 | `cronjob.concurrencyPolicy` | `Allow`, `Forbid`, or `Replace` | `Forbid` |
