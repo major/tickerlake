@@ -528,13 +528,10 @@ def publish_staged(connection: psycopg.Connection, context: BuildContext) -> Pub
             _validate_stages(connection, context)
             connection.execute(
                 """UPDATE market.ticker t SET name=i.name,ticker_type=i.ticker_type,
-                     primary_exchange=i.primary_exchange,cik=i.cik,active=i.active,
-                     screen_eligible=(i.active IS TRUE AND i.ticker_type=ANY(%s))
+                     primary_exchange=i.primary_exchange,cik=i.cik,active=i.active
                    FROM pg_temp.publication_ticker_stage i WHERE t.ticker_id=i.ticker_id
-                     AND ROW(t.name,t.ticker_type,t.primary_exchange,t.cik,t.active,t.screen_eligible)
-                         IS DISTINCT FROM ROW(i.name,i.ticker_type,i.primary_exchange,i.cik,i.active,
-                           (i.active IS TRUE AND i.ticker_type=ANY(%s)))""",
-                (list(context.ticker_types), list(context.ticker_types)),
+                     AND ROW(t.name,t.ticker_type,t.primary_exchange,t.cik,t.active)
+                         IS DISTINCT FROM ROW(i.name,i.ticker_type,i.primary_exchange,i.cik,i.active)""",
             )
             for kind, table in PUBLICATION_TABLES.items():
                 _publish_kind(connection, kind, table, context)

@@ -14,9 +14,7 @@ CREATE TABLE market.ticker (
     ticker_type text,
     primary_exchange text,
     cik text,
-    active boolean,
-    screen_eligible boolean NOT NULL DEFAULT false,
-    CONSTRAINT ticker_eligibility_requires_active CHECK (NOT screen_eligible OR active IS TRUE)
+    active boolean
 );
 
 CREATE TABLE ingest.raw_daily (
