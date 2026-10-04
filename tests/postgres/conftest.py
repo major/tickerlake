@@ -19,6 +19,8 @@ from tickerlake.postgres.migrations import apply_migrations
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from pytest_postgresql.executors import PostgreSQLExecutor
+
 _DATABASE_NAME = re.compile(r"tickerlake_test_[a-f0-9]{16}\Z")
 _BOOTSTRAP_DATABASE = "postgres"
 
@@ -68,7 +70,7 @@ def require_owned_postgres_harness(request: pytest.FixtureRequest) -> PostgresTe
         pytest.skip("set TICKERLAKE_TEST_POSTGRES=1 to run PostgreSQL tests")
 
     # Resolve the process fixture lazily so the gate above skips before PostgreSQL starts.
-    proc = request.getfixturevalue("postgresql_proc")
+    proc: PostgreSQLExecutor = request.getfixturevalue("postgresql_proc")
 
     credentials = {
         "owner": secrets.token_urlsafe(32),

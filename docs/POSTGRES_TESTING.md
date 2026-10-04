@@ -36,9 +36,9 @@ The following fixtures are provided:
 The `PostgresTestHarness` dataclass holds the cluster endpoint and generated
 role credentials for one pytest session.
 
-CI runs the PostgreSQL integration tests on GitHub Actions via
-`services: postgres:18` plus an apt step that installs the PostgreSQL server
-binaries so pytest-postgresql can use them. See `.github/workflows/ci.yml`.
+CI installs PostgreSQL 18 via the `ankane/setup-postgres@v1` action, and
+pytest-postgresql starts a cluster from those binaries. See
+`.github/workflows/ci.yml`.
 
 Safety note: "Tests use only the server and credentials created by the
 pytest-postgresql fixture. Never provide a production database URL to these
