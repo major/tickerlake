@@ -54,7 +54,8 @@ def _value(record: Any, key: str) -> Any:
 def _frame(rows: list[dict[str, Any]], schema: Mapping[str, Any]) -> pl.DataFrame:
     if not rows:
         return pl.DataFrame(schema=schema)
-    return pl.DataFrame(rows).cast(schema)  # ty: ignore[invalid-argument-type]
+    frame = pl.DataFrame(rows).cast(schema)  # ty: ignore[invalid-argument-type]
+    return frame.select(list(schema))
 
 
 def _canonical_finite(frame: pl.DataFrame, columns: tuple[str, ...]) -> bool:

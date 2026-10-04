@@ -268,6 +268,69 @@ def test_ticker_rows_keep_all_fields_and_schema():
     ]
 
 
+def test_ticker_frame_uses_canonical_column_order_regardless_of_source_key_order():
+    """Canonical ticker output must match schema order even when source keys are shuffled."""
+    shuffled = {
+        "active": True,
+        "cik": "0000320193",
+        "primary_exchange": "XNAS",
+        "type": "CS",
+        "name": "Apple Inc.",
+        "ticker": "AAPL",
+    }
+    client = MagicMock()
+    client.fetch_tickers.return_value = [
+        shuffled,
+        {"active": None, "ticker": "MSFT"},
+    ]
+    result = extract_tickers(client, ["CS"])
+    assert result.status is FetchStatus.populated
+    assert result.frame.columns == list(TICKER_SCHEMA)
+    assert dict(result.frame.schema) == TICKER_SCHEMA
+    assert result.frame.select("ticker", "name", "cik").rows() == [
+        ("AAPL", "Apple Inc.", "0000320193"),
+        ("MSFT", None, None),
+    ]
+
+
+def test_daily_and_split_frames_use_canonical_column_order():
+    """Daily and split frames keep schema column order for reordered or optional source fields."""
+    bars = MagicMock()
+    bars.fetch_daily_aggs.return_value = [
+        {
+            "vwap": 185.2,
+            "transactions": 25,
+            "volume": 1000.0,
+            "close": 185.5,
+            "low": 184.0,
+            "high": 186.0,
+            "open": 185.0,
+            "timestamp": 1704153600000,
+            "ticker": "AAPL",
+        }
+    ]
+    daily = extract_daily_aggs(bars, [DAY])[0]
+    assert daily.status is FetchStatus.populated
+    assert daily.frame.columns == list(DAILY_SCHEMA)
+    assert dict(daily.frame.schema) == DAILY_SCHEMA
+
+    splits = MagicMock()
+    splits.fetch_splits.return_value = [
+        {
+            "adjustment_type": None,
+            "historical_adjustment_factor": 4.0,
+            "split_to": 4.0,
+            "split_from": 1.0,
+            "execution_date": "2024-08-31",
+            "ticker": "AAPL",
+        }
+    ]
+    split_result = extract_splits(splits, datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
+    assert split_result.status is FetchStatus.populated
+    assert split_result.frame.columns == list(SPLIT_SCHEMA)
+    assert dict(split_result.frame.schema) == SPLIT_SCHEMA
+
+
 def test_nullable_optional_sdk_fields_can_be_absent():
     """Accept absent optional VWAP and ticker name/CIK fields from SDK records."""
     bars = MagicMock()

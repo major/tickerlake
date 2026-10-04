@@ -11,12 +11,23 @@ from tickerlake.postgres.migrations import apply_migrations
 from tickerlake.postgres.reading import (
     read_raw_date,
     read_raw_history,
+    read_split_bounds,
     read_split_history,
+    read_split_range,
     read_ticker_batch,
     read_ticker_reference,
 )
 
 _TWO_ROWS = 2
+_SPLIT_COLUMNS = ["ticker", "execution_date", "split_from", "split_to", "adjustment_factor", "adjustment_type"]
+_SPLIT_SCHEMA = {
+    "ticker": pl.String,
+    "execution_date": pl.Date,
+    "split_from": pl.Float32,
+    "split_to": pl.Float32,
+    "adjustment_factor": pl.Float64,
+    "adjustment_type": pl.String,
+}
 
 
 def _migrate(database: object) -> None:
@@ -142,3 +153,101 @@ def test_invalid_page_limits_are_rejected(pg_migrated_database: object, limit: i
     """Reject page limits outside the bounded page size."""
     with psycopg.connect(pg_migrated_database.etl_dsn) as conn, pytest.raises(PostgresWriterError):
         read_ticker_batch(conn, limit=limit)
+
+
+def test_split_bounds_report_none_without_stored_splits(pg_migrated_database: object) -> None:
+    """Report an empty split storage as two null bounds."""
+    with psycopg.connect(pg_migrated_database.etl_dsn) as conn:
+        assert read_split_bounds(conn) == (None, None)
+
+
+def test_split_bounds_report_earliest_and_latest_dates(pg_migrated_database: object) -> None:
+    """Report the minimum and maximum stored execution dates."""
+    _seed(pg_migrated_database)
+    with psycopg.connect(pg_migrated_database.etl_dsn) as conn:
+        assert read_split_bounds(conn) == (datetime.date(2025, 1, 3), datetime.date(2025, 1, 4))
+
+
+def test_split_range_treats_endpoint_dates_as_inclusive(pg_migrated_database: object) -> None:
+    """Include splits stored exactly on either range endpoint."""
+    _seed(pg_migrated_database)
+    with psycopg.connect(pg_migrated_database.etl_dsn) as conn:
+        early = read_split_range(conn, datetime.date(2025, 1, 1), datetime.date(2025, 1, 3))
+        assert early.get_column("ticker").to_list() == ["AAA"]
+        late = read_split_range(conn, datetime.date(2025, 1, 4), datetime.date(2025, 1, 6))
+        assert late.get_column("ticker").to_list() == ["BBB"]
+        both = read_split_range(conn, datetime.date(2025, 1, 3), datetime.date(2025, 1, 4))
+        assert both.get_column("ticker").to_list() == ["AAA", "BBB"]
+        single = read_split_range(conn, datetime.date(2025, 1, 3), datetime.date(2025, 1, 3))
+        assert single.get_column("ticker").to_list() == ["AAA"]
+
+
+def test_split_range_without_stored_splits_is_typed_empty(pg_migrated_database: object) -> None:
+    """Return a canonical empty frame for a window with no stored splits."""
+    _seed(pg_migrated_database)
+    with psycopg.connect(pg_migrated_database.etl_dsn) as conn:
+        frame = read_split_range(conn, datetime.date(2025, 3, 1), datetime.date(2025, 3, 31))
+        assert frame.is_empty()
+        assert frame.columns == _SPLIT_COLUMNS
+        assert frame.schema == _SPLIT_SCHEMA
+
+
+def test_split_range_orders_by_symbol_date_and_stored_identity(pg_migrated_database: object) -> None:
+    """Order splits by symbol, execution date, then stored split identity."""
+    first, second = _seed(pg_migrated_database)
+    with psycopg.connect(pg_migrated_database.etl_dsn) as conn:
+        conn.execute(
+            "INSERT INTO ingest.split_event (ticker_id, execution_date, split_from, split_to, adjustment_factor) "
+            "VALUES (%s, %s, 3, 1, 0.333333333333)",
+            (first, datetime.date(2025, 1, 3)),
+        )
+        conn.execute(
+            "INSERT INTO ingest.split_event (ticker_id, execution_date, split_from, split_to, adjustment_factor) "
+            "VALUES (%s, %s, 4, 2, 0.5)",
+            (second, datetime.date(2025, 1, 3)),
+        )
+        conn.commit()
+    with psycopg.connect(pg_migrated_database.etl_dsn) as conn:
+        frame = read_split_range(conn, datetime.date(2025, 1, 3), datetime.date(2025, 1, 4))
+        assert frame.columns == _SPLIT_COLUMNS
+        assert frame.schema == _SPLIT_SCHEMA
+        assert frame.rows() == [
+            ("AAA", datetime.date(2025, 1, 3), 2.0, 1.0, 0.5, None),
+            ("AAA", datetime.date(2025, 1, 3), 3.0, 1.0, 0.333333333333, None),
+            ("BBB", datetime.date(2025, 1, 3), 4.0, 2.0, 0.5, None),
+            ("BBB", datetime.date(2025, 1, 4), 3.0, 1.0, 0.333333333333, None),
+        ]
+
+
+def test_split_range_includes_inactive_and_unreferenced_symbols(pg_migrated_database: object) -> None:
+    """Include splits for inactive or reference-less tickers without an activity filter."""
+    _seed(pg_migrated_database)
+    with psycopg.connect(pg_migrated_database.etl_dsn) as conn:
+        inactive = conn.execute(
+            "INSERT INTO market.ticker (symbol, active) VALUES ('CCC', false) RETURNING ticker_id"
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO ingest.split_event (ticker_id, execution_date, split_from, split_to, adjustment_factor) "
+            "VALUES (%s, %s, 4, 1, 0.25)",
+            (inactive, datetime.date(2025, 1, 3)),
+        )
+        conn.commit()
+    with psycopg.connect(pg_migrated_database.etl_dsn) as conn:
+        frame = read_split_range(conn, datetime.date(2025, 1, 3), datetime.date(2025, 1, 3))
+        assert frame.get_column("ticker").to_list() == ["AAA", "CCC"]
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        (datetime.date(2025, 1, 4), datetime.date(2025, 1, 3)),
+        (datetime.datetime(2025, 1, 3, 12, 0, tzinfo=datetime.UTC), datetime.date(2025, 1, 4)),
+        (datetime.date(2025, 1, 3), "2025-01-04"),
+    ],
+)
+def test_invalid_split_ranges_are_rejected(
+    pg_migrated_database: object, start: datetime.date, end: datetime.date
+) -> None:
+    """Reject reversed ranges and non-date bounds."""
+    with psycopg.connect(pg_migrated_database.etl_dsn) as conn, pytest.raises(PostgresWriterError):
+        read_split_range(conn, start, end)
