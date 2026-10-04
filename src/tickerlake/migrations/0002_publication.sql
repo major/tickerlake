@@ -48,7 +48,7 @@ CREATE TABLE market.latest_daily (
 );
 
 CREATE TABLE market.publication_state (
-    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    publication_state_id integer PRIMARY KEY DEFAULT 1 CHECK (publication_state_id = 1),
     published_session date NOT NULL,
     published_at timestamptz NOT NULL,
     run_id uuid NOT NULL REFERENCES ingest.run(run_id),

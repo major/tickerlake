@@ -114,7 +114,7 @@ def _verify_staged_context(connection: psycopg.Connection, context: BuildContext
     try:
         row = connection.execute(
             """SELECT run_id,input_revision,retained_start,retained_end,target_session,ticker_types
-               FROM pg_temp.publication_context WHERE singleton=true"""
+               FROM pg_temp.publication_context WHERE context_id=1"""
         ).fetchone()
     except psycopg.Error:
         raise PostgresWriterError(_CONTEXT_MISMATCH) from None
@@ -148,7 +148,7 @@ def prepare_publication(
     row = connection.execute(
         """SELECT r.target_date, r.input_revision, c.input_revision, c.retained_start, c.retained_end
            FROM ingest.run r CROSS JOIN ingest.cache_state c
-           WHERE r.run_id = %s AND r.state = 'running' AND c.singleton = true""",
+           WHERE r.run_id = %s AND r.state = 'running' AND c.cache_state_id = 1""",
         (run_id,),
     ).fetchone()
     if row is None or row[1] is None or row[1] != row[2]:
@@ -186,7 +186,7 @@ def prepare_publication(
         )
         connection.execute(
             """CREATE TEMP TABLE publication_context (
-                   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+                   context_id integer PRIMARY KEY DEFAULT 1 CHECK (context_id = 1),
                    run_id uuid NOT NULL, input_revision bigint NOT NULL,
                    retained_start date, retained_end date, target_session date NOT NULL,
                    ticker_types text[] NOT NULL
@@ -194,8 +194,8 @@ def prepare_publication(
         )
         connection.execute(
             """INSERT INTO pg_temp.publication_context
-               (singleton,run_id,input_revision,retained_start,retained_end,target_session,ticker_types)
-               VALUES (true,%s,%s,%s,%s,%s,%s)""",
+               (context_id,run_id,input_revision,retained_start,retained_end,target_session,ticker_types)
+               VALUES (1,%s,%s,%s,%s,%s,%s)""",
             (run_id, revision, retained_start, retained_end, target, list(types)),
         )
         for kind, name in _STAGES.items():
@@ -399,7 +399,7 @@ def _commit_is_known_rollback(connection: psycopg.Connection, run_id: UUID) -> b
         require_writer_connection(connection)
         row = connection.execute(
             """SELECT r.state,p.run_id FROM ingest.run r
-               LEFT JOIN market.publication_state p ON p.singleton=true
+               LEFT JOIN market.publication_state p ON p.publication_state_id=1
                WHERE r.run_id=%s""",
             (run_id,),
         ).fetchone()
@@ -412,7 +412,7 @@ def _verify_run_state(connection: psycopg.Connection, context: BuildContext) -> 
     """Validate the locked cache, run, and accepted raw session state."""
     row = connection.execute(
         """SELECT c.input_revision, r.input_revision, r.state, r.target_date FROM ingest.cache_state c
-           JOIN ingest.run r ON r.run_id=%s WHERE c.singleton=true FOR UPDATE OF c,r""",
+           JOIN ingest.run r ON r.run_id=%s WHERE c.cache_state_id=1 FOR UPDATE OF c,r""",
         (context.run_id,),
     ).fetchone()
     accepted = connection.execute(
@@ -504,9 +504,9 @@ def _record_publication(connection: psycopg.Connection, context: BuildContext) -
     """Record the publication marker and mark the run as published."""
     count = connection.execute("SELECT count(*) FROM pg_temp.publication_scope WHERE complete").fetchone()
     connection.execute(
-        """INSERT INTO market.publication_state(singleton,published_session,published_at,run_id,ticker_count)
-           VALUES(true,%s,statement_timestamp(),%s,%s)
-           ON CONFLICT(singleton) DO UPDATE SET published_session=EXCLUDED.published_session,
+        """INSERT INTO market.publication_state(publication_state_id,published_session,published_at,run_id,ticker_count)
+           VALUES(1,%s,statement_timestamp(),%s,%s)
+           ON CONFLICT(publication_state_id) DO UPDATE SET published_session=EXCLUDED.published_session,
              published_at=EXCLUDED.published_at,run_id=EXCLUDED.run_id,ticker_count=EXCLUDED.ticker_count""",
         (context.target_session, context.run_id, count[0] if count else 0),
     )
@@ -559,7 +559,9 @@ def resolve_publication(database_url: str, run_id: UUID) -> PublicationResolutio
             ).fetchone()
             if run is None:
                 raise PublicationOutcomeUnknown(run_id)
-            marker = connection.execute("SELECT run_id FROM market.publication_state WHERE singleton=true").fetchone()
+            marker = connection.execute(
+                "SELECT run_id FROM market.publication_state WHERE publication_state_id=1"
+            ).fetchone()
             return PublicationResolution(
                 published=run[0] == "published", is_current=bool(marker and marker[0] == run_id)
             )

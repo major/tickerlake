@@ -55,15 +55,15 @@ CREATE TABLE ingest.split_event (
 );
 
 CREATE TABLE ingest.cache_state (
-    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    cache_state_id integer PRIMARY KEY DEFAULT 1 CHECK (cache_state_id = 1),
     input_revision bigint NOT NULL DEFAULT 0 CHECK (input_revision >= 0),
     retained_start date,
     retained_end date,
     CHECK ((retained_start IS NULL) = (retained_end IS NULL)),
     CHECK (retained_start IS NULL OR retained_start <= retained_end)
 );
-INSERT INTO ingest.cache_state (singleton, input_revision, retained_start, retained_end)
-VALUES (true, 0, NULL, NULL);
+INSERT INTO ingest.cache_state (cache_state_id, input_revision, retained_start, retained_end)
+VALUES (1, 0, NULL, NULL);
 
 CREATE TABLE ingest.run (
     run_id uuid PRIMARY KEY,
