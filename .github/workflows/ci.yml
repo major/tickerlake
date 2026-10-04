@@ -58,6 +58,20 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -72,6 +86,15 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --locked
+
+      - name: Install PostgreSQL server for pytest-postgresql
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql postgresql-contrib
+          PG_BIN="$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -n 1)"
+          echo "PG_BIN=${PG_BIN}" >> "$GITHUB_ENV"
+          echo "${PG_BIN}" >> "$GITHUB_PATH"
+          echo "PYTEST_POSTGRESQL_EXECUTABLE=${PG_BIN}/postgres" >> "$GITHUB_ENV"
 
       - name: Test PostgreSQL integration
         run: make test-postgres
