@@ -6,9 +6,6 @@ from typing import Literal
 import polars as pl
 
 from tickerlake.calendar import period_session_bounds
-from tickerlake.extract import DAILY_AGGS_SCHEMA
-
-PRICE_COLUMNS = ("open", "high", "low", "close", "vwap")
 
 
 def adjust_splits(bars: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
@@ -39,7 +36,10 @@ def adjust_splits(bars: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
     )
 
     adjusted = joined.with_columns(
-        [(pl.col(column).cast(pl.Float64) * factor).cast(pl.Float32).alias(column) for column in PRICE_COLUMNS]
+        [
+            (pl.col(column).cast(pl.Float64) * factor).cast(pl.Float32).alias(column)
+            for column in ("open", "high", "low", "close")
+        ]
         + [(pl.col("volume").cast(pl.Float64) / factor).alias("volume")]
     )
     if adjusted.filter(pl.col("volume").is_not_null() & ~pl.col("volume").is_finite()).height:
@@ -163,7 +163,18 @@ def compute_metrics(bars: pl.DataFrame) -> pl.DataFrame:
     return metrics
 
 
-PERIOD_AGGS_SCHEMA = DAILY_AGGS_SCHEMA | {"left_truncated": pl.Boolean, "calendar_closed": pl.Boolean}
+PERIOD_AGGS_SCHEMA = {
+    "date": pl.Date,
+    "ticker": pl.Utf8,
+    "open": pl.Float32,
+    "high": pl.Float32,
+    "low": pl.Float32,
+    "close": pl.Float32,
+    "volume": pl.Float64,
+    "transactions": pl.Int64,
+    "left_truncated": pl.Boolean,
+    "calendar_closed": pl.Boolean,
+}
 
 
 def _aggregate_to_period(
@@ -215,21 +226,6 @@ def _aggregate_to_period(
                 pl.col("low").min().cast(pl.Float32).alias("low"),
                 pl.col("close").sort_by("date").last().cast(pl.Float32).alias("close"),
                 pl.col("volume").cast(pl.Float64).sum().alias("volume"),
-                pl.when(
-                    ((pl.col("volume") > 0) & pl.col("vwap").is_null()).any()
-                    | (pl.col("volume").cast(pl.Float64).sum() == 0)
-                )
-                .then(None)
-                .otherwise(
-                    pl.when(pl.col("volume") > 0)
-                    .then(
-                        (pl.col("volume").cast(pl.Float64) / pl.col("volume").cast(pl.Float64).sum())
-                        * pl.col("vwap").cast(pl.Float64)
-                    )
-                    .sum()
-                )
-                .cast(pl.Float32)
-                .alias("vwap"),
                 pl.col("transactions").cast(pl.Decimal(precision=38, scale=0)).sum().alias("transactions"),
                 pl.col("date").max().alias("period_date"),
             ]

@@ -41,15 +41,15 @@ def _seed(database: object) -> tuple[int, int]:
         first = conn.execute("INSERT INTO market.ticker (symbol) VALUES ('AAA') RETURNING ticker_id").fetchone()[0]
         second = conn.execute("INSERT INTO market.ticker (symbol) VALUES ('BBB') RETURNING ticker_id").fetchone()[0]
         conn.execute(
-            "INSERT INTO ingest.raw_daily VALUES (%s, %s, 1, 2, 1, 2, NULL, 10, 3)",
+            "INSERT INTO ingest.raw_daily VALUES (%s, %s, 1, 2, 1, 2, 10, 3)",
             (datetime.date(2025, 1, 2), first),
         )
         conn.execute(
-            "INSERT INTO ingest.raw_daily VALUES (%s, %s, 1, 2, 1, 2, 11, 1.5, 4)",
+            "INSERT INTO ingest.raw_daily VALUES (%s, %s, 1, 2, 1, 2, 1.5, 4)",
             (datetime.date(2025, 1, 3), first),
         )
         conn.execute(
-            "INSERT INTO ingest.raw_daily VALUES (%s, %s, 5, 7, 5, 6, NULL, 30, 2)",
+            "INSERT INTO ingest.raw_daily VALUES (%s, %s, 5, 7, 5, 6, 30, 2)",
             (datetime.date(2025, 1, 2), second),
         )
         conn.execute(
@@ -84,7 +84,7 @@ def test_reads_return_canonical_data_in_stable_order(pg_migrated_database: objec
         assert read_ticker_batch(conn, after_id=first).get_column("ticker_id").to_list() == [second]
 
         daily = read_raw_date(conn, datetime.date(2025, 1, 2))
-        assert daily.columns == ["date", "ticker", "open", "high", "low", "close", "volume", "vwap", "transactions"]
+        assert daily.columns == ["date", "ticker", "open", "high", "low", "close", "volume", "transactions"]
         assert daily.schema == {
             "date": pl.Date,
             "ticker": pl.String,
@@ -93,19 +93,18 @@ def test_reads_return_canonical_data_in_stable_order(pg_migrated_database: objec
             "low": pl.Float32,
             "close": pl.Float32,
             "volume": pl.Float64,
-            "vwap": pl.Float32,
             "transactions": pl.Int64,
         }
         assert daily.rows() == [
-            (datetime.date(2025, 1, 2), "AAA", 1.0, 2.0, 1.0, 2.0, 10.0, None, 3),
-            (datetime.date(2025, 1, 2), "BBB", 5.0, 7.0, 5.0, 6.0, 30.0, None, 2),
+            (datetime.date(2025, 1, 2), "AAA", 1.0, 2.0, 1.0, 2.0, 10.0, 3),
+            (datetime.date(2025, 1, 2), "BBB", 5.0, 7.0, 5.0, 6.0, 30.0, 2),
         ]
 
         history = read_raw_history(conn, [first])
         assert history.schema == daily.schema
         assert history.rows() == [
-            (datetime.date(2025, 1, 2), "AAA", 1.0, 2.0, 1.0, 2.0, 10.0, None, 3),
-            (datetime.date(2025, 1, 3), "AAA", 1.0, 2.0, 1.0, 2.0, 1.5, 11.0, 4),
+            (datetime.date(2025, 1, 2), "AAA", 1.0, 2.0, 1.0, 2.0, 10.0, 3),
+            (datetime.date(2025, 1, 3), "AAA", 1.0, 2.0, 1.0, 2.0, 1.5, 4),
         ]
 
         splits = read_split_history(conn, [first])

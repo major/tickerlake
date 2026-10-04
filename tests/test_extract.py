@@ -25,7 +25,6 @@ DAILY_SCHEMA = {
     "low": pl.Float32,
     "close": pl.Float32,
     "volume": pl.Float64,
-    "vwap": pl.Float32,
     "transactions": pl.Int64,
 }
 SPLIT_SCHEMA = {
@@ -70,7 +69,6 @@ def agg(**updates):
         "low": 184.0,
         "close": 185.5,
         "volume": 1000.0,
-        "vwap": 185.2,
         "transactions": 25,
     }
     row.update(updates)
@@ -121,7 +119,6 @@ def test_daily_rows_keep_sdk_values_and_date():
             "low": 184.0,
             "close": 185.5,
             "volume": 1000.0,
-            "vwap": pytest.approx(185.2, abs=0.0001),
             "transactions": 25,
         }
     ]
@@ -184,7 +181,6 @@ def test_daily_reference_shrink_quarantines_without_arbitrary_threshold():
             "low": [1.0, 1.0],
             "close": [1.0, 1.0],
             "volume": [1.0, 1.0],
-            "vwap": [None, None],
             "transactions": [1, 1],
         },
         schema=DAILY_SCHEMA,
@@ -298,7 +294,6 @@ def test_daily_and_split_frames_use_canonical_column_order():
     bars = MagicMock()
     bars.fetch_daily_aggs.return_value = [
         {
-            "vwap": 185.2,
             "transactions": 25,
             "volume": 1000.0,
             "close": 185.5,
@@ -332,12 +327,7 @@ def test_daily_and_split_frames_use_canonical_column_order():
 
 
 def test_nullable_optional_sdk_fields_can_be_absent():
-    """Accept absent optional VWAP and ticker name/CIK fields from SDK records."""
-    bars = MagicMock()
-    bars.fetch_daily_aggs.return_value = [Record({key: value for key, value in agg().values.items() if key != "vwap"})]
-    bar_result = extract_daily_aggs(bars, [DAY])[0]
-    assert bar_result.status is FetchStatus.populated
-    assert bar_result.frame["vwap"].to_list() == [None]
+    """Accept absent optional ticker name/CIK fields from SDK records."""
     tickers = MagicMock()
     tickers.fetch_tickers.return_value = [
         Record({key: value for key, value in ticker().values.items() if key not in {"name", "cik"}})
@@ -490,27 +480,6 @@ def test_daily_unrepresentable_or_missing_required_values_are_quarantined(update
     result = extract_daily_aggs(client, [DAY])[0]
     assert result.status is FetchStatus.quarantined
     assert result.frame.is_empty()
-
-
-def test_daily_nullable_vwap_and_dictionary_records_are_supported():
-    """Accept legitimate nullable VWAP on mapping-based SDK responses."""
-    client = MagicMock()
-    client.fetch_daily_aggs.return_value = [
-        {
-            "ticker": "AAPL",
-            "timestamp": 1704153600000,
-            "open": 185.0,
-            "high": 186.0,
-            "low": 184.0,
-            "close": 185.5,
-            "volume": 1000.0,
-            "vwap": None,
-            "transactions": 25,
-        }
-    ]
-    result = extract_daily_aggs(client, [DAY])[0]
-    assert result.status is FetchStatus.populated
-    assert result.frame["vwap"].to_list() == [None]
 
 
 def test_ticker_previous_symbol_removal_is_quarantined():

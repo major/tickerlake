@@ -37,7 +37,6 @@ def _outcome(status: FetchStatus = FetchStatus.populated, day: date = DAY) -> Fe
                 "high": 11.0,
                 "low": 8.0,
                 "close": 10.0,
-                "vwap": None,
                 "volume": 100.0,
                 "transactions": 3,
             }

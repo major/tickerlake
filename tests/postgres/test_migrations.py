@@ -67,7 +67,6 @@ def test_schema_contract_and_access_grants(pg_owner_dsn: str, pg_etl_dsn: str, p
             ("high", "real", "NO"),
             ("low", "real", "NO"),
             ("close", "real", "NO"),
-            ("vwap", "real", "YES"),
             ("volume", "double precision", "NO"),
             ("transactions", "bigint", "NO"),
         ]
@@ -92,7 +91,6 @@ def test_schema_contract_and_access_grants(pg_owner_dsn: str, pg_etl_dsn: str, p
             ("high", "real", "NO"),
             ("low", "real", "NO"),
             ("close", "real", "NO"),
-            ("vwap", "real", "YES"),
             ("volume", "double precision", "NO"),
             ("transactions", "bigint", "NO"),
             ("sma_20", "real", "YES"),
@@ -293,8 +291,8 @@ def test_invalid_raw_values_and_split_nullsafe_natural_key_are_rejected(pg_owner
             "INSERT INTO market.ticker (symbol) VALUES ('TST') RETURNING ticker_id"
         ).fetchone()[0]
         raw_insert = """INSERT INTO ingest.raw_daily
-            (date, ticker_id, open, high, low, close, vwap, volume, transactions)
-            VALUES ('2025-01-02', %s, 1, 1, 2, 1, NULL, 0, 0)"""
+            (date, ticker_id, open, high, low, close, volume, transactions)
+            VALUES ('2025-01-02', %s, 1, 1, 2, 1, 0, 0)"""
         with pytest.raises(psycopg.errors.CheckViolation):
             connection.execute(raw_insert, (ticker_id,))
         split_insert = """INSERT INTO ingest.split_event
@@ -310,7 +308,6 @@ def test_invalid_raw_values_and_split_nullsafe_natural_key_are_rejected(pg_owner
     [
         ("open", "'NaN'::real"),
         ("high", "'Infinity'::real"),
-        ("vwap", "'-Infinity'::real"),
         ("volume", "-1::double precision"),
         ("transactions", "-1"),
         ("sma_20", "'NaN'::real"),
