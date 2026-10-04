@@ -58,7 +58,7 @@ ENV PATH="/build/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-FROM registry.access.redhat.com/ubi9/python-314-minimal:9.8@sha256:e54394f1363659f28a9cde6e7467a0a16fd16d67c27416304ccc51e046655ba0 AS runtime
+FROM registry.access.redhat.com/ubi9/python-314-minimal:9.8-1790838707@sha256:e54394f1363659f28a9cde6e7467a0a16fd16d67c27416304ccc51e046655ba0 AS runtime
 USER root
 # Create tickerlake with UID/GID 1000 instead of using the image's built-in
 # "default" user (UID 1001). This keeps the Helm chart's runAsUser: 1000
