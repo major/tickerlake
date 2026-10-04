@@ -180,11 +180,10 @@ def store_daily_outcome(
             manifest_id = record_fetch_outcome(connection, request, outcome)
             if outcome.status == FetchStatus.populated:
                 connection.execute(
-                    """INSERT INTO ingest.raw_session (date, input_revision, manifest_id, row_count)
-                       VALUES (%s, %s, %s, %s)
-                       ON CONFLICT (date) DO UPDATE SET input_revision = EXCLUDED.input_revision,
-                           manifest_id = EXCLUDED.manifest_id, row_count = EXCLUDED.row_count""",
-                    (requested_date, revision, manifest_id, frame.height),
+                    """INSERT INTO ingest.raw_session (date, manifest_id)
+                       VALUES (%s, %s)
+                       ON CONFLICT (date) DO UPDATE SET manifest_id = EXCLUDED.manifest_id""",
+                    (requested_date, manifest_id),
                 )
             return revision
     except PostgresWriterError:

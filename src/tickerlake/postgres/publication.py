@@ -157,10 +157,10 @@ def prepare_publication(
     accepted = connection.execute(
         """SELECT 1 FROM ingest.raw_session s
            JOIN ingest.fetch_manifest m USING (manifest_id)
-           WHERE s.date = %s AND s.input_revision <= %s AND s.row_count > 0
-             AND m.source = 'daily' AND m.status = 'populated' AND m.row_count = s.row_count
+           WHERE s.date = %s
+             AND m.source = 'daily' AND m.status = 'populated'
              AND m.requested_date = s.date""",
-        (target, revision),
+        (target,),
     ).fetchone()
     if accepted is None:
         raise PostgresWriterError(_TARGET_UNACCEPTED)
@@ -382,12 +382,12 @@ def _validate_stages(connection: psycopg.Connection, context: BuildContext) -> N
     _require_key_match(connection, "publication_monthly_stage", monthly, (start, end, start, end))
     _validate_staged_metadata(connection)
     target_rows = connection.execute(
-        """SELECT count(*), s.row_count FROM ingest.raw_daily r
+        """SELECT count(*) FROM ingest.raw_daily r
            JOIN ingest.raw_session s ON s.date=r.date
-           WHERE r.date=%s GROUP BY s.row_count""",
+           WHERE r.date=%s""",
         (context.target_session,),
     ).fetchone()
-    if target_rows is None or target_rows[0] <= 0 or target_rows[0] != target_rows[1]:
+    if target_rows is None or target_rows[0] <= 0:
         _fail()
 
 
@@ -417,9 +417,9 @@ def _verify_run_state(connection: psycopg.Connection, context: BuildContext) -> 
     ).fetchone()
     accepted = connection.execute(
         """SELECT 1 FROM ingest.raw_session s JOIN ingest.fetch_manifest m USING(manifest_id)
-           WHERE s.date=%s AND s.input_revision<=%s AND s.row_count>0 AND m.status='populated'
-             AND m.source='daily' AND m.requested_date=s.date AND m.row_count=s.row_count""",
-        (context.target_session, context.input_revision),
+           WHERE s.date=%s AND m.status='populated'
+             AND m.source='daily' AND m.requested_date=s.date""",
+        (context.target_session,),
     ).fetchone()
     if (
         row is None

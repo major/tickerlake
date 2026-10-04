@@ -3,9 +3,7 @@ CREATE INDEX split_event_ticker_idx ON ingest.split_event (ticker_id);
 
 CREATE TABLE ingest.raw_session (
     date date PRIMARY KEY,
-    input_revision bigint NOT NULL CHECK (input_revision >= 0),
-    manifest_id bigint NOT NULL REFERENCES ingest.fetch_manifest(manifest_id),
-    row_count bigint NOT NULL CHECK (row_count > 0)
+    manifest_id bigint NOT NULL REFERENCES ingest.fetch_manifest(manifest_id)
 );
 
 CREATE TABLE market.adjusted_daily (
