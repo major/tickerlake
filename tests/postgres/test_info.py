@@ -57,25 +57,26 @@ def _seed(dsn: str) -> object:
                VALUES (true, %s, now(), %s, %s)""",
             (datetime.date(2024, 1, 5), run_id, 1),
         )
-        connection.executemany(
-            """INSERT INTO ingest.raw_daily
-               (date, ticker_id, open, high, low, close, vwap, volume, transactions)
-               VALUES (%s, %s, 10, 12, 9, 11, 10.5, 100, 5)""",
-            [
-                (datetime.date(2024, 1, 2), ticker_id),
-                (datetime.date(2024, 1, 3), ticker_id),
-                (datetime.date(2024, 1, 4), ticker_id),
-            ],
-        )
-        connection.executemany(
-            """INSERT INTO ingest.split_event
-               (ticker_id, execution_date, split_from, split_to, adjustment_factor, adjustment_type)
-               VALUES (%s, %s, 2, 1, 0.5, 'split')""",
-            [
-                (ticker_id, datetime.date(2024, 1, 3)),
-                (ticker_id, datetime.date(2024, 1, 4)),
-            ],
-        )
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                """INSERT INTO ingest.raw_daily
+                   (date, ticker_id, open, high, low, close, vwap, volume, transactions)
+                   VALUES (%s, %s, 10, 12, 9, 11, 10.5, 100, 5)""",
+                [
+                    (datetime.date(2024, 1, 2), ticker_id),
+                    (datetime.date(2024, 1, 3), ticker_id),
+                    (datetime.date(2024, 1, 4), ticker_id),
+                ],
+            )
+            cursor.executemany(
+                """INSERT INTO ingest.split_event
+                   (ticker_id, execution_date, split_from, split_to, adjustment_factor, adjustment_type)
+                   VALUES (%s, %s, 2, 1, 0.5, 'split')""",
+                [
+                    (ticker_id, datetime.date(2024, 1, 3)),
+                    (ticker_id, datetime.date(2024, 1, 4)),
+                ],
+            )
         connection.execute("ANALYZE")
     return run_id
 
