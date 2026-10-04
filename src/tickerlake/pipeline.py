@@ -20,10 +20,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Provenance recorded on every PostgreSQL run. The DuckDB pipeline did not track
-# versions, so seed placeholder values until real version tracking lands.
-_CODE_VERSION = "tickerlake"
-_SCHEMA_VERSION = "1"
-_TRANSFORM_VERSION = "1"
+# versions, so seed a placeholder value until real version tracking lands.
+_VERSION = "tickerlake"
 
 
 def _require_api_key(config: Config) -> None:
@@ -58,11 +56,7 @@ def _run(
     runner: Callable[..., PublicationResult],
 ) -> None:
     """Run a postgres-backed action and log the summary."""
-    request = BackfillRequest(
-        code_version=_CODE_VERSION,
-        schema_version=_SCHEMA_VERSION,
-        transform_version=_TRANSFORM_VERSION,
-    )
+    request = BackfillRequest(version=_VERSION)
     result = runner(config, request, now=datetime.datetime.now(tz=datetime.UTC))
     _log_run_summary(action, config, request, result)
 

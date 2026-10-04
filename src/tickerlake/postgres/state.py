@@ -118,10 +118,7 @@ def start_run(connection: psycopg.Connection, spec: RunSpec) -> UUID:
     require_writer_connection(connection)
     if not is_date(spec.target) or not _valid_range(spec.requested_start, spec.requested_end, optional=True):
         raise PostgresWriterError("Invalid PostgreSQL run date range")
-    if any(
-        not isinstance(value, str) or not value.strip()
-        for value in (spec.code_version, spec.schema_version, spec.transform_version)
-    ):
+    if not isinstance(spec.version, str) or not spec.version.strip():
         raise PostgresWriterError("Invalid PostgreSQL run version")
     run_id = uuid4()
     try:
@@ -132,17 +129,15 @@ def start_run(connection: psycopg.Connection, spec: RunSpec) -> UUID:
             connection.execute(
                 """INSERT INTO ingest.run
                    (run_id, target_date, requested_start, requested_end, input_revision,
-                    code_version, schema_version, transform_version, state, started_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'running', now())""",
+                    version, state, started_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, 'running', now())""",
                 (
                     run_id,
                     spec.target,
                     spec.requested_start,
                     spec.requested_end,
                     row[0],
-                    spec.code_version,
-                    spec.schema_version,
-                    spec.transform_version,
+                    spec.version,
                 ),
             )
     except psycopg.Error:

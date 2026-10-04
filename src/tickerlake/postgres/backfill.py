@@ -70,9 +70,7 @@ _MAX_BATCH_SIZE: Final = 1000
 class BackfillRequest:
     """Frozen provenance and optional scope for one PostgreSQL backfill."""
 
-    code_version: str
-    schema_version: str
-    transform_version: str
+    version: str
     target: datetime.date | None = None
     correction_range: tuple[datetime.date, datetime.date] | None = None
 
@@ -125,10 +123,7 @@ def _validate_request(request: BackfillRequest, *, now: datetime.datetime, batch
         raise BackfillError(_SAFE_NOW)
     if type(batch_size) is not int or not 1 <= batch_size <= _MAX_BATCH_SIZE:
         raise BackfillError(_SAFE_BATCH)
-    if any(
-        not isinstance(value, str) or not value.strip()
-        for value in (request.code_version, request.schema_version, request.transform_version)
-    ):
+    if not isinstance(request.version, str) or not request.version.strip():
         raise BackfillError(_SAFE_VERSIONS)
     if request.target is not None and not is_date(request.target):
         raise BackfillError(_SAFE_TARGET)
@@ -290,9 +285,7 @@ def _fetch_reference_and_publish(
         target=target,
         requested_start=selected[0],
         requested_end=selected[-1],
-        code_version=request.code_version,
-        schema_version=request.schema_version,
-        transform_version=request.transform_version,
+        version=request.version,
     )
     run_id = start_run(connection, spec)
     try:
