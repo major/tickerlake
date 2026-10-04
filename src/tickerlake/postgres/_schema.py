@@ -6,6 +6,8 @@ so drift between caller modules produces a single, easy-to-find edit site.
 
 from __future__ import annotations
 
+from typing import LiteralString
+
 # Product columns. BASE_COLUMNS are common to daily, weekly, and monthly.
 # PERIOD_COLUMNS adds the two flags that only exist on weekly/monthly rolls.
 BASE_COLUMNS: tuple[str, ...] = (
@@ -41,3 +43,14 @@ PUBLICATION_TABLES: dict[str, str] = {
     "weekly": "market.adjusted_weekly",
     "monthly": "market.adjusted_monthly",
 }
+
+# SQL fragments used by publication._validate_product_stage to build the per-kind
+# SQL literal. PERIOD_TRUNC_SQL wraps the bound :lower parameter in a date_trunc
+# function appropriate for the kind. PERIOD_FLAG_NULL_CHECK is the extra null check
+# appended for non-daily kinds (daily has no left_truncated/calendar_closed flags).
+PERIOD_TRUNC_SQL: dict[str, LiteralString] = {
+    "daily": "%s",
+    "weekly": "date_trunc('week', %s)::date",
+    "monthly": "date_trunc('month', %s)::date",
+}
+PERIOD_FLAG_NULL_CHECK: LiteralString = " OR left_truncated IS NULL OR calendar_closed IS NULL"

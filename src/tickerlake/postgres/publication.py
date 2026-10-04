@@ -12,6 +12,8 @@ from psycopg import sql
 from tickerlake.postgres._schema import (
     BASE_COLUMNS,
     PERIOD_COLUMNS,
+    PERIOD_FLAG_NULL_CHECK,
+    PERIOD_TRUNC_SQL,
     PUBLICATION_TABLES,
     STAGE_KINDS,
     STAGE_NAMES,
@@ -319,12 +321,8 @@ def _validate_product_stage(
     context: BuildContext,
 ) -> None:
     stage = sql.Identifier("pg_temp", _STAGES[kind])
-    period_start = {
-        "daily": sql.SQL("%s"),
-        "weekly": sql.SQL("date_trunc('week', %s)::date"),
-        "monthly": sql.SQL("date_trunc('month', %s)::date"),
-    }[kind]
-    flags = sql.SQL(" OR left_truncated IS NULL OR calendar_closed IS NULL") if kind != "daily" else sql.SQL("")
+    period_start = sql.SQL(PERIOD_TRUNC_SQL[kind])
+    flags = sql.SQL("") if kind == "daily" else sql.SQL(PERIOD_FLAG_NULL_CHECK)
     invalid_stage = sql.SQL(
         """SELECT 1 FROM {stage} WHERE
              ticker_id IS NULL OR date IS NULL OR ticker_id NOT IN
