@@ -17,10 +17,9 @@ first-time load.
   `Cluster` resource in the release namespace. The chart does **not** render
   the Cluster; it only consumes the `<cluster>-app` Secret that CNPG manages.
 - A container image that contains the tickerlake CLI (Python 3.14). The chart
-  does **not** ship or pin an image, so you **must provide your own** image via
-  `image.repository` and `image.tag`.
-- A StorageClass that supports `ReadWriteOnce` PersistentVolumeClaims (the chart
-  creates a small output PVC).
+  defaults `image.repository` to `ghcr.io/major/tickerlake`. Build it with
+  `make docker-build` from the repo root, or override
+  `--set image.repository=...` to use your own image.
 - A Massive API key. For production, put it in a pre-created Secret and point
   `massive.existingSecret` at it.
 
@@ -90,6 +89,28 @@ first-time load.
    kubectl logs -l job-name=tickerlake-manual -f
    ```
 
+## Building the image
+
+The chart defaults `image.repository` to `ghcr.io/major/tickerlake`, which is
+built from the `Containerfile` at the repo root (Red Hat UBI 9 Python 3.14,
+multi-stage, runs as non-root UID 1000). Build it locally with:
+
+```bash
+make docker-build
+```
+
+Override the registry and tag with `IMAGE_REPO` and `IMAGE_TAG`:
+
+```bash
+make docker-build IMAGE_REPO=ghcr.io/you/tickerlake IMAGE_TAG=0.1.0
+```
+
+`make docker-push` pushes both the pinned tag and `latest`.
+
+Before running `helm install`, push the built image to your own registry (for
+example `ghcr.io/<you>/tickerlake`), because the chart's default
+`ghcr.io/major/tickerlake` may not be publicly available.
+
 ## Configuration reference
 
 The full set of values is documented inline in `values.yaml` with `# --`
@@ -104,13 +125,12 @@ Key values:
 
 | Value | Description | Default |
 | --- | --- | --- |
-| `image.repository` | tickerlake container image repository (required) | `""` |
+| `image.repository` | tickerlake container image repository | `ghcr.io/major/tickerlake` |
 | `image.tag` | Image tag; falls back to `.Chart.AppVersion` | `""` |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `cronjob.schedule` | Cron schedule | `0 20 * * 1-5` |
 | `cronjob.timezone` | Cron time zone | `America/New_York` |
-| `cronjob.command` | Subcommand to run (`update`, `backfill`, `info`, `compact`) | `update` |
-| `cronjob.outputDir` | Output directory inside the pod | `/data` |
+| `cronjob.command` | Subcommand to run (`update`, `backfill`) | `update` |
 | `cronjob.concurrencyPolicy` | `Allow`, `Forbid`, or `Replace` | `Forbid` |
 | `cronjob.restartPolicy` | `OnFailure` or `Never` | `OnFailure` |
 | `massive.existingSecret` | Pre-created Secret with the API key | `""` |
@@ -118,7 +138,6 @@ Key values:
 | `massive.apiKey` | Literal key; testing only | `""` |
 | `database.clusterName` | CloudNativePG Cluster name | release name |
 | `database.uriKey` | DSN key in the `<cluster>-app` Secret | `uri` |
-| `persistence.size` | Output PVC size | `1Gi` |
 | `serviceAccount.create` | Create a ServiceAccount | `true` |
 
 ### Security notes
@@ -126,8 +145,7 @@ Key values:
 - The literal `massive.apiKey` value creates a Secret in the release and is
   intended for testing only. Use `massive.existingSecret` in production.
 - The CronJob container runs as a non-root user with a read-only root
-  filesystem. A writable `emptyDir` is mounted at `/tmp`, and the output
-  directory is a PVC.
+  filesystem. A writable `emptyDir` is mounted at `/tmp` for scratch space.
 - The CronJob connects directly to the Cluster's `-rw` Service on port 5432.
   Do not route it through a PgBouncer `Pooler` in transaction-pooling mode:
   tickerlake uses session-level advisory locks (`pg_advisory_lock`) to
@@ -139,12 +157,6 @@ Key values:
 helm uninstall tickerlake
 ```
 
-The output PVC created by the chart (`<release>-data`) is **not** deleted by
-`helm uninstall`. Delete it explicitly if you no longer need the data:
-
-```bash
-kubectl delete pvc -l app.kubernetes.io/instance=tickerlake
-```
-
-Uninstalling the chart leaves the CloudNativePG `Cluster` CR and its data
-untouched. Remove those separately if desired.
+The chart does not create any PersistentVolumeClaims, so there is no chart-owned
+storage to clean up. Uninstalling the chart leaves the CloudNativePG `Cluster`
+CR and its data untouched. Remove those separately if desired.

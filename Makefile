@@ -1,4 +1,4 @@
-.PHONY: test test-postgres test-cov lint format format-check typecheck complexity check sync mutmut mutmut-results mutmut-apply
+.PHONY: test test-postgres test-cov lint format format-check typecheck complexity check sync mutmut mutmut-results mutmut-apply docker-build docker-run docker-push
 
 test:
 	uv run pytest tests/ -x --tb=short -n auto
@@ -37,3 +37,19 @@ mutmut-results:
 
 mutmut-apply:
 	uv run mutmut apply
+
+IMAGE_REPO ?= ghcr.io/major/tickerlake
+IMAGE_TAG ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
+docker-build:
+	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) -t $(IMAGE_REPO):latest .
+
+docker-run:
+	docker run --rm -it \
+		-e MASSIVE_API_KEY=$$MASSIVE_API_KEY \
+		-e DATABASE_URL=$$DATABASE_URL \
+		$(IMAGE_REPO):$(IMAGE_TAG) $(ARGS)
+
+docker-push:
+	docker push $(IMAGE_REPO):$(IMAGE_TAG)
+	docker push $(IMAGE_REPO):latest

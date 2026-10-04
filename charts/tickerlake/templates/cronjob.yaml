@@ -38,15 +38,10 @@ spec:
             - name: tickerlake
               image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
               imagePullPolicy: {{ .Values.image.pullPolicy }}
-              args:
-                - {{ .Values.cronjob.command | quote }}
-                - "--output-dir"
-                - {{ .Values.cronjob.outputDir | quote }}
+              args: [{{ .Values.cronjob.command | quote }}]
               env:
                 {{- include "tickerlake.env" . | nindent 16 }}
               volumeMounts:
-                - name: data
-                  mountPath: {{ .Values.cronjob.outputDir | quote }}
                 - name: tmp
                   mountPath: /tmp
               resources:
@@ -54,8 +49,5 @@ spec:
               securityContext:
                 {{- toYaml .Values.securityContext | nindent 16 }}
           volumes:
-            - name: data
-              persistentVolumeClaim:
-                claimName: {{ include "tickerlake.fullname" . }}-data
             - name: tmp
               emptyDir: {}
