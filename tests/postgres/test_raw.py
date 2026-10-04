@@ -51,9 +51,7 @@ def _running_request(connection: psycopg.Connection, day: date) -> FetchRequest:
             target=day,
             requested_start=None,
             requested_end=None,
-            code_version="test",
-            schema_version="1",
-            transform_version="test",
+            version="test",
         ),
     )
     return FetchRequest(run_id=run_id, source="daily", requested_date=day)
@@ -86,9 +84,7 @@ def test_populates_empty_date_and_adds_new_symbols_to_existing_date(pg_owner_dsn
         assert store_daily_outcome(connection, request, _outcome(DAY, _row("AAA"), _row("BBB"))) == TWO_ROWS
         assert [row[1] for row in _daily_rows(connection, DAY)] == ["AAA", "BBB"]
         assert connection.execute("SELECT ticker_id FROM market.ticker WHERE symbol = 'AAA'").fetchone()[0] == first_id
-        assert connection.execute(
-            "SELECT active, screen_eligible FROM market.ticker WHERE symbol = 'BBB'"
-        ).fetchone() == (None, False)
+        assert connection.execute("SELECT active FROM market.ticker WHERE symbol = 'BBB'").fetchone() == (None,)
         assert (
             connection.execute(
                 "SELECT market.ticker.symbol, ingest.ticker_reference.cik "
@@ -259,7 +255,7 @@ def test_corrupt_copied_stage_preserves_raw_state(
             connection.execute("SELECT symbol, ticker_id FROM market.ticker ORDER BY symbol").fetchall(),
             connection.execute("SELECT last_value, is_called FROM market.ticker_ticker_id_seq").fetchone(),
             connection.execute(
-                "SELECT input_revision, retained_start, retained_end FROM ingest.cache_state WHERE singleton = true"
+                "SELECT input_revision, retained_start, retained_end FROM ingest.cache_state WHERE cache_state_id = 1"
             ).fetchone(),
             connection.execute(
                 "SELECT manifest_id, run_id, source, requested_date, status, row_count "
@@ -289,7 +285,7 @@ def test_corrupt_copied_stage_preserves_raw_state(
             connection.execute("SELECT symbol, ticker_id FROM market.ticker ORDER BY symbol").fetchall(),
             connection.execute("SELECT last_value, is_called FROM market.ticker_ticker_id_seq").fetchone(),
             connection.execute(
-                "SELECT input_revision, retained_start, retained_end FROM ingest.cache_state WHERE singleton = true"
+                "SELECT input_revision, retained_start, retained_end FROM ingest.cache_state WHERE cache_state_id = 1"
             ).fetchone(),
             connection.execute(
                 "SELECT manifest_id, run_id, source, requested_date, status, row_count "

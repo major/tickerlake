@@ -50,9 +50,7 @@ def _request(connection: psycopg.Connection, day: date = DAY) -> FetchRequest:
             target=day,
             requested_start=None,
             requested_end=None,
-            code_version="test",
-            schema_version="1",
-            transform_version="test",
+            version="test",
         ),
     )
     return FetchRequest(run_id=run_id, source="daily", requested_date=day)
@@ -94,22 +92,24 @@ def test_populated_acceptance_links_manifest_and_updates_on_noop(pg_owner_dsn: s
         first = _request(connection)
         assert store_daily_outcome(connection, first, _outcome()) == 1
         initial = connection.execute(
-            """SELECT s.input_revision, s.row_count, m.manifest_id, m.run_id, m.status
+            """SELECT s.date, m.row_count, m.manifest_id, m.run_id, m.status
                FROM ingest.raw_session s JOIN ingest.fetch_manifest m USING (manifest_id)
                 WHERE s.date = %s""",
             (DAY,),
         ).fetchone()
-        assert initial == (1, 1, initial[2], first.run_id, "populated")
+        assert initial == (DAY, 1, initial[2], first.run_id, "populated")
+        assert read_cache_state(connection).input_revision == 1
 
         second = _request(connection)
         assert store_daily_outcome(connection, second, _outcome()) == 1
         updated = connection.execute(
-            """SELECT s.input_revision, s.row_count, m.run_id, m.status
+            """SELECT s.date, m.row_count, m.run_id, m.status
                FROM ingest.raw_session s JOIN ingest.fetch_manifest m USING (manifest_id)
                WHERE s.date = %s""",
             (DAY,),
         ).fetchone()
-        assert updated == (1, 1, second.run_id, "populated")
+        assert updated == (DAY, 1, second.run_id, "populated")
+        assert read_cache_state(connection).input_revision == 1
         assert connection.execute("SELECT count(*) FROM ingest.fetch_manifest").fetchone() == (2,)
 
 
@@ -119,14 +119,9 @@ def test_nonpopulated_outcomes_preserve_evidence_and_cannot_create_it(pg_owner_d
     with writer_connection(pg_owner_dsn) as connection:
         apply_migrations(connection)
         store_daily_outcome(connection, _request(connection), _outcome())
-        before = connection.execute(
-            "SELECT date, input_revision, manifest_id, row_count FROM ingest.raw_session"
-        ).fetchall()
+        before = connection.execute("SELECT date, manifest_id FROM ingest.raw_session").fetchall()
         store_daily_outcome(connection, _request(connection), _outcome(status))
-        assert (
-            connection.execute("SELECT date, input_revision, manifest_id, row_count FROM ingest.raw_session").fetchall()
-            == before
-        )
+        assert connection.execute("SELECT date, manifest_id FROM ingest.raw_session").fetchall() == before
         assert read_cache_state(connection).input_revision == 1
 
     with writer_connection(pg_owner_dsn) as connection:

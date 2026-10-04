@@ -201,8 +201,16 @@ class TestTickerTypes:
             assert config.ticker_types == ["CS", "ETF", "ETV", "ETN", "ADRC"]
 
     def test_ticker_types_custom(self) -> None:
-        """ticker_types can be overridden."""
-        custom_types = ["CS", "ETF", "FUND"]
+        """ticker_types can be overridden with canonical types."""
+        custom_types = ["CS", "ETF"]
         with patch.dict(os.environ, {"MASSIVE_API_KEY": "test"}):
             config = Config(ticker_types=custom_types)
             assert config.ticker_types == custom_types
+
+    def test_ticker_types_rejects_unknown(self) -> None:
+        """ticker_types outside the canonical allowlist are rejected."""
+        with (
+            patch.dict(os.environ, {"MASSIVE_API_KEY": "test"}),
+            pytest.raises(ValueError, match="unsupported ticker type"),
+        ):
+            Config(ticker_types=["CS", "FUND"])

@@ -36,9 +36,7 @@ def _run(connection: psycopg.Connection) -> UUID:
             target=TARGET,
             requested_start=None,
             requested_end=None,
-            code_version="test",
-            schema_version="1",
-            transform_version="test",
+            version="test",
         ),
     )
 
@@ -77,7 +75,7 @@ def _seed(connection: psycopg.Connection) -> UUID:
                         "split_from": 2.0,
                         "split_to": 1.0,
                         "adjustment_factor": 0.5,
-                        "adjustment_type": "split",
+                        "adjustment_type": "forward",
                     }
                     for symbol in ("ACTIVE", "INACTIVE", "UNKNOWN")
                 ],
@@ -119,9 +117,9 @@ def _snapshot(connection: psycopg.Connection) -> tuple[list[tuple[object, ...]],
     return tuple(
         connection.execute(query).fetchall()
         for query in (
-            "SELECT * FROM market.adjusted_daily ORDER BY ticker_id, date",
-            "SELECT * FROM market.adjusted_weekly ORDER BY ticker_id, date",
-            "SELECT * FROM market.adjusted_monthly ORDER BY ticker_id, date",
+            "SELECT * FROM market.adjusted_bars WHERE period = 'daily' ORDER BY ticker_id, date",
+            "SELECT * FROM market.adjusted_bars WHERE period = 'weekly' ORDER BY ticker_id, date",
+            "SELECT * FROM market.adjusted_bars WHERE period = 'monthly' ORDER BY ticker_id, date",
         )
     )
 
@@ -142,12 +140,14 @@ def test_rebuild_persists_golden_products_independent_of_batch_size(pg_migrated_
             symbols = {symbol: (ticker_id, active) for ticker_id, symbol, active in tickers}
             assert set(symbols) == {"ACTIVE", "INACTIVE", "UNKNOWN"}
             counts = connection.execute(
-                "SELECT t.symbol, count(*) FROM market.adjusted_daily d "
-                "JOIN market.ticker t USING (ticker_id) GROUP BY t.symbol ORDER BY t.symbol"
+                "SELECT t.symbol, count(*) FROM market.adjusted_bars d "
+                "JOIN market.ticker t USING (ticker_id) WHERE d.period = 'daily' "
+                "GROUP BY t.symbol ORDER BY t.symbol"
             ).fetchall()
             assert counts == [(symbol, 87) for symbol in ("ACTIVE", "INACTIVE", "UNKNOWN")]
             assert connection.execute(
-                "SELECT calendar_closed FROM market.adjusted_monthly WHERE ticker_id = %s AND date = %s",
+                "SELECT calendar_closed FROM market.adjusted_bars "
+                "WHERE period = 'monthly' AND ticker_id = %s AND date = %s",
                 (symbols["ACTIVE"][0], date(2024, 5, 1)),
             ).fetchone() == (False,)
             assert connection.execute("SELECT count(*) FROM market.latest_daily").fetchone()[0] == 1
@@ -171,9 +171,7 @@ def test_rebuild_persists_independent_numeric_goldens_for_each_frequency(pg_migr
                 target=target,
                 requested_start=collection_start,
                 requested_end=target,
-                code_version="test",
-                schema_version="1",
-                transform_version="test",
+                version="test",
             ),
         )
         for day in sessions:
@@ -204,7 +202,7 @@ def test_rebuild_persists_independent_numeric_goldens_for_each_frequency(pg_migr
                     "split_from": 2.0,
                     "split_to": 1.0,
                     "adjustment_factor": 0.5,
-                    "adjustment_type": "split",
+                    "adjustment_type": "forward",
                 }
             ],
             schema=SPLITS_SCHEMA,
@@ -241,7 +239,8 @@ def test_rebuild_persists_independent_numeric_goldens_for_each_frequency(pg_migr
 
         ticker_id = connection.execute("SELECT ticker_id FROM market.ticker WHERE symbol='GOLDEN'").fetchone()[0]
         daily = connection.execute(
-            "SELECT date, open, high, low, close, volume FROM market.adjusted_daily WHERE ticker_id=%s ORDER BY date",
+            "SELECT date, open, high, low, close, volume FROM market.adjusted_bars "
+            "WHERE period = 'daily' AND ticker_id=%s ORDER BY date",
             (ticker_id,),
         ).fetchall()
         assert [row[0] for row in daily] == sessions
@@ -259,16 +258,16 @@ def test_rebuild_persists_independent_numeric_goldens_for_each_frequency(pg_migr
                 grouped_by_week,
                 sorted(grouped_by_week),
                 (
-                    "SELECT date, open, high, low, close, volume FROM market.adjusted_weekly "
-                    "WHERE ticker_id=%s ORDER BY date"
+                    "SELECT date, open, high, low, close, volume FROM market.adjusted_bars "
+                    "WHERE period = 'weekly' AND ticker_id=%s ORDER BY date"
                 ),
             ),
             (
                 grouped_by_month,
                 [max(grouped_by_month[key]) for key in sorted(grouped_by_month)],
                 (
-                    "SELECT date, open, high, low, close, volume FROM market.adjusted_monthly "
-                    "WHERE ticker_id=%s ORDER BY date"
+                    "SELECT date, open, high, low, close, volume FROM market.adjusted_bars "
+                    "WHERE period = 'monthly' AND ticker_id=%s ORDER BY date"
                 ),
             ),
         ):

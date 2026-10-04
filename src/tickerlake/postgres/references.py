@@ -207,7 +207,11 @@ def _store(
 
 def _store_tickers(connection: psycopg.Connection, request: FetchRequest, frame: pl.DataFrame) -> bool:
     _stage(connection, "ticker_stage")
-    stage_frame = frame.rename({"type": "ticker_type"})
+    # The API may return an empty string for cik. Normalize it to NULL so it
+    # survives the digit-only CHECK on market.ticker at publication time.
+    stage_frame = frame.rename({"type": "ticker_type"}).with_columns(
+        pl.when(pl.col("cik") == "").then(None).otherwise(pl.col("cik")).alias("cik")
+    )
     copy_frame(connection, "ticker_stage", stage_frame, _TICKER_STAGE_COLUMNS)
     _validate_ticker_stage(connection, request, frame)
     types = list(request.ticker_types)
