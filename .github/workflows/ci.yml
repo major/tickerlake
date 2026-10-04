@@ -90,7 +90,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Helm
-        uses: azure/setup-helm@916d0e51931c3e90ee43075f5c193e2e49e4b976 # v4.3.1
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.17.0
 
@@ -133,11 +133,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@988b5a0280414f521da01fcc63a27aeeb4b104db # v3.10.0
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
 
       - name: Log in to ghcr.io
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/login-action@74e5fb35e8a86a4d5b7b7cead4f51246b0d8e477 # v3.3.0
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -152,7 +152,7 @@ jobs:
           echo "tags=${IMAGE_NAME}:${SHORT_SHA},${IMAGE_NAME}:latest" >> "$GITHUB_OUTPUT"
 
       - name: Build and push container image
-        uses: docker/build-push-action@5cd11c3a4ced054e52742c5fd54dca954e0edd85 # v6.18.0
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: .
           file: Containerfile
