@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 from tickerlake.extract import DAILY_AGGS_SCHEMA, SPLITS_SCHEMA
+from tickerlake.postgres._schema import BASE_COLUMNS, PERIOD_COLUMNS
 from tickerlake.postgres._validation import is_date
 from tickerlake.transform import (
     adjust_splits,
@@ -20,44 +21,6 @@ from tickerlake.transform import (
     compute_metrics,
 )
 
-_DAILY_COLUMNS = (
-    "ticker_id",
-    "date",
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume",
-    "vwap",
-    "transactions",
-    "sma_20",
-    "sma_50",
-    "sma_200",
-    "atr_14",
-    "atr_pct",
-    "adr_pct",
-    "volume_sma_20",
-)
-_PERIOD_COLUMNS = (
-    "ticker_id",
-    "date",
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume",
-    "vwap",
-    "transactions",
-    "sma_20",
-    "sma_50",
-    "sma_200",
-    "atr_14",
-    "atr_pct",
-    "adr_pct",
-    "volume_sma_20",
-    "left_truncated",
-    "calendar_closed",
-)
 _METRIC_SCHEMA = {
     "sma_20": pl.Float32,
     "sma_50": pl.Float32,
@@ -166,12 +129,12 @@ def build_products(
     identity_rows = _validate_inputs(raw, splits, identities)
     if raw.is_empty():
         return ProductBatch(
-            daily=_empty(_DAILY_COLUMNS, DAILY_AGGS_SCHEMA),
+            daily=_empty(BASE_COLUMNS, DAILY_AGGS_SCHEMA),
             weekly=_empty(
-                _PERIOD_COLUMNS, DAILY_AGGS_SCHEMA | {"left_truncated": pl.Boolean, "calendar_closed": pl.Boolean}
+                PERIOD_COLUMNS, DAILY_AGGS_SCHEMA | {"left_truncated": pl.Boolean, "calendar_closed": pl.Boolean}
             ),
             monthly=_empty(
-                _PERIOD_COLUMNS, DAILY_AGGS_SCHEMA | {"left_truncated": pl.Boolean, "calendar_closed": pl.Boolean}
+                PERIOD_COLUMNS, DAILY_AGGS_SCHEMA | {"left_truncated": pl.Boolean, "calendar_closed": pl.Boolean}
             ),
         )
     canonical_splits = _validate_split_factors(splits)
@@ -198,7 +161,7 @@ def build_products(
     for result in (daily, weekly, monthly):
         _finite_outputs(result)
     return ProductBatch(
-        daily=daily.select(_DAILY_COLUMNS),
-        weekly=weekly.select(_PERIOD_COLUMNS),
-        monthly=monthly.select(_PERIOD_COLUMNS),
+        daily=daily.select(BASE_COLUMNS),
+        weekly=weekly.select(PERIOD_COLUMNS),
+        monthly=monthly.select(PERIOD_COLUMNS),
     )

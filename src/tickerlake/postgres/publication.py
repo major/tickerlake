@@ -9,6 +9,13 @@ import polars as pl
 import psycopg
 from psycopg import sql
 
+from tickerlake.postgres._schema import (
+    BASE_COLUMNS,
+    PERIOD_COLUMNS,
+    PUBLICATION_TABLES,
+    STAGE_KINDS,
+    STAGE_NAMES,
+)
 from tickerlake.postgres._validation import require_unique_nonempty_strings
 from tickerlake.postgres.connection import PostgresWriterError, require_writer_connection, writer_connection
 from tickerlake.postgres.copying import copy_frame
@@ -20,32 +27,12 @@ if TYPE_CHECKING:
 
     from tickerlake.postgres.products import ProductBatch
 
-_BASE_COLUMNS = (
-    "ticker_id",
-    "date",
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume",
-    "vwap",
-    "transactions",
-    "sma_20",
-    "sma_50",
-    "sma_200",
-    "atr_14",
-    "atr_pct",
-    "adr_pct",
-    "volume_sma_20",
-)
-_PERIOD_COLUMNS = (*_BASE_COLUMNS, "left_truncated", "calendar_closed")
-_TABLES = {"daily": "market.adjusted_daily", "weekly": "market.adjusted_weekly", "monthly": "market.adjusted_monthly"}
-_STAGES = {
-    "daily": "publication_daily_stage",
-    "weekly": "publication_weekly_stage",
-    "monthly": "publication_monthly_stage",
+_STAGES: dict[str, str] = {kind: f"publication_{kind}_stage" for kind in STAGE_KINDS}
+_STAGE_COLUMNS: dict[str, tuple[str, ...]] = {
+    "daily": BASE_COLUMNS,
+    "weekly": PERIOD_COLUMNS,
+    "monthly": PERIOD_COLUMNS,
 }
-_STAGE_COLUMNS = {"daily": _BASE_COLUMNS, "weekly": _PERIOD_COLUMNS, "monthly": _PERIOD_COLUMNS}
 _SAFE = "Invalid PostgreSQL publication staging data"
 _IDLE_REQUIRED = "PostgreSQL publication requires an idle writer connection"
 _CONTEXT_MISMATCH = "PostgreSQL publication context does not match its staged build"
@@ -185,7 +172,7 @@ def prepare_publication(
     if accepted is None:
         raise PostgresWriterError(_TARGET_UNACCEPTED)
     try:
-        for name in (*_STAGES.values(), "publication_ticker_stage", "publication_scope", "publication_context"):
+        for name in (*STAGE_NAMES, "publication_ticker_stage", "publication_scope", "publication_context"):
             connection.execute(sql.SQL("DROP TABLE IF EXISTS pg_temp.{}").format(sql.Identifier(name)))
         connection.execute(
             """CREATE TEMP TABLE publication_ticker_stage (
@@ -484,7 +471,7 @@ def publish_staged(connection: psycopg.Connection, context: BuildContext) -> Pub
                            (i.active IS TRUE AND i.ticker_type=ANY(%s)))""",
                 (list(context.ticker_types), list(context.ticker_types)),
             )
-            for kind, table in _TABLES.items():
+            for kind, table in PUBLICATION_TABLES.items():
                 columns = _STAGE_COLUMNS[kind]
                 table_identifier = sql.Identifier(*table.split("."))
                 stage_identifier = sql.Identifier("pg_temp", _STAGES[kind])
