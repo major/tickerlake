@@ -28,13 +28,8 @@ CREATE TABLE ingest.raw_daily (
     close real NOT NULL,
     volume double precision NOT NULL,
     PRIMARY KEY (date, ticker_id),
-    CHECK (open NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (high NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (low NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (close NOT IN ('NaN'::real, 'Infinity'::real, '-Infinity'::real)),
-    CHECK (volume NOT IN ('NaN'::double precision, 'Infinity'::double precision, '-Infinity'::double precision) AND volume >= 0),
-    CHECK (high >= open AND high >= close AND high >= low),
-    CHECK (low <= open AND low <= close AND low <= high)
+    CHECK (volume >= 0),
+    CHECK (high >= GREATEST(open, close, low) AND low <= LEAST(open, close, high))
 );
 
 CREATE TABLE ingest.ticker_reference (
