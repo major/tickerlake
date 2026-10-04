@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from psycopg.pq import TransactionStatus
 
+from tickerlake.postgres._validation import require_unique_nonempty_strings
 from tickerlake.postgres.connection import PostgresWriterError, require_writer_connection
 from tickerlake.postgres.products import build_products
 from tickerlake.postgres.publication import prepare_publication, publish_staged, stage_batch
@@ -36,15 +37,11 @@ def rebuild_cache(
         raise PostgresWriterError("Writer connection is not idle")  # noqa: TRY003
     if type(batch_size) is not int or not 1 <= batch_size <= _MAX_BATCH:
         raise PostgresWriterError("Invalid batch size")  # noqa: TRY003
-    if isinstance(ticker_types, (str, bytes)):
-        raise PostgresWriterError("Invalid ticker types")  # noqa: TRY003
-    types = tuple(ticker_types)
-    if (
-        not types
-        or len(set(types)) != len(types)
-        or any(not isinstance(value, str) or not value.strip() for value in types)
-    ):
-        raise PostgresWriterError("Invalid ticker types")  # noqa: TRY003
+    types = require_unique_nonempty_strings(
+        ticker_types,
+        field="ticker types",
+        message="Invalid ticker types",
+    )
 
     capture_run_inputs(connection, run_id)
     context = prepare_publication(connection, run_id, ticker_types=types)

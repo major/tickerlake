@@ -12,6 +12,7 @@ from psycopg import sql
 
 from tickerlake.extract import SPLITS_SCHEMA, TICKERS_SCHEMA
 from tickerlake.outcomes import FetchOutcome, FetchStatus
+from tickerlake.postgres._validation import is_date, require_unique_nonempty_strings
 from tickerlake.postgres.connection import PostgresWriterError, require_writer_connection
 from tickerlake.postgres.copying import copy_frame
 from tickerlake.postgres.state import advance_cache_revision, read_cache_state, record_fetch_outcome
@@ -142,20 +143,20 @@ def _validate_scope(request: FetchRequest, source: str) -> None:
     if source == "tickers":
         if (
             not isinstance(request.ticker_types, tuple)
-            or not request.ticker_types
-            or any(not isinstance(value, str) or not value.strip() for value in request.ticker_types)
-            or len(set(request.ticker_types)) != len(request.ticker_types)
             or request.requested_date is not None
             or request.requested_start is not None
             or request.requested_end is not None
         ):
             _fail("Invalid PostgreSQL ticker request scope")
+        require_unique_nonempty_strings(
+            request.ticker_types,
+            field="ticker types",
+            message="Invalid PostgreSQL ticker request scope",
+        )
         return
     if (
-        not isinstance(request.requested_start, datetime.date)
-        or isinstance(request.requested_start, datetime.datetime)
-        or not isinstance(request.requested_end, datetime.date)
-        or isinstance(request.requested_end, datetime.datetime)
+        not is_date(request.requested_start)
+        or not is_date(request.requested_end)
         or request.requested_start > request.requested_end
         or request.requested_date is not None
         or request.ticker_types
