@@ -3,16 +3,20 @@
 # tickerlake container image
 #
 # Base images:
-#   Red Hat UBI 9 Python 3.14, pinned to the current stable microline 9.8.
-#   The builder uses the full python-314 image and the runtime uses the
-#   smaller python-314-minimal variant.
+#   Red Hat UBI 9 Python 3.14, pinned to Red Hat's stream tag :1. The builder
+#   uses the full python-314 image and the runtime uses the smaller
+#   python-314-minimal variant.
 #
-#   Source for the tag: `skopeo list-tags
-#   docker://registry.access.redhat.com/ubi9/python-314` on 2026-10-01. The
-#   catalog has no 9.6 microline; 9.8 is the current stable tag, so this file
-#   uses 9.8 for both stages. registry.redhat.io requires a Red Hat login; the
-#   public anonymous mirror registry.access.redhat.com serves the same UBI
-#   content if you do not have credentials.
+#   Registry: registry.access.redhat.com is Red Hat's official anonymous
+#   mirror for UBI content, so no Red Hat login is required to pull the base
+#   images. The same content is also published on registry.redhat.io, but that
+#   registry requires a Red Hat account.
+#
+#   Tag: :1 is Red Hat's rolling minor-release stream tag, so the image tracks
+#   the current 9.x microline instead of going EOL when the next microline
+#   ships. The microline tags (:9.8, :9.9, ...) also work but are replaced over
+#   time. For reproducible builds, pin the base images to a digest in
+#   production.
 #
 # Build tool:
 #   uv is copied from the official ghcr.io/astral-sh/uv image, pinned to
@@ -39,7 +43,7 @@
 
 FROM ghcr.io/astral-sh/uv:0.12.18 AS uv
 
-FROM registry.redhat.io/ubi9/python-314:9.8 AS builder
+FROM registry.access.redhat.com/ubi9/python-314:1 AS builder
 USER root
 COPY --from=uv /uv /uvx /usr/local/bin/
 WORKDIR /build
@@ -54,8 +58,11 @@ ENV PATH="/build/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-FROM registry.redhat.io/ubi9/python-314-minimal:9.8 AS runtime
+FROM registry.access.redhat.com/ubi9/python-314-minimal:1 AS runtime
 USER root
+# Create tickerlake with UID/GID 1000 instead of using the image's built-in
+# "default" user (UID 1001). This keeps the Helm chart's runAsUser: 1000
+# working without a chart change.
 RUN groupadd --system --gid 1000 tickerlake \
     && useradd --system --uid 1000 --gid 1000 --home-dir /app --shell /sbin/nologin tickerlake
 WORKDIR /app
@@ -65,5 +72,6 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/src
+# Match the chart securityContext runAsUser / runAsGroup: 1000.
 USER 1000
 ENTRYPOINT ["tickerlake"]
