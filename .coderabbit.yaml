@@ -22,23 +22,6 @@ reviews:
           raises AttributeError on aware UTC input; only tz-naive pd.Timestamp
           objects are safe. See calendar.py.
 
-      - name: "duckdb-connection-lifecycle"
-        mode: warning
-        instructions: |
-          duckdb.connect() has no context-manager support in this codebase's
-          usage. Flag any duckdb.connect() call that is not paired with
-          con.close() in a try/finally (or otherwise guaranteed to close on
-          every exit path, including exceptions).
-
-      - name: "named-temp-parquet-cleanup"
-        mode: warning
-        instructions: |
-          Flag tempfile.NamedTemporaryFile usage for parquet intermediaries
-          that sets delete=True, or that omits delete=False plus a
-          Path.unlink(missing_ok=True) cleanup in a finally block. The path
-          must remain usable after the file handle is closed and before
-          DuckDB reads/writes it.
-
       - name: "float-precision-for-prices"
         mode: warning
         instructions: |
@@ -63,16 +46,6 @@ reviews:
           would do, outside of Config's dataclass.
 
   path_instructions:
-    - path: "src/tickerlake/load.py"
-      instructions: |
-        DuckDB I/O review:
-        - Every duckdb.connect() must be closed via con.close() in a finally
-          block, including on write/query failures.
-        - Parquet intermediaries must use NamedTemporaryFile(delete=False)
-          and unlink(missing_ok=True) in finally; never delete=True.
-        - New DuckDB tables belong in write_consumer_db() following the
-          existing _tmp_parquet context-manager pattern.
-
     - path: "src/tickerlake/calendar.py"
       instructions: |
         exchange_calendars review:
@@ -119,7 +92,8 @@ reviews:
     - path: "tests/**/*.py"
       instructions: |
         tickerlake test review:
-        - All external deps (Massive API, DuckDB, filesystem) must be mocked;
+        - All external deps (Massive API, filesystem) must be mocked;
+          postgres integration tests use a disposable cluster, not a mock.
           prefer patch.multiple() for pipeline-level tests.
         - Reuse shared fixtures from tests/conftest.py (sample_bars_df,
           sample_splits_df, sample_tickers_df) instead of redefining

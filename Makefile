@@ -21,6 +21,9 @@ format-check:
 typecheck:
 	uv run ty check src/
 
+complexity:
+	uv run radon cc src/ -s -a
+
 check: lint format-check typecheck complexity test-cov
 
 sync:
