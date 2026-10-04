@@ -187,6 +187,6 @@ Errors and messages never contain credentials, DSNs, API keys, or source records
 
 No CLI wiring, no routine update command, no automatic migrations, no DuckDB
 path, no live Massive calls in tests, and no dependency or lockfile changes.
-Integration validation runs with host Python pytest and a disposable PostgreSQL
-18 Testcontainers container. Database-free tests do not require Docker. Never
-use a local or live PostgreSQL service for tests.
+Integration validation runs with host Python pytest and the disposable
+PostgreSQL 18 cluster created by pytest-postgresql. Never use a local or live
+PostgreSQL service for tests.
