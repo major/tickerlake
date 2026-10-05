@@ -19,7 +19,6 @@ _STAGE_NAMES = STAGE_NAMES | {
     "raw_stage",
     "ticker_stage",
     "split_stage",
-    "publication_ticker_stage",
 }
 _UNSUPPORTED_STAGE = "Unsupported PostgreSQL staging table"
 _INVALID_COLUMNS = "PostgreSQL staging columns must be unique and nonempty"

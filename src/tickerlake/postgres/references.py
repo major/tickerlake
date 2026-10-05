@@ -203,7 +203,7 @@ def _store(
 def _store_tickers(connection: psycopg.Connection, request: FetchRequest, frame: pl.DataFrame) -> bool:
     _stage(connection, "ticker_stage")
     # The API may return an empty string for cik. Normalize it to NULL so it
-    # survives the digit-only CHECK on market.ticker at publication time.
+    # passes the market.ticker.cik length+charset CHECK at store time (fail-fast).
     stage_frame = frame.rename({"type": "ticker_type"}).with_columns(
         pl.when(pl.col("cik") == "").then(None).otherwise(pl.col("cik")).alias("cik")
     )
@@ -213,37 +213,53 @@ def _store_tickers(connection: psycopg.Connection, request: FetchRequest, frame:
     conflict = connection.execute(
         """SELECT 1 FROM pg_temp.ticker_stage s
            JOIN market.ticker t ON t.symbol = s.ticker
-           JOIN ingest.ticker_reference r USING (ticker_id)
-           WHERE NOT (r.ticker_type = ANY(%s)) LIMIT 1""",
+           WHERE NOT (t.ticker_type = ANY(%s)) LIMIT 1""",
         (types,),
     ).fetchone()
     if conflict is not None:
         _fail("Ticker type change requires an explicit union scope")
+    # Symbol-only insert: must NOT include metadata here. The change-detection
+    # EXCEPT-diff below reads `prior` from market.ticker; if we wrote metadata
+    # now, new tickers would already be in `prior`, `desired == prior`, no diff,
+    # and the cache revision would never advance on a first-population store.
     connection.execute(
-        "INSERT INTO market.ticker (symbol) SELECT ticker FROM pg_temp.ticker_stage ON CONFLICT (symbol) DO NOTHING"
+        """INSERT INTO market.ticker (symbol) SELECT ticker FROM pg_temp.ticker_stage
+           ON CONFLICT (symbol) DO NOTHING"""
     )
     changed_row = connection.execute(
         """WITH desired AS (
                SELECT t.ticker_id, s.name, s.ticker_type, s.primary_exchange, s.cik, s.active
                FROM pg_temp.ticker_stage s JOIN market.ticker t ON t.symbol = s.ticker
            ), prior AS (
-               SELECT r.ticker_id, r.name, r.ticker_type, r.primary_exchange, r.cik, r.active
-               FROM ingest.ticker_reference r WHERE r.ticker_type = ANY(%s)
+               SELECT ticker_id, name, ticker_type, primary_exchange, cik, active
+               FROM market.ticker WHERE ticker_type = ANY(%s)
            )
-           SELECT EXISTS (SELECT * FROM desired EXCEPT SELECT * FROM prior)
-               OR EXISTS (SELECT * FROM prior EXCEPT SELECT * FROM desired)""",
+           SELECT EXISTS (
+               (SELECT * FROM desired EXCEPT SELECT * FROM prior)
+               UNION ALL
+               (SELECT * FROM prior EXCEPT SELECT * FROM desired)
+           )""",
         (types,),
     ).fetchone()
     if changed_row is None:
         _fail("Could not compare ticker reference snapshots")
     changed = bool(changed_row[0])
     if changed:
-        connection.execute("DELETE FROM ingest.ticker_reference WHERE ticker_type = ANY(%s)", (types,))
         connection.execute(
-            """INSERT INTO ingest.ticker_reference
-               (ticker_id, name, ticker_type, primary_exchange, cik, active)
-               SELECT t.ticker_id, s.name, s.ticker_type, s.primary_exchange, s.cik, s.active
-               FROM pg_temp.ticker_stage s JOIN market.ticker t ON t.symbol = s.ticker"""
+            """UPDATE market.ticker t
+               SET name = s.name, ticker_type = s.ticker_type,
+                   primary_exchange = s.primary_exchange, cik = s.cik, active = s.active
+               FROM pg_temp.ticker_stage s
+               WHERE t.symbol = s.ticker
+                 AND ROW(t.name, t.ticker_type, t.primary_exchange, t.cik, t.active)
+                     IS DISTINCT FROM ROW(s.name, s.ticker_type, s.primary_exchange, s.cik, s.active)"""
+        )
+        connection.execute(
+            """UPDATE market.ticker
+               SET name = NULL, ticker_type = NULL, primary_exchange = NULL, cik = NULL, active = NULL
+               WHERE ticker_type = ANY(%s)
+                 AND NOT EXISTS (SELECT 1 FROM pg_temp.ticker_stage s WHERE s.ticker = market.ticker.symbol)""",
+            (types,),
         )
     return bool(changed)
 

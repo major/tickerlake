@@ -152,21 +152,8 @@ def prepare_publication(
     ).fetchone()
     if accepted is None:
         raise PostgresWriterError(_TARGET_UNACCEPTED)
-    for name in (*STAGE_NAMES, "publication_ticker_stage", "publication_scope", "publication_context"):
+    for name in (*STAGE_NAMES, "publication_scope", "publication_context"):
         connection.execute(sql.SQL("DROP TABLE IF EXISTS pg_temp.{}").format(sql.Identifier(name)))
-    connection.execute(
-        """CREATE TEMP TABLE publication_ticker_stage (
-               ticker_id integer PRIMARY KEY, symbol text NOT NULL UNIQUE,
-               name text, ticker_type text, primary_exchange text, cik text, active boolean
-           ) ON COMMIT PRESERVE ROWS"""
-    )
-    connection.execute(
-        """INSERT INTO pg_temp.publication_ticker_stage
-           (ticker_id,symbol,name,ticker_type,primary_exchange,cik,active)
-           SELECT t.ticker_id,t.symbol,r.name,r.ticker_type,r.primary_exchange,r.cik,r.active
-           FROM market.ticker t LEFT JOIN ingest.ticker_reference r USING(ticker_id)
-           ORDER BY t.ticker_id"""
-    )
     connection.execute(
         "CREATE TEMP TABLE publication_scope (ticker_id integer PRIMARY KEY, complete boolean NOT NULL) "
         "ON COMMIT PRESERVE ROWS"
@@ -221,7 +208,7 @@ def stage_batch(
     with connection.transaction():
         connection.execute(
             """INSERT INTO pg_temp.publication_scope (ticker_id, complete)
-               SELECT ticker_id, false FROM pg_temp.publication_ticker_stage WHERE ticker_id = ANY(%s)
+               SELECT ticker_id, false FROM market.ticker WHERE ticker_id = ANY(%s)
                ON CONFLICT (ticker_id) DO UPDATE SET complete = false""",
             (ids,),
         )
@@ -313,31 +300,12 @@ OR volume IS NULL
         _fail()
 
 
-def _validate_staged_metadata(connection: psycopg.Connection) -> None:
-    difference = connection.execute(
-        """WITH current_metadata AS (
-               SELECT t.ticker_id,t.symbol,r.name,r.ticker_type,r.primary_exchange,r.cik,r.active
-               FROM market.ticker t LEFT JOIN ingest.ticker_reference r USING(ticker_id)
-           ), staged_metadata AS (
-               SELECT ticker_id,symbol,name,ticker_type,primary_exchange,cik,active
-               FROM pg_temp.publication_ticker_stage
-           )
-           SELECT 1 FROM (
-               (SELECT * FROM current_metadata EXCEPT SELECT * FROM staged_metadata)
-               UNION ALL
-               (SELECT * FROM staged_metadata EXCEPT SELECT * FROM current_metadata)
-           ) AS differences LIMIT 1"""
-    ).fetchone()
-    if difference is not None:
-        _fail()
-
-
 def _validate_stages(connection: psycopg.Connection, context: BuildContext) -> None:
     incomplete = connection.execute("SELECT 1 FROM pg_temp.publication_scope WHERE NOT complete LIMIT 1").fetchone()
     if incomplete is not None:
         _fail()
     missing_identity = connection.execute(
-        """SELECT 1 FROM pg_temp.publication_ticker_stage i WHERE NOT EXISTS
+        """SELECT 1 FROM market.ticker i WHERE NOT EXISTS
            (SELECT 1 FROM pg_temp.publication_scope s WHERE s.complete AND s.ticker_id=i.ticker_id)
            LIMIT 1"""
     ).fetchone()
@@ -360,7 +328,6 @@ def _validate_stages(connection: psycopg.Connection, context: BuildContext) -> N
         "WHERE date BETWEEN %s AND %s GROUP BY ticker_id,date_trunc('month',date)"
     )
     _require_key_match(connection, "publication_monthly_stage", monthly, (start, end, start, end))
-    _validate_staged_metadata(connection)
     target_rows = connection.execute(
         """SELECT count(*) FROM ingest.raw_daily r
            JOIN ingest.raw_session s ON s.date=r.date
@@ -460,7 +427,7 @@ def _refresh_latest_daily(connection: psycopg.Connection, context: BuildContext)
            SELECT d.ticker_id,d.date,d.open,d.high,d.low,d.close,d.volume
            FROM pg_temp.publication_daily_stage d
            JOIN pg_temp.publication_scope s USING(ticker_id)
-           JOIN pg_temp.publication_ticker_stage i USING(ticker_id)
+           JOIN market.ticker i ON i.ticker_id = d.ticker_id
            WHERE s.complete AND d.date=%s AND i.active IS TRUE
              AND i.ticker_type=ANY(%s)
            ON CONFLICT(ticker_id) DO UPDATE SET date=EXCLUDED.date, open=EXCLUDED.open,
@@ -477,7 +444,7 @@ def _refresh_latest_daily(connection: psycopg.Connection, context: BuildContext)
         """DELETE FROM market.latest_daily l USING pg_temp.publication_scope s
            WHERE s.complete AND l.ticker_id=s.ticker_id AND NOT EXISTS
               (SELECT 1 FROM pg_temp.publication_daily_stage d
-               JOIN pg_temp.publication_ticker_stage i USING(ticker_id)
+               JOIN market.ticker i ON i.ticker_id = d.ticker_id
               WHERE d.ticker_id=l.ticker_id AND d.date=%s AND i.active IS TRUE
                 AND i.ticker_type=ANY(%s))""",
         (context.target_session, list(context.ticker_types)),
@@ -510,13 +477,6 @@ def publish_staged(connection: psycopg.Connection, context: BuildContext) -> Pub
         with connection.transaction():
             _verify_run_state(connection, context)
             _validate_stages(connection, context)
-            connection.execute(
-                """UPDATE market.ticker t SET name=i.name,ticker_type=i.ticker_type,
-                     primary_exchange=i.primary_exchange,cik=i.cik,active=i.active
-                   FROM pg_temp.publication_ticker_stage i WHERE t.ticker_id=i.ticker_id
-                     AND ROW(t.name,t.ticker_type,t.primary_exchange,t.cik,t.active)
-                         IS DISTINCT FROM ROW(i.name,i.ticker_type,i.primary_exchange,i.cik,i.active)""",
-            )
             for kind, table in PUBLICATION_TABLES.items():
                 _publish_kind(connection, kind, table, context)
             _refresh_latest_daily(connection, context)

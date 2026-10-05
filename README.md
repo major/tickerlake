@@ -22,7 +22,7 @@ flowchart LR
     end
 
     subgraph LD["Load (postgres/)"]
-        Raw[("ingest.raw_daily<br/>+ ticker_reference + split_event<br/>+ run + cache_state")]
+        Raw[("ingest.raw_daily<br/>+ split_event<br/>+ run + cache_state")]
         Consumer[("market.adjusted_daily / weekly / monthly<br/>+ ticker + latest_daily<br/>+ publication_state")]
     end
 
@@ -65,7 +65,7 @@ The `info` subcommand is temporarily removed; the postgres-backed version will l
 
 A single PostgreSQL database, addressed by `DATABASE_URL`:
 
-- **`ingest.raw_daily`** -- unadjusted daily bars, plus private reference tables (`ticker_reference`, `split_event`), run ledger, and cache state
+- **`ingest.raw_daily`** -- unadjusted daily bars, plus private tables (`split_event`), run ledger, and cache state
 - **`market.adjusted_daily` / `_weekly` / `_monthly`** -- split-adjusted bars joined with technical indicators (`sma_*`, `atr_*`, `adr_*`, `volume_sma_20`)
 - **`market.ticker`**, **`market.latest_daily`**, **`market.publication_state`** -- published reference and latest-session projection
 

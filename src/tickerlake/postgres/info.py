@@ -33,7 +33,6 @@ _READ_FAILED: Final = "Could not read PostgreSQL database info"
 _KNOWN_TABLES: Final = (
     ("ingest", "raw_daily"),
     ("ingest", "split_event"),
-    ("ingest", "ticker_reference"),
     ("ingest", "run"),
     ("ingest", "cache_state"),
     ("market", "adjusted_bars"),

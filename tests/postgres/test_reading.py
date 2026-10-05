@@ -62,14 +62,8 @@ def _seed(database: object) -> tuple[int, int]:
             "VALUES (%s, %s, 3, 1, 0.333333333333)",
             (second, datetime.date(2025, 1, 4)),
         )
-        conn.execute(
-            "INSERT INTO ingest.ticker_reference (ticker_id, name, ticker_type) VALUES (%s, 'Alpha', 'CS')",
-            (first,),
-        )
-        conn.execute(
-            "INSERT INTO ingest.ticker_reference (ticker_id, name, ticker_type) VALUES (%s, 'Beta', 'ETF')",
-            (second,),
-        )
+        conn.execute("UPDATE market.ticker SET name='Alpha', ticker_type='CS' WHERE ticker_id=%s", (first,))
+        conn.execute("UPDATE market.ticker SET name='Beta', ticker_type='ETF' WHERE ticker_id=%s", (second,))
         conn.commit()
     return first, second
 

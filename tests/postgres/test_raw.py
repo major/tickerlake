@@ -85,13 +85,7 @@ def test_populates_empty_date_and_adds_new_symbols_to_existing_date(pg_owner_dsn
         assert [row[1] for row in _daily_rows(connection, DAY)] == ["AAA", "BBB"]
         assert connection.execute("SELECT ticker_id FROM market.ticker WHERE symbol = 'AAA'").fetchone()[0] == first_id
         assert connection.execute("SELECT active FROM market.ticker WHERE symbol = 'BBB'").fetchone() == (None,)
-        assert (
-            connection.execute(
-                "SELECT market.ticker.symbol, ingest.ticker_reference.cik "
-                "FROM ingest.ticker_reference JOIN market.ticker USING (ticker_id)"
-            ).fetchall()
-            == []
-        )
+        assert connection.execute("SELECT cik FROM market.ticker WHERE cik IS NOT NULL").fetchall() == []
         assert _daily_rows(connection, DAY)[1][-1] == DEFAULT_VOLUME
 
 

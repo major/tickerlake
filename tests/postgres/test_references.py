@@ -61,18 +61,21 @@ def test_ticker_scope_noop_and_change_revision(pg_migrated_database: object) -> 
         assert state.retained_start is None
         assert state.retained_end is None
         identity = conn.execute("SELECT ticker_id, name, active FROM market.ticker WHERE symbol='AAA'").fetchone()
-        assert identity[1:] == (None, None)
+        assert identity[1:] == ("Alpha", True)
         assert store_ticker_outcome(conn, request, _outcome(FetchStatus.populated, initial)) == 1
         assert read_cache_state(conn).input_revision == 1
 
         revised = _ticker_frame([("AAA", "Alpha II", "CS", "XNAS", "123", True)])
         assert store_ticker_outcome(conn, request, _outcome(FetchStatus.populated, revised)) == _REVISION_TWO
         assert read_cache_state(conn).input_revision == _REVISION_TWO
-        assert conn.execute("SELECT name, primary_exchange FROM ingest.ticker_reference").fetchone() == (
+        assert conn.execute("SELECT name, primary_exchange FROM market.ticker WHERE symbol='AAA'").fetchone() == (
             "Alpha II",
             "XNAS",
         )
-        assert conn.execute("SELECT name, active FROM market.ticker WHERE symbol='AAA'").fetchone() == (None, None)
+        assert conn.execute("SELECT name, active FROM market.ticker WHERE symbol='AAA'").fetchone() == (
+            "Alpha II",
+            True,
+        )
     finally:
         manager.__exit__(None, None, None)
 
@@ -105,11 +108,10 @@ def test_ticker_scope_preserves_other_types_and_requires_union_for_type_change(p
             )
             == _REVISION_TWO
         )
-        assert conn.execute(
-            "SELECT market.ticker.symbol, ingest.ticker_reference.ticker_type "
-            "FROM market.ticker JOIN ingest.ticker_reference USING(ticker_id) "
-            "ORDER BY market.ticker.symbol"
-        ).fetchall() == [("AAA", "CS"), ("BBB", "ETF")]
+        assert conn.execute("SELECT symbol, ticker_type FROM market.ticker ORDER BY symbol").fetchall() == [
+            ("AAA", "CS"),
+            ("BBB", "ETF"),
+        ]
         with pytest.raises(PostgresWriterError, match="union scope"):
             store_ticker_outcome(
                 conn,
@@ -119,11 +121,10 @@ def test_ticker_scope_preserves_other_types_and_requires_union_for_type_change(p
                     _ticker_frame([("BBB", "Beta", "CS", None, None, None)]),
                 ),
             )
-        assert conn.execute(
-            "SELECT market.ticker.symbol, ingest.ticker_reference.ticker_type "
-            "FROM market.ticker JOIN ingest.ticker_reference USING(ticker_id) "
-            "ORDER BY market.ticker.symbol"
-        ).fetchall() == [("AAA", "CS"), ("BBB", "ETF")]
+        assert conn.execute("SELECT symbol, ticker_type FROM market.ticker ORDER BY symbol").fetchall() == [
+            ("AAA", "CS"),
+            ("BBB", "ETF"),
+        ]
     finally:
         manager.__exit__(None, None, None)
 
@@ -225,8 +226,7 @@ def test_populated_ticker_replacement_removes_omitted_private_member_only(pg_mig
             "SELECT date, ticker_id, open, high, low, close, volume FROM ingest.raw_daily ORDER BY date, ticker_id"
         ).fetchall()
         before_references = conn.execute(
-            "SELECT ticker_id, name, ticker_type, primary_exchange, cik, active "
-            "FROM ingest.ticker_reference ORDER BY ticker_id"
+            "SELECT ticker_id, name, ticker_type, primary_exchange, cik, active FROM market.ticker ORDER BY ticker_id"
         ).fetchall()
         before_state = read_cache_state(conn)
 
@@ -243,13 +243,14 @@ def test_populated_ticker_replacement_removes_omitted_private_member_only(pg_mig
         assert read_cache_state(conn).input_revision == _REVISION_THREE
         assert read_cache_state(conn).retained_start == before_state.retained_start
         assert read_cache_state(conn).retained_end == before_state.retained_end
-        assert (
-            conn.execute(
-                "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active "
-                "FROM market.ticker ORDER BY ticker_id"
-            ).fetchall()
-            == before_public
-        )
+        assert conn.execute(
+            "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active "
+            "FROM market.ticker ORDER BY ticker_id"
+        ).fetchall() == [
+            before_public[0],
+            (before_public[1][0], before_public[1][1], None, None, None, None, None),
+            before_public[2],
+        ]
         assert (
             conn.execute(
                 "SELECT date, ticker_id, open, high, low, close, volume FROM ingest.raw_daily ORDER BY date, ticker_id"
@@ -258,11 +259,10 @@ def test_populated_ticker_replacement_removes_omitted_private_member_only(pg_mig
         )
         assert conn.execute(
             "SELECT ticker_id, name, ticker_type, primary_exchange, cik, active "
-            "FROM ingest.ticker_reference ORDER BY ticker_id"
+            "FROM market.ticker WHERE ticker_type IS NOT NULL ORDER BY ticker_id"
         ).fetchall() == [before_references[0], before_references[2]]
         assert conn.execute(
-            "SELECT market.ticker.symbol, ingest.ticker_reference.ticker_type "
-            "FROM market.ticker JOIN ingest.ticker_reference USING (ticker_id) ORDER BY market.ticker.symbol"
+            "SELECT symbol, ticker_type FROM market.ticker WHERE ticker_type IS NOT NULL ORDER BY symbol"
         ).fetchall() == [("AAA", "CS"), ("CCC", "ETF")]
         assert (
             conn.execute("SELECT source, status FROM ingest.fetch_manifest ORDER BY manifest_id").fetchall()
@@ -397,8 +397,7 @@ def test_nonpopulated_outcomes_keep_references_and_revision(pg_migrated_database
             "FROM market.ticker ORDER BY ticker_id"
         ).fetchall()
         before_tickers = conn.execute(
-            "SELECT ticker_id, name, ticker_type, primary_exchange, cik, active "
-            "FROM ingest.ticker_reference ORDER BY ticker_id"
+            "SELECT ticker_id, name, ticker_type, primary_exchange, cik, active FROM market.ticker ORDER BY ticker_id"
         ).fetchall()
         before_splits = conn.execute(
             "SELECT split_id, ticker_id, execution_date, split_from, split_to, adjustment_factor, adjustment_type "
@@ -434,7 +433,7 @@ def test_nonpopulated_outcomes_keep_references_and_revision(pg_migrated_database
         assert (
             conn.execute(
                 "SELECT ticker_id, name, ticker_type, primary_exchange, cik, active "
-                "FROM ingest.ticker_reference ORDER BY ticker_id"
+                "FROM market.ticker ORDER BY ticker_id"
             ).fetchall()
             == before_tickers
         )
@@ -508,7 +507,7 @@ def test_corrupt_staged_rows_roll_back_all_reference_effects(
                 ).fetchall(),
                 conn.execute(
                     "SELECT ticker_id, name, ticker_type, primary_exchange, cik, active "
-                    "FROM ingest.ticker_reference ORDER BY ticker_id"
+                    "FROM market.ticker ORDER BY ticker_id"
                 ).fetchall(),
                 conn.execute(
                     "SELECT split_id, ticker_id, execution_date, split_from, split_to, adjustment_factor, "
