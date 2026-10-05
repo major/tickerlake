@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
+from psycopg.pq import TransactionStatus
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -86,3 +87,14 @@ def require_writer_connection(connection: psycopg.Connection) -> None:
         raise PostgresWriterError(_LOCK_VERIFY_FAILED) from None
     if not row or not row[0]:
         raise PostgresWriterError(_EXCLUSIVE_LOCK_REQUIRED)
+
+
+def is_writer_connection_idle(connection: psycopg.Connection) -> bool:
+    """Return True iff the writer connection is open and not inside a transaction.
+
+    Callers use this to decide whether a follow-up statement (e.g. fail_run)
+    would be safe, or whether an aborted transaction state would mask the
+    original exception. Mirrors the live+idle gate that ``require_writer_connection``
+    enforces on the live-lock axis.
+    """
+    return not connection.closed and connection.info.transaction_status == TransactionStatus.IDLE

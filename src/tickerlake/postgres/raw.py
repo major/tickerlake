@@ -91,7 +91,7 @@ def _validate(connection: psycopg.Connection, request: FetchRequest, outcome: Fe
             raise _invalid()
         if not isinstance(outcome.status, FetchStatus):
             raise _invalid()
-        if outcome.status != FetchStatus.populated:
+        if not outcome.is_populated():
             if frame.height:
                 raise _invalid()
             return frame
@@ -138,7 +138,7 @@ def store_daily_outcome(
     try:
         with connection.transaction():
             manifest_id = None
-            if outcome.status == FetchStatus.populated:
+            if outcome.is_populated():
                 connection.execute("DROP TABLE IF EXISTS pg_temp.raw_stage")
                 connection.execute(
                     """CREATE TEMP TABLE raw_stage (
@@ -178,7 +178,7 @@ def store_daily_outcome(
                 else read_cache_state(connection).input_revision
             )
             manifest_id = record_fetch_outcome(connection, request, outcome)
-            if outcome.status == FetchStatus.populated:
+            if outcome.is_populated():
                 connection.execute(
                     """INSERT INTO ingest.raw_session (date, manifest_id)
                        VALUES (%s, %s)

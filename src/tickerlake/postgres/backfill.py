@@ -13,14 +13,17 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 import psycopg
-from psycopg.pq import TransactionStatus
 
 from tickerlake.calendar import get_closed_sessions, resolve_closed_target
 from tickerlake.client import MassiveClient
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
-from tickerlake.outcomes import FetchOutcome, FetchStatus
 from tickerlake.postgres._validation import is_date, require_unique_nonempty_strings
-from tickerlake.postgres.connection import PostgresWriterError, require_writer_connection, writer_connection
+from tickerlake.postgres.connection import (
+    PostgresWriterError,
+    is_writer_connection_idle,
+    require_writer_connection,
+    writer_connection,
+)
 from tickerlake.postgres.models import FetchRequest, RunSpec
 from tickerlake.postgres.publication import PublicationOutcomeUnknownError
 from tickerlake.postgres.raw import store_daily_outcome
@@ -42,12 +45,12 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from tickerlake.config import Config
+    from tickerlake.outcomes import FetchOutcome
     from tickerlake.postgres.publication import PublicationResult
 
 # Only documented safe run failure codes may be written.
 _KNOWN_FAILURE_CODE: Final = "validation_error"
 _INCOMPLETE_FAILURE_CODE: Final = "incomplete_fetch"
-_ACCEPTED_SPLITS: Final = frozenset({FetchStatus.populated, FetchStatus.successful_empty})
 
 _SAFE_NO_SESSIONS: Final = "Backfill has no closed sessions to fetch"
 _SAFE_DATABASE_URL: Final = "PostgreSQL database URL must be configured"
@@ -203,7 +206,7 @@ def _calendar_year_windows(
 def _fail_known(connection: psycopg.Connection, run_id: UUID, code: str) -> None:
     """Best-effort fail_run only while the original connection is alive, idle, and locked."""
     try:
-        if connection.closed or connection.info.transaction_status != TransactionStatus.IDLE:
+        if not is_writer_connection_idle(connection):
             return
         require_writer_connection(connection)
         fail_run(connection, run_id, code)
@@ -224,7 +227,7 @@ def _fetch_daily(
         previous = read_raw_date(connection, day)
         outcome = extract_daily_aggs(client, [day], previous=previous)[0]
         store_daily_outcome(connection, FetchRequest(run_id=run_id, source="daily", requested_date=day), outcome)
-        if outcome.status is not FetchStatus.populated:
+        if not outcome.is_populated():
             rejected.append(outcome)
         del previous, outcome
     if rejected:
@@ -243,7 +246,7 @@ def _store_tickers(
     previous = read_ticker_reference(connection, types)
     outcome = extract_tickers(client, list(types), previous=previous)
     store_ticker_outcome(connection, FetchRequest(run_id=run_id, source="tickers", ticker_types=types), outcome)
-    if outcome.status is not FetchStatus.populated:
+    if not outcome.is_populated():
         _fail_known(connection, run_id, _KNOWN_FAILURE_CODE)
         raise BackfillError(f"{_SAFE_TICKERS_UNPOPULATED}: {outcome.status.value}")
     del previous, outcome
@@ -264,7 +267,7 @@ def _store_splits(
             FetchRequest(run_id=run_id, source="splits", requested_start=window_start, requested_end=window_end),
             outcome,
         )
-        if outcome.status not in _ACCEPTED_SPLITS:
+        if not outcome.is_accepted():
             _fail_known(connection, run_id, _KNOWN_FAILURE_CODE)
             raise BackfillError(f"{_SAFE_SPLITS_UNPOPULATED}: {outcome.status.value}")
         del previous, outcome

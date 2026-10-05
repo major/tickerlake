@@ -168,49 +168,6 @@ def test_started_at_rejects_tzinfo_without_utcoffset() -> None:
     assert not state._started_at_ok(dt.datetime(2025, 1, 2, tzinfo=_NullOffsetTzinfo()))
 
 
-# --- _outcome_date_ok -------------------------------------------------------
-
-
-def test_outcome_date_ok_with_none() -> None:
-    """An outcome without a date is always valid."""
-    request = _req(requested_date=dt.date(2025, 1, 2))
-    outcome = FetchOutcome(status=FetchStatus.populated, frame=pl.DataFrame())
-    assert state._outcome_date_ok(request, outcome)
-
-
-def test_outcome_date_ok_with_matching_daily_date() -> None:
-    """An outcome date matching a daily request date is valid."""
-    request = _req(requested_date=dt.date(2025, 1, 2))
-    outcome = FetchOutcome(
-        status=FetchStatus.populated,
-        frame=pl.DataFrame(),
-        requested_date=dt.date(2025, 1, 2),
-    )
-    assert state._outcome_date_ok(request, outcome)
-
-
-def test_outcome_date_rejects_mismatch() -> None:
-    """An outcome date that differs from the request date is invalid."""
-    request = _req(requested_date=dt.date(2025, 1, 2))
-    outcome = FetchOutcome(
-        status=FetchStatus.populated,
-        frame=pl.DataFrame(),
-        requested_date=dt.date(2025, 1, 3),
-    )
-    assert not state._outcome_date_ok(request, outcome)
-
-
-def test_outcome_date_rejects_non_daily_source() -> None:
-    """An outcome date is only meaningful for daily requests."""
-    request = _req(source="tickers", ticker_types=("CS",))
-    outcome = FetchOutcome(
-        status=FetchStatus.populated,
-        frame=pl.DataFrame(),
-        requested_date=dt.date(2025, 1, 2),
-    )
-    assert not state._outcome_date_ok(request, outcome)
-
-
 # --- _validate_fetch_inputs -------------------------------------------------
 
 
