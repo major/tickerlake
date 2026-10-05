@@ -3,9 +3,9 @@
 These are sociable integration tests: the real XNYS calendar, extraction,
 Polars transforms, PostgreSQL storage, rebuild, and publication code all run.
 Only the external Massive client is replaced with a hand-written fake that
-returns raw provider-shaped records. The fake lives behind the production
-constructor seam ``postgres.backfill.MassiveClient`` and opens its own short
-lived observer connection, so no writer-connection code is patched.
+returns domain records and is passed to ``backfill`` via the ``client=`` kwarg.
+The fake opens its own short lived observer connection, so no writer-connection
+code is patched.
 
 The frozen API under test, owned by a separate production lane, is::
 
@@ -21,6 +21,7 @@ The frozen API under test, owned by a separate production lane, is::
         *,
         now: datetime.datetime,
         batch_size: int = 100,
+        client: MassiveClient | None = None,
     ) -> PublicationResult: ...
 
 The contract exercised here is observable behavior: which sessions are
@@ -39,6 +40,7 @@ from typing import TYPE_CHECKING
 import psycopg
 import pytest
 
+from tickerlake.client import DailyAgg, SplitRecord, TickerRecord
 from tickerlake.config import Config
 from tickerlake.postgres import backfill as backfill_module
 from tickerlake.postgres.backfill import BackfillError, BackfillRequest
@@ -79,49 +81,56 @@ def _utc(*args: int) -> datetime.datetime:
     return datetime.datetime(*args, tzinfo=UTC)
 
 
-def _millis(day: date) -> float:
+def _millis(day: date) -> int:
     midnight = datetime.datetime(day.year, day.month, day.day, tzinfo=UTC)
-    return float(int(midnight.timestamp() * 1000))
+    return int(midnight.timestamp() * 1000)
 
 
-def _daily_record(day: date, symbol: str, close: float) -> dict[str, object]:
-    return {
-        "timestamp": _millis(day),
-        "ticker": symbol,
-        "open": 10.0,
-        "high": 12.0,
-        "low": 9.0,
-        "close": close,
-        "volume": 100.0,
-    }
+def _daily_record(day: date, symbol: str, close: float) -> DailyAgg:
+    return DailyAgg(
+        ticker=symbol,
+        open=10.0,
+        high=12.0,
+        low=9.0,
+        close=close,
+        volume=100.0,
+        timestamp=_millis(day),
+    )
 
 
-def _daily_records(day: date, symbols: tuple[str, ...] = ("ACTIVE", "INACTIVE", "UNKNOWN")) -> list[dict[str, object]]:
+def _daily_records(day: date, symbols: tuple[str, ...] = ("ACTIVE", "INACTIVE", "UNKNOWN")) -> list[DailyAgg]:
     return [_daily_record(day, symbol, 11.0) for symbol in symbols]
 
 
-def _split_record(day: date, symbol: str = "ACTIVE") -> dict[str, object]:
-    return {
-        "ticker": symbol,
-        "execution_date": day.isoformat(),
-        "split_from": 2.0,
-        "split_to": 1.0,
-        "historical_adjustment_factor": 0.5,
-        "adjustment_type": "forward",
-    }
+def _split_record(day: date, symbol: str = "ACTIVE") -> SplitRecord:
+    return SplitRecord(
+        ticker=symbol,
+        execution_date=day.isoformat(),
+        split_from=2.0,
+        split_to=1.0,
+        historical_adjustment_factor=0.5,
+        adjustment_type="forward",
+    )
 
 
-def _ticker_records(types: tuple[str, ...]) -> list[dict[str, object]]:
+def _ticker_records(types: tuple[str, ...]) -> list[TickerRecord]:
     return [
-        {"ticker": "ACTIVE", "name": "Active", "type": types[0], "primary_exchange": "X", "cik": None, "active": True},
-        {
-            "ticker": "INACTIVE",
-            "name": "Inactive",
-            "type": types[0],
-            "primary_exchange": "X",
-            "cik": None,
-            "active": False,
-        },
+        TickerRecord(
+            ticker="ACTIVE",
+            name="Active",
+            type=types[0],
+            primary_exchange="X",
+            cik=None,
+            active=True,
+        ),
+        TickerRecord(
+            ticker="INACTIVE",
+            name="Inactive",
+            type=types[0],
+            primary_exchange="X",
+            cik=None,
+            active=False,
+        ),
     ]
 
 
@@ -138,11 +147,11 @@ def _writer_backend_state(database_url: str) -> str | None:
 
 @dataclass
 class FakeMassiveClient:
-    """Hand-written external Massive double returning raw provider-shaped records."""
+    """Hand-written external Massive double returning domain records."""
 
-    daily: dict[date, list[dict[str, object]]] = field(default_factory=dict)
-    splits: list[dict[str, object]] = field(default_factory=list)
-    tickers: list[dict[str, object]] | None = None
+    daily: dict[date, list[DailyAgg]] = field(default_factory=dict)
+    splits: list[SplitRecord] = field(default_factory=list)
+    tickers: list[TickerRecord] | None = None
     daily_override: Callable[[date], Any] | None = None
     ticker_override: Callable[[tuple[str, ...]], Any] | None = None
     observe_writer: bool = False
@@ -154,8 +163,8 @@ class FakeMassiveClient:
     ticker_calls: list[tuple[str, ...]] = field(default_factory=list)
     observed_states: list[str | None] = field(default_factory=list)
 
-    def fetch_daily_aggs(self, day: date) -> Any:
-        """Return raw provider daily records for one session."""
+    def fetch_daily_aggs(self, day: date) -> list[DailyAgg]:
+        """Return domain daily records for one session."""
         self._observe()
         self.daily_calls.append(day)
         self._cross_gate()
@@ -163,18 +172,18 @@ class FakeMassiveClient:
             return self.daily_override(day)
         return self.daily.get(day, [])
 
-    def fetch_splits(self, start_date: date, end_date: date) -> Any:
-        """Return raw provider split records that fall inside the requested range."""
+    def fetch_splits(self, start_date: date, end_date: date) -> list[SplitRecord]:
+        """Return domain split records that fall inside the requested range."""
         self._observe()
         self.split_calls.append((start_date, end_date))
         return [
             record
             for record in self.splits
-            if start_date <= datetime.date.fromisoformat(str(record["execution_date"])) <= end_date
+            if start_date <= datetime.date.fromisoformat(record.execution_date) <= end_date
         ]
 
-    def fetch_tickers(self, types: list[str]) -> Any:
-        """Return raw provider ticker metadata for the requested types."""
+    def fetch_tickers(self, types: list[str]) -> list[TickerRecord]:
+        """Return domain ticker metadata for the requested types."""
         self._observe()
         self.ticker_calls.append(tuple(types))
         if self.ticker_override is not None:
@@ -203,16 +212,9 @@ class FakeMassiveClient:
 
 
 @pytest.fixture
-def massive(monkeypatch: pytest.MonkeyPatch) -> FakeMassiveClient:
-    """Install the fake Massive client behind the production constructor seam."""
-    fake = FakeMassiveClient()
-
-    def construct(config: Config) -> FakeMassiveClient:
-        fake.config = config
-        return fake
-
-    monkeypatch.setattr(backfill_module, "MassiveClient", construct)
-    return fake
+def massive() -> FakeMassiveClient:
+    """Provide the hand-written Massive double at the external boundary."""
+    return FakeMassiveClient()
 
 
 def _config(
@@ -302,7 +304,7 @@ def _mutation_snapshot(database_url: str) -> tuple[list[tuple[object, ...]], ...
 
 def _bootstrap(database_url: str, massive: FakeMassiveClient) -> UUID:
     _seed_feed(massive, SESSIONS)
-    result = backfill_module.backfill(_config(database_url), _request(), now=AFTER_CLOSE)
+    result = backfill_module.backfill(_config(database_url), _request(), now=AFTER_CLOSE, client=massive)
     assert result.published_session == SESSION_TARGET
     return result.run_id
 
@@ -328,7 +330,7 @@ def test_fresh_bootstrap_fetches_every_closed_session_and_publishes_target(
     dsn = pg_migrated_database.owner_dsn
     _seed_feed(massive, SESSIONS)
 
-    result = backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, batch_size=BATCH_SIZE)
+    result = backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, batch_size=BATCH_SIZE, client=massive)
 
     assert result.published_session == SESSION_TARGET
     assert massive.daily_calls == list(SESSIONS)
@@ -381,7 +383,7 @@ def test_fresh_bootstrap_writes_no_local_database_files(
     dsn = pg_migrated_database.owner_dsn
     _seed_feed(massive, SESSIONS)
 
-    backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
+    backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, client=massive)
 
     assert list(tmp_path.iterdir()) == []
 
@@ -394,10 +396,10 @@ def test_repeated_backfill_preserves_symbol_identity(
     _seed_feed(massive, SESSIONS)
     config = _config(dsn)
 
-    backfill_module.backfill(config, _request(), now=AFTER_CLOSE)
+    backfill_module.backfill(config, _request(), now=AFTER_CLOSE, client=massive)
     first = dict(_rows(dsn, "SELECT symbol, ticker_id FROM market.ticker ORDER BY ticker_id"))
 
-    backfill_module.backfill(config, _request(), now=AFTER_CLOSE)
+    backfill_module.backfill(config, _request(), now=AFTER_CLOSE, client=massive)
     second = dict(_rows(dsn, "SELECT symbol, ticker_id FROM market.ticker ORDER BY ticker_id"))
 
     assert first == second
@@ -409,7 +411,7 @@ def test_run_records_versions_and_requested_bounds(pg_migrated_database, tmp_pat
     dsn = pg_migrated_database.owner_dsn
     _seed_feed(massive, SESSIONS)
 
-    result = backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
+    result = backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, client=massive)
 
     row = _rows(
         dsn,
@@ -447,7 +449,7 @@ def test_frozen_now_selects_target_and_fetch_scope(  # noqa: PLR0913, PLR0917
     dsn = pg_migrated_database.owner_dsn
     _seed_feed(massive, SESSIONS)
 
-    result = backfill_module.backfill(_config(dsn), _request(), now=now)
+    result = backfill_module.backfill(_config(dsn), _request(), now=now, client=massive)
 
     assert result.published_session == expected_target
     assert massive.daily_calls == list(expected_calls)
@@ -479,6 +481,7 @@ def test_correction_refetches_explicit_range_including_cached_dates(
         _config(dsn),
         _request(target=SESSION_TARGET, correction_range=(CORRECTION_START, CORRECTION_END)),
         now=AFTER_CLOSE,
+        client=massive,
     )
 
     assert massive.daily_calls == list(CORRECTION_SESSIONS)
@@ -514,6 +517,7 @@ def test_correction_target_must_have_existing_acceptance(
             _config(dsn),
             _request(target=SESSION_TARGET, correction_range=(CORRECTION_START, CORRECTION_END)),
             now=AFTER_CLOSE,
+            client=massive,
         )
 
     assert massive.daily_calls == list(CORRECTION_SESSIONS)
@@ -555,7 +559,7 @@ def test_unacceptable_target_preserves_public_generation_and_cached_raw(
     massive.daily_calls.clear()
 
     with pytest.raises(PostgresWriterError):
-        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
+        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, client=massive)
 
     assert _public_snapshot(dsn) == before
     assert (
@@ -614,7 +618,7 @@ def test_middle_session_failure_persists_accepted_raw_but_never_publishes(
     massive.daily_calls.clear()
 
     with pytest.raises(PostgresWriterError):
-        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
+        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, client=massive)
 
     assert massive.daily_calls == list(SESSIONS)
     failed_run = _failed_run(dsn)[0]
@@ -653,7 +657,7 @@ def test_initial_empty_split_history_is_valid_and_published(
     _seed_feed(massive, SESSIONS)
     massive.splits = []
 
-    result = backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
+    result = backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, client=massive)
 
     assert result.published_session == SESSION_TARGET
     assert _rows(dsn, "SELECT count(*) FROM ingest.split_event") == [(0,)]
@@ -671,7 +675,7 @@ def test_split_removal_blocks_publication(pg_migrated_database, tmp_path, massiv
 
     massive.splits = []
     with pytest.raises(PostgresWriterError):
-        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
+        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, client=massive)
 
     assert _public_snapshot(dsn) == before
     assert _rows(dsn, "SELECT count(*) FROM ingest.split_event") == [(1,)]
@@ -689,7 +693,7 @@ def test_ticker_metadata_shrink_blocks_and_preserves_references(
     massive.ticker_override = lambda types: _ticker_records(types)[:1]
 
     with pytest.raises(PostgresWriterError):
-        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
+        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, client=massive)
 
     assert _public_snapshot(dsn) == before
     assert _rows(dsn, "SELECT count(*) FROM ingest.ticker_reference") == [(2,)]
@@ -730,6 +734,7 @@ def test_split_coverage_uses_exact_contiguous_calendar_year_windows(
         _config(dsn, start=datetime.date(2023, 1, 3), end=datetime.date(2026, 12, 31)),
         _request(target=SESSION_TARGET, correction_range=(outside_event, datetime.date(2023, 3, 2))),
         now=AFTER_CLOSE,
+        client=massive,
     )
 
     retained = _rows(dsn, "SELECT retained_start, retained_end FROM ingest.cache_state WHERE cache_state_id = 1")[0]
@@ -746,6 +751,7 @@ def test_split_coverage_uses_exact_contiguous_calendar_year_windows(
         narrow,
         _request(target=SESSION_TARGET, correction_range=(outside_event, datetime.date(2023, 3, 2))),
         now=AFTER_CLOSE,
+        client=massive,
     )
 
     assert retained[1] > narrow.end_date
@@ -786,6 +792,7 @@ def test_missing_api_key_is_rejected_before_mutation(
             _config(dsn, api_key=""),
             _request(),
             now=AFTER_CLOSE,
+            client=massive,
         )
 
     assert _mutation_snapshot(dsn) == baseline
@@ -797,7 +804,7 @@ def test_naive_now_is_rejected_before_mutation(pg_migrated_database, tmp_path, m
     baseline = _mutation_snapshot(dsn)
 
     with pytest.raises(BackfillError, match="timezone-aware"):
-        backfill_module.backfill(_config(dsn), _request(), now=datetime.datetime(2024, 1, 5, 22, 0))  # noqa: DTZ001
+        backfill_module.backfill(_config(dsn), _request(), now=datetime.datetime(2024, 1, 5, 22, 0), client=massive)  # noqa: DTZ001
 
     assert _mutation_snapshot(dsn) == baseline
 
@@ -814,6 +821,7 @@ def test_non_date_target_is_rejected_before_mutation(
             _config(dsn),
             _request(target=datetime.datetime(2024, 1, 5, tzinfo=UTC)),
             now=AFTER_CLOSE,
+            client=massive,
         )
 
     assert _mutation_snapshot(dsn) == baseline
@@ -829,6 +837,7 @@ def test_empty_range_is_rejected_before_mutation(pg_migrated_database, tmp_path,
             _config(dsn, start=SESSION_TARGET, end=SESSION_START),
             _request(target=SESSION_START),
             now=AFTER_CLOSE,
+            client=massive,
         )
 
     assert _mutation_snapshot(dsn) == baseline
@@ -842,7 +851,7 @@ def test_batch_size_above_max_is_rejected_before_client_and_writes(
     baseline = _mutation_snapshot(dsn)
 
     with pytest.raises(BackfillError, match="batch size"):
-        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, batch_size=1001)
+        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, batch_size=1001, client=massive)
 
     assert _mutation_snapshot(dsn) == baseline
     assert massive.config is None
@@ -864,7 +873,7 @@ def test_too_many_ticker_types_is_rejected_before_client_and_writes(
     config.ticker_types = too_many
 
     with pytest.raises(BackfillError, match="ticker types"):
-        backfill_module.backfill(config, _request(), now=AFTER_CLOSE)
+        backfill_module.backfill(config, _request(), now=AFTER_CLOSE, client=massive)
 
     assert _mutation_snapshot(dsn) == baseline
     assert massive.config is None
@@ -886,6 +895,7 @@ def test_empty_weekend_correction_is_rejected_instead_of_falling_back_to_full(
             _config(dsn),
             _request(target=SESSION_TARGET, correction_range=(datetime.date(2024, 1, 6), datetime.date(2024, 1, 7))),
             now=AFTER_CLOSE,
+            client=massive,
         )
 
     assert _mutation_snapshot(dsn) == baseline
@@ -902,8 +912,10 @@ def test_writer_connection_is_idle_while_the_provider_is_fetched(
     dsn = pg_migrated_database.owner_dsn
     _seed_feed(massive, SESSIONS)
     massive.observe_writer = True
+    config = _config(dsn)
+    massive.config = config
 
-    backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
+    backfill_module.backfill(config, _request(), now=AFTER_CLOSE, client=massive)
 
     total_provider_calls = len(massive.daily_calls) + len(massive.split_calls) + len(massive.ticker_calls)
     assert total_provider_calls > len(SESSIONS), "the writer must also stay idle for ticker and split fetches"
@@ -925,7 +937,7 @@ def test_unknown_commit_propagates_without_marking_the_run_failed(
     monkeypatch.setattr(backfill_module, "rebuild_cache", lose_commit)
 
     with pytest.raises(PublicationOutcomeUnknownError) as caught:
-        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
+        backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, client=massive)
 
     assert caught.value.run_id is not None
     assert _rows(dsn, "SELECT state, failure_code FROM ingest.run") == [("running", None)]
@@ -945,7 +957,7 @@ def test_second_writer_cannot_acquire_lock_during_fetch(
 
     def run() -> None:
         try:
-            backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE)
+            backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, client=massive)
         except BaseException as error:  # noqa: BLE001
             errors.append(error)
 

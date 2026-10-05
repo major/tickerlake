@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Final
 import psycopg
 
 from tickerlake.calendar import get_closed_sessions, resolve_closed_target
-from tickerlake.client import MassiveClient
+from tickerlake.client import MassiveClient, SdkMassiveClient
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
 from tickerlake.postgres._validation import is_date, require_unique_nonempty_strings
 from tickerlake.postgres.connection import (
@@ -312,6 +312,7 @@ def backfill(
     *,
     now: datetime.datetime,
     batch_size: int = 100,
+    client: MassiveClient | None = None,
 ) -> PublicationResult:
     """Fetch configured history or a correction range from Massive, then rebuild and publish.
 
@@ -320,6 +321,7 @@ def backfill(
         request: Frozen provenance plus optional target and correction range.
         now: Timezone-aware instant used to resolve and bound closed sessions.
         batch_size: Positive identity page size for the publication rebuild.
+        client: Optional pre-built Massive client; defaults to ``SdkMassiveClient(config)`` after validation.
 
     Returns:
         The durable publication result from the chunk 4 rebuild.
@@ -339,7 +341,8 @@ def backfill(
     if not selected:
         raise BackfillError(_SAFE_NO_SESSIONS)
 
-    client = MassiveClient(config)
+    if client is None:
+        client = SdkMassiveClient(config)
 
     with writer_connection(database_url) as connection:
         return _fetch_reference_and_publish(
@@ -353,13 +356,23 @@ def update(
     *,
     now: datetime.datetime,
     batch_size: int = 100,
+    client: MassiveClient | None = None,
 ) -> PublicationResult:
-    """Refresh recent raw revisions and references, then publish the cache."""
+    """Refresh recent raw revisions and references, then publish the cache.
+
+    Args:
+        config: Validated application configuration, including credentials and DSN.
+        request: Frozen provenance plus optional target and correction range.
+        now: Timezone-aware instant used to resolve and bound closed sessions.
+        batch_size: Positive identity page size for the publication rebuild.
+        client: Optional pre-built Massive client; defaults to ``SdkMassiveClient(config)`` after validation.
+    """
     database_url = _validate_config(config)
     _validate_request(request, now=now, batch_size=batch_size)
 
     target = resolve_closed_target(request.target if request.target is not None else config.end_date, now=now)
-    client = MassiveClient(config)
+    if client is None:
+        client = SdkMassiveClient(config)
     with writer_connection(database_url) as connection:
         # Scope depends on durable raw history, so choose it only after taking the
         # same writer lock used by backfill and publication.

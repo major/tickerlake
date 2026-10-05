@@ -29,6 +29,6 @@
 CI runs lint, format-check, typecheck, complexity, and test-cov separately. There is no configured coverage minimum.
 
 ## Validation
-- Pipeline tests use real extraction, transforms, calendar, and PostgreSQL state. Fake the Massive API at `tickerlake.postgres.backfill.MassiveClient` (the production constructor seam in `postgres.backfill`). Assert persisted state and observable behavior, not internal calls. Patch internal functions only for explicit fault injection. Postgres integration tests in `tests/postgres/` are gated by `TICKERLAKE_TEST_POSTGRES=1` and require `pg_ctl` / `initdb` on `PATH` (the CI job installs them via `ankane/setup-postgres`).
+- Pipeline tests use real extraction, transforms, calendar, and PostgreSQL state. Fake the Massive API by passing a fake `MassiveClient` (the Protocol from `tickerlake.client`) to `backfill()` or `update()` via the `client=` kwarg. The default is `SdkMassiveClient(config)`. Assert persisted state and observable behavior, not internal calls. Patch internal functions only for explicit fault injection. Postgres integration tests in `tests/postgres/` are gated by `TICKERLAKE_TEST_POSTGRES=1` and require `pg_ctl` / `initdb` on `PATH` (the CI job installs them via `ankane/setup-postgres`).
 - Focused test example: `uv run pytest tests/test_transform.py -k test_name` (use the corresponding test file and selector).
 - `uv run ty check src/` is the project type checker. It runs via `make typecheck` and is part of `make check` and CI.

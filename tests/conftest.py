@@ -1,9 +1,49 @@
 """Pytest configuration and shared fixtures for tickerlake tests."""
 
 import datetime
+import json
+from typing import Any
 
 import polars as pl
 import pytest
+from urllib3.response import HTTPResponse
+
+from tickerlake.client import SdkMassiveClient
+from tickerlake.config import Config
+
+
+class FakeTransport:
+    """Serve queued HTTP responses through urllib3's request boundary."""
+
+    def __init__(self, responses: list[HTTPResponse]) -> None:
+        """Store the response sequence and begin recording requests."""
+        self.responses = iter(responses)
+        self.requests: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    def request(self, method: str, url: str, *, fields: dict[str, Any] | None, headers: Any) -> HTTPResponse:
+        """Return the next queued response and record the request."""
+        del headers
+        self.requests.append((method, url, fields))
+        return next(self.responses)
+
+
+def response(payload: Any, *, status: int = 200) -> HTTPResponse:
+    """Create a real urllib3 response with a JSON body."""
+    body = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+    return HTTPResponse(body=body, status=status)
+
+
+@pytest.fixture
+def client_and_transport() -> tuple[SdkMassiveClient, FakeTransport]:
+    """Build a real SdkMassiveClient wired to a deterministic transport.
+
+    The real ``RESTClient`` runs end to end; only its urllib3 transport is
+    swapped, so request construction, pagination, and model parsing all execute.
+    """
+    client = SdkMassiveClient(Config(api_key="test-key"))
+    transport = FakeTransport([])
+    client._client.client = transport  # noqa: SLF001
+    return client, transport
 
 
 @pytest.fixture

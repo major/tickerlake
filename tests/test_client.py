@@ -1,204 +1,307 @@
-"""Tests for the Massive API client wrapper."""
+"""Adapter mapping and Protocol conformance tests for the Massive client seam.
+
+These tests drive the real ``SdkMassiveClient`` through the shared
+``FakeTransport`` urllib3 harness defined in ``tests/conftest.py``. They lock
+in the exact wire-to-record mapping for each fetch method and prove that both
+the production adapter and a minimal fake satisfy the ``MassiveClient``
+protocol.
+"""
 
 import datetime
-import json
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from dataclasses import replace
+from typing import Any
 
 import pytest
-from urllib3.response import HTTPResponse
 
-from tickerlake.client import MassiveClient
+from tests.conftest import FakeTransport, response
+from tickerlake.client import DailyAgg, MassiveClient, SdkMassiveClient, SplitRecord, TickerRecord
 from tickerlake.config import Config
 
-if TYPE_CHECKING:
-    from pathlib import Path
+DAILY_AGG_PAYLOAD: dict[str, Any] = {
+    "T": "AAPL",
+    "o": 1.0,
+    "h": 2.0,
+    "l": 0.5,
+    "c": 1.5,
+    "v": 100.0,
+    "t": 1700000000000,
+}
+DAILY_AGG_RECORD = DailyAgg(
+    ticker="AAPL",
+    open=1.0,
+    high=2.0,
+    low=0.5,
+    close=1.5,
+    volume=100.0,
+    timestamp=1700000000000,
+)
+
+SPLIT_PAYLOAD: dict[str, Any] = {
+    "ticker": "AAPL",
+    "execution_date": "2024-01-15",
+    "split_from": 1.0,
+    "split_to": 2.0,
+    "historical_adjustment_factor": 2.0,
+    "adjustment_type": "forward",
+}
+SPLIT_RECORD = SplitRecord(
+    ticker="AAPL",
+    execution_date="2024-01-15",
+    split_from=1.0,
+    split_to=2.0,
+    historical_adjustment_factor=2.0,
+    adjustment_type="forward",
+)
+
+TICKER_PAYLOAD: dict[str, Any] = {
+    "ticker": "AAPL",
+    "name": "Apple Inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS",
+    "cik": "0000320193",
+    "active": True,
+}
+TICKER_RECORD = TickerRecord(
+    ticker="AAPL",
+    name="Apple Inc.",
+    type="CS",
+    primary_exchange="XNAS",
+    cik="0000320193",
+    active=True,
+)
 
 
-@dataclass(frozen=True)
-class DailyAgg:
-    """Representative grouped daily aggregate record."""
+class FakeMassiveClient:
+    """Minimal domain fake implementing the three ``MassiveClient`` methods."""
 
-    ticker: str
-    close: float
+    def fetch_daily_aggs(self, date: datetime.date) -> list[DailyAgg]:
+        """Return no grouped daily aggregates."""
+        return []
 
+    def fetch_splits(self, start_date: datetime.date, end_date: datetime.date) -> list[SplitRecord]:
+        """Return no split records."""
+        return []
 
-@dataclass(frozen=True)
-class Split:
-    """Representative stock split record."""
-
-    ticker: str
-    execution_date: str
-    split_from: float
-    split_to: float
-
-
-@dataclass(frozen=True)
-class Ticker:
-    """Representative ticker reference record."""
-
-    ticker: str
-    type: str
-
-
-class FakeSdk:
-    """Small SDK-boundary fake with generator-backed endpoint responses."""
-
-    def __init__(self) -> None:
-        """Initialize empty endpoint responses and request records."""
-        self.daily_aggs: list[DailyAgg] = []
-        self.splits: list[Split] = []
-        self.tickers_by_type: dict[str, list[Ticker]] = {}
-        self.daily_params: dict[str, Any] | None = None
-        self.split_params: dict[str, Any] | None = None
-        self.ticker_params: list[dict[str, Any]] = []
-        self.BASE = "https://api.massive.com"
-        self.json = json
-
-    def get_grouped_daily_aggs(self, **params: Any) -> list[DailyAgg]:
-        """Return configured aggregate records and store the request."""
-        self.daily_params = {key: value for key, value in params.items() if key != "raw"}
-        rows = [{"T": row.ticker, "c": row.close} for row in self.daily_aggs]
-        return HTTPResponse(body=json.dumps({"results": rows}).encode(), status=200)  # type: ignore[return-value]
-
-    def list_stocks_splits(self, **params: Any) -> HTTPResponse:
-        """Yield configured split records and store the request."""
-        self.split_params = {key: value for key, value in params.items() if key != "raw"}
-        rows = [
-            {
-                "ticker": row.ticker,
-                "execution_date": row.execution_date,
-                "split_from": row.split_from,
-                "split_to": row.split_to,
-            }
-            for row in self.splits
-        ]
-        return HTTPResponse(body=json.dumps({"results": rows}).encode(), status=200)
-
-    def list_tickers(self, **params: Any) -> HTTPResponse:
-        """Yield configured records for the requested type."""
-        params = {key: value for key, value in params.items() if key != "raw"}
-        self.ticker_params.append(params)
-        rows = [
-            {"ticker": row.ticker, "type": row.type, "active": True} for row in self.tickers_by_type[params["type"]]
-        ]
-        return HTTPResponse(body=json.dumps({"results": rows}).encode(), status=200)
-
-
-@pytest.fixture
-def sample_config(tmp_path: Path) -> Config:
-    """Build a representative client configuration."""
-    return Config(
-        api_key="test-api-key",
-        start_date=datetime.date(2024, 1, 1),
-        end_date=datetime.date(2024, 12, 31),
-        ticker_types=["CS", "ETF", "ETV", "ETN", "ADRC"],
-    )
-
-
-def client_with_sdk(monkeypatch: pytest.MonkeyPatch, config: Config, sdk: FakeSdk) -> MassiveClient:
-    """Construct a client using the supplied SDK-boundary fake."""
-
-    def create_client(*, api_key: str) -> FakeSdk:
-        assert api_key == config.api_key
-        return sdk
-
-    monkeypatch.setattr("tickerlake.client.RESTClient", create_client)
-    return MassiveClient(config)
+    def fetch_tickers(self, types: list[str]) -> list[TickerRecord]:
+        """Return no ticker reference records."""
+        return []
 
 
 def test_init_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reject missing credentials before constructing the SDK client."""
-    with monkeypatch.context() as context:
-        context.delenv("MASSIVE_API_KEY", raising=False)
-        context.setattr("tickerlake.client.RESTClient", lambda **_: pytest.fail("SDK should not be created"))
-        with pytest.raises(ValueError, match="MASSIVE_API_KEY environment variable is required"):
-            MassiveClient(Config(api_key=""))
+    # Arrange
+    monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="MASSIVE_API_KEY environment variable is required"):
+        SdkMassiveClient(Config(api_key=""))
 
 
-def test_fetch_daily_aggs_preserves_sdk_records_and_request(
-    sample_config: Config, monkeypatch: pytest.MonkeyPatch
+def test_fetch_daily_aggs_maps_full_payload_to_record(
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport],
 ) -> None:
-    """Return representative SDK data and send the grouped-aggregate filters."""
-    sdk = FakeSdk()
-    expected = [DailyAgg(ticker="AAPL", close=150.25)]
-    sdk.daily_aggs = expected
-    client = client_with_sdk(monkeypatch, sample_config, sdk)
-    requested_date = datetime.date(2024, 1, 15)
+    """Map every populated wire field onto the exact DailyAgg record."""
+    # Arrange
+    client, transport = client_and_transport
+    transport.responses = iter([response({"results": [dict(DAILY_AGG_PAYLOAD)]})])
 
-    result = client.fetch_daily_aggs(requested_date)
+    # Act
+    result = client.fetch_daily_aggs(datetime.date(2024, 1, 15))
 
-    assert len(result) == 1
-    assert result[0].ticker == "AAPL"
-    assert result[0].close == expected[0].close
-    assert sdk.daily_params == {
-        "date": requested_date,
-        "adjusted": False,
-        "market_type": "stocks",
-        "include_otc": False,
-    }
+    # Assert
+    assert result == [DAILY_AGG_RECORD]
 
 
-def test_fetch_splits_materializes_sdk_generator_and_formats_date_filters(
-    sample_config: Config, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("wire_key", "field_name"),
+    [
+        ("T", "ticker"),
+        ("o", "open"),
+        ("h", "high"),
+        ("l", "low"),
+        ("c", "close"),
+        ("v", "volume"),
+        ("t", "timestamp"),
+    ],
+)
+def test_fetch_daily_aggs_absent_optional_key_maps_to_none(
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport],
+    wire_key: str,
+    field_name: str,
 ) -> None:
-    """Materialize split records and send inclusive date filters as strings."""
-    sdk = FakeSdk()
-    expected = [
-        Split(ticker="AAPL", execution_date="2024-01-15", split_from=1.0, split_to=2.0),
-        Split(ticker="MSFT", execution_date="2024-02-01", split_from=1.0, split_to=3.0),
-    ]
-    sdk.splits = expected
-    client = client_with_sdk(monkeypatch, sample_config, sdk)
+    """Leave the DailyAgg field None when its optional wire key is absent."""
+    # Arrange
+    client, transport = client_and_transport
+    payload = dict(DAILY_AGG_PAYLOAD)
+    del payload[wire_key]
+    transport.responses = iter([response({"results": [payload]})])
 
+    # Act
+    result = client.fetch_daily_aggs(datetime.date(2024, 1, 15))
+
+    # Assert
+    assert result == [replace(DAILY_AGG_RECORD, **{field_name: None})]
+
+
+def test_fetch_daily_aggs_maps_sdk_ticker_and_timestamp_keys(
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport],
+) -> None:
+    """Map the SDK's T wire key to ticker and t to the epoch-millisecond timestamp."""
+    # Arrange
+    client, transport = client_and_transport
+    transport.responses = iter([response({"results": [{"T": "AAPL", "t": 1700000000000}]})])
+
+    # Act
+    result = client.fetch_daily_aggs(datetime.date(2023, 11, 14))
+
+    # Assert
+    assert result == [DailyAgg(ticker="AAPL", timestamp=1700000000000)]
+
+
+def test_fetch_splits_maps_full_payload_to_record(
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport],
+) -> None:
+    """Map every populated split wire field onto the exact SplitRecord."""
+    # Arrange
+    client, transport = client_and_transport
+    transport.responses = iter([response({"results": [dict(SPLIT_PAYLOAD)]})])
+
+    # Act
     result = client.fetch_splits(datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
 
-    assert len(result) == len(expected)
-    assert isinstance(result, list)
-    assert [split.ticker for split in result] == ["AAPL", "MSFT"]
-    assert sdk.split_params == {
-        "execution_date_gte": "2024-01-01",
-        "execution_date_lte": "2024-12-31",
-    }
+    # Assert
+    assert result == [SPLIT_RECORD]
 
 
-def test_fetch_tickers_materializes_and_combines_each_type_response(
-    sample_config: Config, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("wire_key", "field_name"),
+    [
+        ("ticker", "ticker"),
+        ("execution_date", "execution_date"),
+        ("split_from", "split_from"),
+        ("split_to", "split_to"),
+        ("historical_adjustment_factor", "historical_adjustment_factor"),
+        ("adjustment_type", "adjustment_type"),
+    ],
+)
+def test_fetch_splits_absent_optional_key_maps_to_none(
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport],
+    wire_key: str,
+    field_name: str,
 ) -> None:
-    """Combine generator responses and preserve each ticker record's values."""
-    sdk = FakeSdk()
-    cs_tickers = [Ticker(ticker="AAPL", type="CS"), Ticker(ticker="MSFT", type="CS")]
-    etf_tickers = [Ticker(ticker="SPY", type="ETF"), Ticker(ticker="QQQ", type="ETF")]
-    sdk.tickers_by_type = {"CS": cs_tickers, "ETF": etf_tickers}
-    client = client_with_sdk(monkeypatch, sample_config, sdk)
+    """Leave the SplitRecord field None when its optional wire key is absent."""
+    # Arrange
+    client, transport = client_and_transport
+    payload = dict(SPLIT_PAYLOAD)
+    del payload[wire_key]
+    transport.responses = iter([response({"results": [payload]})])
 
+    # Act
+    result = client.fetch_splits(datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
+
+    # Assert
+    assert result == [replace(SPLIT_RECORD, **{field_name: None})]
+
+
+def test_fetch_tickers_maps_full_payload_to_record(
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport],
+) -> None:
+    """Map every populated ticker wire field onto the exact TickerRecord."""
+    # Arrange
+    client, transport = client_and_transport
+    transport.responses = iter([response({"results": [dict(TICKER_PAYLOAD)]})])
+
+    # Act
+    result = client.fetch_tickers(["CS"])
+
+    # Assert
+    assert result == [TICKER_RECORD]
+
+
+@pytest.mark.parametrize(
+    ("wire_key", "field_name"),
+    [
+        ("ticker", "ticker"),
+        ("name", "name"),
+        ("type", "type"),
+        ("primary_exchange", "primary_exchange"),
+        ("cik", "cik"),
+        ("active", "active"),
+    ],
+)
+def test_fetch_tickers_absent_optional_key_maps_to_none(
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport],
+    wire_key: str,
+    field_name: str,
+) -> None:
+    """Leave the TickerRecord field None when its optional wire key is absent."""
+    # Arrange
+    client, transport = client_and_transport
+    payload = dict(TICKER_PAYLOAD)
+    del payload[wire_key]
+    transport.responses = iter([response({"results": [payload]})])
+
+    # Act
+    result = client.fetch_tickers(["CS"])
+
+    # Assert
+    assert result == [replace(TICKER_RECORD, **{field_name: None})]
+
+
+def test_fetch_tickers_iterates_types_and_maps_each_response(
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport],
+) -> None:
+    """Issue one typed request per type and map each response to TickerRecords."""
+    # Arrange
+    client, transport = client_and_transport
+    transport.responses = iter(
+        [
+            response({"results": [{"ticker": "AAPL", "type": "CS", "active": True}]}),
+            response({"results": [{"ticker": "SPY", "type": "ETF", "active": True}]}),
+        ]
+    )
+
+    # Act
     result = client.fetch_tickers(["CS", "ETF"])
 
-    assert [ticker.ticker for ticker in result] == [ticker.ticker for ticker in cs_tickers + etf_tickers]
-    assert isinstance(result, list)
-    assert [ticker.ticker for ticker in result] == ["AAPL", "MSFT", "SPY", "QQQ"]
-    assert sdk.ticker_params == [
-        {"market": "stocks", "type": "CS", "active": True, "limit": 1000},
-        {"market": "stocks", "type": "ETF", "active": True, "limit": 1000},
+    # Assert
+    assert result == [
+        TickerRecord(ticker="AAPL", type="CS", active=True),
+        TickerRecord(ticker="SPY", type="ETF", active=True),
     ]
+    assert len(transport.requests) == 2  # noqa: PLR2004
+    requested_types = [request[2]["type"] for request in transport.requests]
+    assert requested_types == ["CS", "ETF"]
 
 
-def test_fetch_tickers_with_no_types_returns_empty_list(sample_config: Config, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Return an empty result without issuing ticker requests for no types."""
-    sdk = FakeSdk()
-    client = client_with_sdk(monkeypatch, sample_config, sdk)
-
-    assert client.fetch_tickers([]) == []
-    assert sdk.ticker_params == []
-
-
-def test_fetch_splits_with_empty_sdk_generator_returns_empty_list(
-    sample_config: Config, monkeypatch: pytest.MonkeyPatch
+def test_fetch_tickers_with_no_types_returns_empty_list(
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport],
 ) -> None:
-    """Return an empty list when the SDK split generator yields no records."""
-    client = client_with_sdk(monkeypatch, sample_config, FakeSdk())
+    """Return an empty list and issue no requests when no types are requested."""
+    # Arrange
+    client, transport = client_and_transport
 
-    result = client.fetch_splits(datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
+    # Act
+    result = client.fetch_tickers([])
 
+    # Assert
     assert result == []
-    assert isinstance(result, list)
+    assert transport.requests == []
+
+
+def test_sdk_massive_client_satisfies_protocol() -> None:
+    """SdkMassiveClient conforms to the MassiveClient protocol."""
+    # Arrange / Act
+    client = SdkMassiveClient(Config(api_key="test-key"))
+
+    # Assert
+    assert isinstance(client, MassiveClient)
+
+
+def test_fake_massive_client_satisfies_protocol() -> None:
+    """A minimal fake implementing the three methods also satisfies the protocol."""
+    # Arrange / Act
+    fake = FakeMassiveClient()
+
+    # Assert
+    assert isinstance(fake, MassiveClient)
