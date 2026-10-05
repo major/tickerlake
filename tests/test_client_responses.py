@@ -191,3 +191,110 @@ def test_valid_split_pages_are_deserialized(client_and_transport: tuple[MassiveC
 
     result = client.fetch_splits(datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
     assert [row.ticker for row in result] == ["AAPL", "MSFT"]
+
+
+def test_daily_aggs_request_flags(client_and_transport: tuple[MassiveClient, FakeTransport]) -> None:
+    """Send the raw grouped-aggregate flags the pipeline relies on.
+
+    The SDK serializes boolean flags as lowercase strings on the query string,
+    and injects ``locale=us`` even though the wrapper never passes it.
+    """
+    # Arrange
+    client, transport = client_and_transport
+    transport.responses = iter([response({"results": []})])
+
+    # Act
+    client.fetch_daily_aggs(datetime.date(2024, 1, 15))
+
+    # Assert
+    assert transport.requests[0] == (
+        "GET",
+        "https://api.massive.com/v2/aggs/grouped/locale/us/market/stocks/2024-01-15",
+        {"adjusted": "false", "locale": "us", "market_type": "stocks", "include_otc": "false"},
+    )
+
+
+def test_splits_request_date_range(client_and_transport: tuple[MassiveClient, FakeTransport]) -> None:
+    """Send inclusive split date filters that the SDK rewrites with dot separators.
+
+    The wrapper passes ``execution_date_gte``/``execution_date_lte``, but the
+    SDK transmits them as ``execution_date.gte``/``execution_date.lte``.
+    """
+    # Arrange
+    client, transport = client_and_transport
+    transport.responses = iter([response({"results": []})])
+
+    # Act
+    client.fetch_splits(datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
+
+    # Assert
+    assert transport.requests[0] == (
+        "GET",
+        "https://api.massive.com/stocks/v1/splits",
+        {"execution_date.gte": "2024-01-01", "execution_date.lte": "2024-12-31"},
+    )
+
+
+def test_tickers_request_includes_limit_and_market_and_active(
+    client_and_transport: tuple[MassiveClient, FakeTransport],
+) -> None:
+    """Request active US-stock tickers with the explicit 1000-row page limit.
+
+    The SDK default limit is 10, so asserting ``limit == 1000`` here guards the
+    wrapper's override that keeps reference fetches from silently thinning.
+    """
+    # Arrange
+    client, transport = client_and_transport
+    transport.responses = iter([response({"results": []})])
+
+    # Act
+    client.fetch_tickers(["CS"])
+
+    # Assert
+    fields = transport.requests[0][2]
+    assert fields is not None
+    assert fields["market"] == "stocks"
+    assert fields["type"] == "CS"
+    assert fields["active"] == "true"
+    assert fields["limit"] == 1000  # noqa: PLR2004
+
+
+def test_tickers_request_iterates_over_types(client_and_transport: tuple[MassiveClient, FakeTransport]) -> None:
+    """Issue one ticker request per requested type, each with identical filters."""
+    # Arrange
+    client, transport = client_and_transport
+    transport.responses = iter([response({"results": []}), response({"results": []})])
+
+    # Act
+    client.fetch_tickers(["CS", "ETF"])
+
+    # Assert
+    assert len(transport.requests) == 2  # noqa: PLR2004
+    for request, expected_type in zip(transport.requests, ("CS", "ETF"), strict=True):
+        fields = request[2]
+        assert fields is not None
+        assert fields["type"] == expected_type
+        assert fields["market"] == "stocks"
+        assert fields["active"] == "true"
+        assert fields["limit"] == 1000  # noqa: PLR2004
+
+
+def test_daily_agg_timestamp_passes_through_as_epoch_milliseconds(
+    client_and_transport: tuple[MassiveClient, FakeTransport],
+) -> None:
+    """Preserve the raw epoch-millisecond timestamp the SDK exposes.
+
+    The SDK does not convert ``t`` into a datetime, so this locks in the integer
+    value that ``extract.py`` must translate itself.
+    """
+    # Arrange
+    client, transport = client_and_transport
+    transport.responses = iter([response({"results": [{"T": "AAPL", "t": 1700000000000}]})])
+
+    # Act
+    result = client.fetch_daily_aggs(datetime.date(2023, 11, 14))
+
+    # Assert
+    assert len(result) == 1
+    assert result[0].timestamp == 1700000000000  # noqa: PLR2004
+    assert isinstance(result[0].timestamp, int)
