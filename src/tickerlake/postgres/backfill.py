@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Final
 import psycopg
 
 from tickerlake.calendar import get_closed_sessions, resolve_closed_target
-from tickerlake.client import MassiveClient
+from tickerlake.client import MassiveClient, SdkMassiveClient
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
 from tickerlake.postgres._validation import is_date, require_unique_nonempty_strings
 from tickerlake.postgres.connection import (
@@ -339,7 +339,7 @@ def backfill(
     if not selected:
         raise BackfillError(_SAFE_NO_SESSIONS)
 
-    client = MassiveClient(config)
+    client = SdkMassiveClient(config)
 
     with writer_connection(database_url) as connection:
         return _fetch_reference_and_publish(
@@ -359,7 +359,7 @@ def update(
     _validate_request(request, now=now, batch_size=batch_size)
 
     target = resolve_closed_target(request.target if request.target is not None else config.end_date, now=now)
-    client = MassiveClient(config)
+    client = SdkMassiveClient(config)
     with writer_connection(database_url) as connection:
         # Scope depends on durable raw history, so choose it only after taking the
         # same writer lock used by backfill and publication.

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from urllib3.response import HTTPResponse
 
-from tickerlake.client import MassiveClient
+from tickerlake.client import SdkMassiveClient
 from tickerlake.config import Config
 
 if TYPE_CHECKING:
@@ -96,7 +96,7 @@ def sample_config(tmp_path: Path) -> Config:
     )
 
 
-def client_with_sdk(monkeypatch: pytest.MonkeyPatch, config: Config, sdk: FakeSdk) -> MassiveClient:
+def client_with_sdk(monkeypatch: pytest.MonkeyPatch, config: Config, sdk: FakeSdk) -> SdkMassiveClient:
     """Construct a client using the supplied SDK-boundary fake."""
 
     def create_client(*, api_key: str) -> FakeSdk:
@@ -104,7 +104,7 @@ def client_with_sdk(monkeypatch: pytest.MonkeyPatch, config: Config, sdk: FakeSd
         return sdk
 
     monkeypatch.setattr("tickerlake.client.RESTClient", create_client)
-    return MassiveClient(config)
+    return SdkMassiveClient(config)
 
 
 def test_init_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -113,7 +113,7 @@ def test_init_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
         context.delenv("MASSIVE_API_KEY", raising=False)
         context.setattr("tickerlake.client.RESTClient", lambda **_: pytest.fail("SDK should not be created"))
         with pytest.raises(ValueError, match="MASSIVE_API_KEY environment variable is required"):
-            MassiveClient(Config(api_key=""))
+            SdkMassiveClient(Config(api_key=""))
 
 
 def test_fetch_daily_aggs_preserves_sdk_records_and_request(

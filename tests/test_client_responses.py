@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from urllib3.response import HTTPResponse
 
-from tickerlake.client import MassiveClient
+from tickerlake.client import SdkMassiveClient
 from tickerlake.config import Config
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
 from tickerlake.outcomes import FetchStatus
@@ -37,16 +37,16 @@ def response(payload: Any, *, status: int = 200) -> HTTPResponse:
 
 
 @pytest.fixture
-def client_and_transport(tmp_path: Any) -> tuple[MassiveClient, FakeTransport]:
+def client_and_transport(tmp_path: Any) -> tuple[SdkMassiveClient, FakeTransport]:
     config = Config(api_key="test-key")
-    client = MassiveClient(config)
+    client = SdkMassiveClient(config)
     transport = FakeTransport([])
     client._client.client = transport  # noqa: SLF001
     return client, transport
 
 
 def test_daily_aggs_parses_two_pages_and_uses_raw_endpoint_flags(
-    client_and_transport: tuple[MassiveClient, FakeTransport],
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport],
 ) -> None:
     client, transport = client_and_transport
     transport.responses = iter(
@@ -69,7 +69,7 @@ def test_daily_aggs_parses_two_pages_and_uses_raw_endpoint_flags(
 
 @pytest.mark.parametrize("payload", [b"not json", {"status": "OK"}, {"results": {"bad": 1}}])
 def test_malformed_initial_response_fails_extraction(
-    client_and_transport: tuple[MassiveClient, FakeTransport], payload: Any
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport], payload: Any
 ) -> None:
     client, transport = client_and_transport
     transport.responses = iter([response(payload)])
@@ -89,7 +89,7 @@ def test_malformed_initial_response_fails_extraction(
     ],
 )
 def test_malformed_page_response_fails_extraction_without_returning_partial_records(
-    client_and_transport: tuple[MassiveClient, FakeTransport], kind: str, payload: Any, extract: Any
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport], kind: str, payload: Any, extract: Any
 ) -> None:
     client, transport = client_and_transport
     first = {"results": [{"T": "AAPL", "c": 150}], "next_url": "https://api.massive.com/page2"}
@@ -108,7 +108,9 @@ def test_malformed_page_response_fails_extraction_without_returning_partial_reco
     assert outcome.diagnostic == "transport_error"
 
 
-def test_explicit_empty_results_is_successful_empty(client_and_transport: tuple[MassiveClient, FakeTransport]) -> None:
+def test_explicit_empty_results_is_successful_empty(
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport],
+) -> None:
     client, transport = client_and_transport
     transport.responses = iter([response({"results": []})])
 
@@ -117,7 +119,7 @@ def test_explicit_empty_results_is_successful_empty(client_and_transport: tuple[
 
 @pytest.mark.parametrize("payload", [{}, {"results": None}, {"results": "bad"}])
 def test_missing_or_invalid_results_fails_closed(
-    client_and_transport: tuple[MassiveClient, FakeTransport], payload: Any
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport], payload: Any
 ) -> None:
     # No verified SDK contract says an omitted results field means zero records.
     client, transport = client_and_transport
@@ -127,7 +129,7 @@ def test_missing_or_invalid_results_fails_closed(
         client.fetch_tickers(["CS"])
 
 
-def test_model_parse_error_propagates(client_and_transport: tuple[MassiveClient, FakeTransport]) -> None:
+def test_model_parse_error_propagates(client_and_transport: tuple[SdkMassiveClient, FakeTransport]) -> None:
     client, transport = client_and_transport
     transport.responses = iter([response({"results": [None]})])
 
@@ -135,7 +137,7 @@ def test_model_parse_error_propagates(client_and_transport: tuple[MassiveClient,
         client.fetch_tickers(["CS"])
 
 
-def test_non_200_response_propagates_sdk_error(client_and_transport: tuple[MassiveClient, FakeTransport]) -> None:
+def test_non_200_response_propagates_sdk_error(client_and_transport: tuple[SdkMassiveClient, FakeTransport]) -> None:
     client, transport = client_and_transport
     transport.responses = iter([response({"error": "no"}, status=503)])
 
@@ -154,7 +156,7 @@ def test_non_200_response_propagates_sdk_error(client_and_transport: tuple[Massi
     ],
 )
 def test_invalid_next_url_is_rejected_before_request(
-    client_and_transport: tuple[MassiveClient, FakeTransport], url: str
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport], url: str
 ) -> None:
     client, transport = client_and_transport
     transport.responses = iter([response({"results": [], "next_url": url})])
@@ -164,7 +166,7 @@ def test_invalid_next_url_is_rejected_before_request(
     assert len(transport.requests) == 1
 
 
-def test_repeated_next_page_is_rejected(client_and_transport: tuple[MassiveClient, FakeTransport]) -> None:
+def test_repeated_next_page_is_rejected(client_and_transport: tuple[SdkMassiveClient, FakeTransport]) -> None:
     client, transport = client_and_transport
     page = "https://api.massive.com/page2"
     transport.responses = iter(
@@ -175,7 +177,7 @@ def test_repeated_next_page_is_rejected(client_and_transport: tuple[MassiveClien
         client.fetch_tickers(["CS"])
 
 
-def test_valid_split_pages_are_deserialized(client_and_transport: tuple[MassiveClient, FakeTransport]) -> None:
+def test_valid_split_pages_are_deserialized(client_and_transport: tuple[SdkMassiveClient, FakeTransport]) -> None:
     client, transport = client_and_transport
     transport.responses = iter(
         [
@@ -193,7 +195,7 @@ def test_valid_split_pages_are_deserialized(client_and_transport: tuple[MassiveC
     assert [row.ticker for row in result] == ["AAPL", "MSFT"]
 
 
-def test_daily_aggs_request_flags(client_and_transport: tuple[MassiveClient, FakeTransport]) -> None:
+def test_daily_aggs_request_flags(client_and_transport: tuple[SdkMassiveClient, FakeTransport]) -> None:
     """Send the raw grouped-aggregate flags the pipeline relies on.
 
     The SDK serializes boolean flags as lowercase strings on the query string,
@@ -214,7 +216,7 @@ def test_daily_aggs_request_flags(client_and_transport: tuple[MassiveClient, Fak
     )
 
 
-def test_splits_request_date_range(client_and_transport: tuple[MassiveClient, FakeTransport]) -> None:
+def test_splits_request_date_range(client_and_transport: tuple[SdkMassiveClient, FakeTransport]) -> None:
     """Send inclusive split date filters that the SDK rewrites with dot separators.
 
     The wrapper passes ``execution_date_gte``/``execution_date_lte``, but the
@@ -236,7 +238,7 @@ def test_splits_request_date_range(client_and_transport: tuple[MassiveClient, Fa
 
 
 def test_tickers_request_includes_limit_and_market_and_active(
-    client_and_transport: tuple[MassiveClient, FakeTransport],
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport],
 ) -> None:
     """Request active US-stock tickers with the explicit 1000-row page limit.
 
@@ -259,7 +261,7 @@ def test_tickers_request_includes_limit_and_market_and_active(
     assert fields["limit"] == 1000  # noqa: PLR2004
 
 
-def test_tickers_request_iterates_over_types(client_and_transport: tuple[MassiveClient, FakeTransport]) -> None:
+def test_tickers_request_iterates_over_types(client_and_transport: tuple[SdkMassiveClient, FakeTransport]) -> None:
     """Issue one ticker request per requested type, each with identical filters."""
     # Arrange
     client, transport = client_and_transport
@@ -280,7 +282,7 @@ def test_tickers_request_iterates_over_types(client_and_transport: tuple[Massive
 
 
 def test_daily_agg_timestamp_passes_through_as_epoch_milliseconds(
-    client_and_transport: tuple[MassiveClient, FakeTransport],
+    client_and_transport: tuple[SdkMassiveClient, FakeTransport],
 ) -> None:
     """Preserve the raw epoch-millisecond timestamp the SDK exposes.
 
