@@ -14,7 +14,7 @@ CREATE TABLE market.ticker (
     -- Canonical allowlist lives in tickerlake.config._ALLOWED_TICKER_TYPES.
     ticker_type text CHECK (ticker_type IS NULL OR ticker_type = ANY (ARRAY['CS','ETF','ETV','ETN','ADRC'])),
     primary_exchange text,
-    cik text CHECK (cik IS NULL OR (length(cik) BETWEEN 1 AND 10 AND (cik ~ '^[0-9]+$' OR cik ~ '^[A-Za-z0-9-]+$'))),
+    cik text CHECK (cik IS NULL OR (length(cik) BETWEEN 1 AND 10 AND cik ~ '^[A-Za-z0-9-]+$')),
     active boolean
 );
 
