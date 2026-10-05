@@ -180,7 +180,7 @@ def _store(
     schema = TICKERS_SCHEMA if source == "tickers" else SPLITS_SCHEMA
     columns = _TICKER_COLUMNS if source == "tickers" else _SPLIT_COLUMNS
     _canonical_frame(outcome.frame, schema, columns)
-    if outcome.status is FetchStatus.populated:
+    if outcome.is_populated():
         validate(outcome.frame, request)
     elif not outcome.frame.is_empty():
         _fail("Non-populated reference outcome must have an empty frame")
@@ -188,7 +188,7 @@ def _store(
     changed = False
     try:
         with connection.transaction():
-            if outcome.status is FetchStatus.populated:
+            if outcome.is_populated():
                 changed = (
                     _store_tickers(connection, request, outcome.frame)
                     if source == "tickers"

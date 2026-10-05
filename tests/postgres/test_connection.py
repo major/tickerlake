@@ -1,9 +1,17 @@
 """PostgreSQL writer connection behavior."""
 
+from unittest.mock import MagicMock
+
 import psycopg
 import pytest
+from psycopg.pq import TransactionStatus
 
-from tickerlake.postgres.connection import PostgresWriterError, require_writer_connection, writer_connection
+from tickerlake.postgres.connection import (
+    PostgresWriterError,
+    is_writer_connection_idle,
+    require_writer_connection,
+    writer_connection,
+)
 from tickerlake.postgres.state import advance_cache_revision, read_cache_state
 
 
@@ -89,3 +97,35 @@ def test_writer_operation_error_is_sanitized(pg_owner_dsn: str) -> None:
     assert private_value not in str(error.value)
     assert "missing_table" not in str(error.value)
     assert isinstance(error.value.__context__, psycopg.Error)
+
+
+def test_is_writer_connection_idle_when_open_and_idle() -> None:
+    """A live, idle writer connection reports idle."""
+    connection = MagicMock(spec=psycopg.Connection)
+    connection.closed = False
+    connection.info.transaction_status = TransactionStatus.IDLE
+    assert is_writer_connection_idle(connection)
+
+
+def test_is_writer_connection_idle_false_when_closed() -> None:
+    """A closed writer connection does not report idle."""
+    connection = MagicMock(spec=psycopg.Connection)
+    connection.closed = 1  # psycopg reports int closed values, e.g. 1
+    connection.info.transaction_status = TransactionStatus.IDLE
+    assert not is_writer_connection_idle(connection)
+
+
+def test_is_writer_connection_idle_false_inside_transaction() -> None:
+    """A connection inside a transaction does not report idle."""
+    connection = MagicMock(spec=psycopg.Connection)
+    connection.closed = False
+    connection.info.transaction_status = TransactionStatus.ACTIVE
+    assert not is_writer_connection_idle(connection)
+
+
+def test_is_writer_connection_idle_false_in_error_state() -> None:
+    """A connection in error state does not report idle."""
+    connection = MagicMock(spec=psycopg.Connection)
+    connection.closed = False
+    connection.info.transaction_status = TransactionStatus.INERROR
+    assert not is_writer_connection_idle(connection)

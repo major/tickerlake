@@ -90,23 +90,12 @@ def _started_at_ok(value: object) -> bool:
     return value is None or is_aware_datetime(value)
 
 
-def _outcome_date_ok(request: FetchRequest, outcome: FetchOutcome) -> bool:
-    """An outcome date must be a plain date matching a daily request's date."""
-    if outcome.requested_date is None:
-        return True
-    return (
-        is_date(outcome.requested_date)
-        and request.source == "daily"
-        and outcome.requested_date == request.requested_date
-    )
-
-
 def _validate_fetch_inputs(request: FetchRequest, outcome: FetchOutcome) -> None:
     """Raise the safe source/scope/diagnostic errors before any I/O."""
     if not isinstance(request.source, str) or request.source not in _SCOPE_OK:
         raise PostgresWriterError("Invalid PostgreSQL fetch source")
     scope_ok = _SCOPE_OK[request.source]
-    if not scope_ok(request) or not _started_at_ok(request.started_at) or not _outcome_date_ok(request, outcome):
+    if not scope_ok(request) or not _started_at_ok(request.started_at) or not outcome.matches_daily_request(request):
         raise PostgresWriterError("Invalid PostgreSQL fetch request scope")
     diagnostic = outcome.diagnostic
     if diagnostic is not None and diagnostic not in _DIAGNOSTICS:
