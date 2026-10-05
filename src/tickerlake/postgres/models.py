@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from datetime import date, datetime
+    from datetime import date
     from uuid import UUID
 
 
@@ -39,4 +39,3 @@ class FetchRequest:
     requested_start: date | None = None
     requested_end: date | None = None
     ticker_types: tuple[str, ...] = ()
-    started_at: datetime | None = None

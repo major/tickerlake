@@ -63,7 +63,6 @@ def rebuild_cache(
         )
         stage_batch(connection, context, identities, products)
         after_id = identities["ticker_id"][-1]
-        del products, splits, raw, identities
     if not found_identities:
         raise PostgresWriterError("No durable identities")  # noqa: TRY003
     return publish_staged(connection, context)

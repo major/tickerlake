@@ -4,25 +4,8 @@ import datetime as dt
 
 import pytest
 
-from tickerlake.postgres._validation import is_aware_datetime, is_date, require_unique_nonempty_strings
+from tickerlake.postgres._validation import is_date, require_unique_nonempty_strings
 from tickerlake.postgres.connection import PostgresWriterError
-
-
-class _NullOffsetTzinfo(dt.tzinfo):
-    """A tzinfo whose offset cannot be resolved because utcoffset returns None."""
-
-    def utcoffset(self, when: dt.datetime | None) -> dt.timedelta | None:
-        """Report no UTC offset so awareness checks must fail."""
-        return None
-
-    def dst(self, when: dt.datetime | None) -> dt.timedelta | None:
-        """Report no daylight-saving adjustment."""
-        return None
-
-    def tzname(self, when: dt.datetime | None) -> str | None:
-        """Report no timezone name."""
-        return None
-
 
 # --- is_date ----------------------------------------------------------------
 
@@ -42,37 +25,6 @@ def test_is_date_rejects_none_and_non_dates() -> None:
     assert not is_date(None)
     assert not is_date("2025-01-02")
     assert not is_date(20250102)
-
-
-# --- is_aware_datetime ------------------------------------------------------
-
-
-def test_is_aware_datetime_accepts_aware_utc() -> None:
-    """A UTC-aware datetime is aware."""
-    assert is_aware_datetime(dt.datetime(2025, 1, 2, tzinfo=dt.UTC))
-
-
-def test_is_aware_datetime_accepts_aware_offset() -> None:
-    """A fixed-offset aware datetime is aware."""
-    assert is_aware_datetime(dt.datetime(2025, 1, 2, tzinfo=dt.timezone(dt.timedelta(hours=-5))))
-
-
-def test_is_aware_datetime_rejects_naive() -> None:
-    """A datetime without tzinfo is naive."""
-    assert not is_aware_datetime(dt.datetime(2025, 1, 2))  # noqa: DTZ001
-
-
-def test_is_aware_datetime_rejects_date_and_string() -> None:
-    """Dates, strings, and None are not datetimes."""
-    assert not is_aware_datetime(dt.date(2025, 1, 2))
-    assert not is_aware_datetime("2025-01-02T00:00:00Z")
-    assert not is_aware_datetime(None)
-
-
-def test_is_aware_datetime_rejects_tzinfo_without_utcoffset() -> None:
-    """A tzinfo that cannot resolve an offset does not make a datetime aware."""
-    bad = dt.datetime(2025, 1, 2, tzinfo=_NullOffsetTzinfo())
-    assert not is_aware_datetime(bad)
 
 
 # --- require_unique_nonempty_strings ----------------------------------------

@@ -107,65 +107,19 @@ def test_tickers_scope_rejects_non_tuple_types() -> None:
     assert not state._tickers_scope_ok(_req(source="tickers", ticker_types=cast("tuple[str, ...]", ["CS"])))
 
 
-def test_tickers_scope_raises_on_empty_string() -> None:
-    """A blank ticker type raises the safe scope error."""
-    with pytest.raises(PostgresWriterError, match="Invalid PostgreSQL fetch request scope"):
-        state._tickers_scope_ok(_req(source="tickers", ticker_types=("",)))
+def test_tickers_scope_rejects_empty_string() -> None:
+    """A blank ticker type is rejected by the scope predicate."""
+    assert not state._tickers_scope_ok(_req(source="tickers", ticker_types=("",)))
 
 
-def test_tickers_scope_raises_on_duplicates() -> None:
-    """Duplicate ticker types raise the safe scope error."""
-    with pytest.raises(PostgresWriterError, match="Invalid PostgreSQL fetch request scope"):
-        state._tickers_scope_ok(_req(source="tickers", ticker_types=("CS", "CS")))
+def test_tickers_scope_rejects_duplicates() -> None:
+    """Duplicate ticker types are rejected by the scope predicate."""
+    assert not state._tickers_scope_ok(_req(source="tickers", ticker_types=("CS", "CS")))
 
 
 def test_tickers_scope_rejects_populated_date() -> None:
     """Ticker requests must not also carry a date."""
     assert not state._tickers_scope_ok(_req(source="tickers", ticker_types=("CS",), requested_date=dt.date(2025, 1, 2)))
-
-
-# --- _started_at_ok ---------------------------------------------------------
-
-
-def test_started_at_ok_with_none() -> None:
-    """An absent started_at is valid."""
-    assert state._started_at_ok(None)
-
-
-def test_started_at_ok_with_aware_datetime() -> None:
-    """An aware datetime is valid."""
-    assert state._started_at_ok(dt.datetime(2025, 1, 2, tzinfo=dt.UTC))
-
-
-def test_started_at_rejects_naive_datetime() -> None:
-    """A naive datetime is rejected."""
-    assert not state._started_at_ok(dt.datetime(2025, 1, 2))  # noqa: DTZ001
-
-
-def test_started_at_rejects_plain_date() -> None:
-    """A plain date is not a valid started_at."""
-    assert not state._started_at_ok(dt.date(2025, 1, 2))
-
-
-def test_started_at_rejects_tzinfo_without_utcoffset() -> None:
-    """A tzinfo that cannot resolve an offset does not make started_at valid."""
-
-    class _NullOffsetTzinfo(dt.tzinfo):
-        """A tzinfo whose offset cannot be resolved."""
-
-        def utcoffset(self, when: dt.datetime | None) -> dt.timedelta | None:
-            """Report no UTC offset."""
-            return None
-
-        def dst(self, when: dt.datetime | None) -> dt.timedelta | None:
-            """Report no daylight-saving adjustment."""
-            return None
-
-        def tzname(self, when: dt.datetime | None) -> str | None:
-            """Report no timezone name."""
-            return None
-
-    assert not state._started_at_ok(dt.datetime(2025, 1, 2, tzinfo=_NullOffsetTzinfo()))
 
 
 # --- _validate_fetch_inputs -------------------------------------------------

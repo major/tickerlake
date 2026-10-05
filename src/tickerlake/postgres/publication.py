@@ -93,10 +93,6 @@ class PublicationOutcomeUnknownError(PostgresWriterError):
         super().__init__("PostgreSQL publication outcome is unknown")
 
 
-# Retain the original public exception name for API compatibility.
-PublicationOutcomeUnknown = PublicationOutcomeUnknownError
-
-
 def _fail() -> NoReturn:
     raise PostgresWriterError(_SAFE)
 
@@ -546,7 +542,7 @@ def publish_staged(connection: psycopg.Connection, context: BuildContext) -> Pub
         if commit_started:
             if _commit_is_known_rollback(connection, context.run_id):
                 raise PostgresWriterError(_PUBLISH_FAILED) from None
-            raise PublicationOutcomeUnknown(context.run_id) from error
+            raise PublicationOutcomeUnknownError(context.run_id) from error
         raise PostgresWriterError(_PUBLISH_FAILED) from None
 
 
@@ -559,7 +555,7 @@ def resolve_publication(database_url: str, run_id: UUID) -> PublicationResolutio
                 (run_id,),
             ).fetchone()
             if run is None:
-                raise PublicationOutcomeUnknown(run_id)
+                raise PublicationOutcomeUnknownError(run_id)
             marker = connection.execute(
                 "SELECT run_id FROM market.publication_state WHERE publication_state_id=1"
             ).fetchone()
@@ -567,6 +563,6 @@ def resolve_publication(database_url: str, run_id: UUID) -> PublicationResolutio
                 published=run[0] == "published", is_current=bool(marker and marker[0] == run_id)
             )
     except PostgresWriterError as error:
-        if isinstance(error, PublicationOutcomeUnknown):
+        if isinstance(error, PublicationOutcomeUnknownError):
             raise
-        raise PublicationOutcomeUnknown(run_id) from error
+        raise PublicationOutcomeUnknownError(run_id) from error

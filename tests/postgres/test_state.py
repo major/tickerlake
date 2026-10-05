@@ -115,19 +115,8 @@ def test_ticker_scopes_persist_and_statement_timestamps(pg_owner_dsn: str) -> No
         second_scope = FetchRequest(run_id=run_id, source="tickers", ticker_types=("ETF",))
         outcome = FetchOutcome(status=FetchStatus.successful_empty, frame=pl.DataFrame())
 
-        with connection.transaction():
-            explicit_started = connection.execute("SELECT statement_timestamp()").fetchone()[0]
-            first_id = record_fetch_outcome(
-                connection,
-                FetchRequest(
-                    run_id=run_id,
-                    source="tickers",
-                    ticker_types=first_scope.ticker_types,
-                    started_at=explicit_started,
-                ),
-                outcome,
-            )
-            second_id = record_fetch_outcome(connection, second_scope, outcome)
+        first_id = record_fetch_outcome(connection, first_scope, outcome)
+        second_id = record_fetch_outcome(connection, second_scope, outcome)
 
         records = connection.execute(
             "SELECT manifest_id, requested_ticker_types, started_at, finished_at "
@@ -137,7 +126,6 @@ def test_ticker_scopes_persist_and_statement_timestamps(pg_owner_dsn: str) -> No
         assert [record[1] for record in records] == [["CS"], ["ETF"]]
         assert records[0][0] != records[1][0]
         assert records[0][3] >= records[0][2]
-        assert records[0][2] == explicit_started
         assert records[1][3] >= records[1][2]
         assert records[1][3].tzinfo is not None
         assert records[1][3].utcoffset() == timedelta(0)

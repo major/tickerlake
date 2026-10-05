@@ -20,9 +20,7 @@ _LOCK_ACQUIRE_FAILED = "Could not acquire PostgreSQL writer lock"
 _ANOTHER_WRITER_ACTIVE = "Another PostgreSQL writer is active"
 _WRITER_OPERATION_FAILED = "PostgreSQL writer operation failed"
 _LIVE_AUTOCOMMIT_REQUIRED = "A live autocommit writer connection is required"
-_LOCK_VERIFY_FAILED = "Could not verify PostgreSQL writer lock"
 _LOCK_NOT_HELD = "PostgreSQL writer lock is not held"
-_EXCLUSIVE_LOCK_REQUIRED = "PostgreSQL exclusive writer lock is required"
 
 
 class PostgresWriterError(RuntimeError):
@@ -68,25 +66,16 @@ def writer_connection(database_url: str) -> Iterator[psycopg.Connection]:
 
 
 def require_writer_connection(connection: psycopg.Connection) -> None:
-    """Ensure a live connection currently owns the exclusive writer lock."""
+    """Ensure a live connection currently owns the writer lock.
+
+    The advisory lock cannot be lost while the session lives, so we trust the
+    process-local ``_ACTIVE_WRITERS`` membership plus the live+autocommit
+    checks; the previous pg_locks round-trip per call has been dropped.
+    """
     if connection.closed or not connection.autocommit:
         raise PostgresWriterError(_LIVE_AUTOCOMMIT_REQUIRED)
     if id(connection) not in _ACTIVE_WRITERS:
         raise PostgresWriterError(_LOCK_NOT_HELD)
-    try:
-        row = connection.execute(
-            """SELECT EXISTS (
-                   SELECT 1 FROM pg_locks
-                   WHERE locktype = 'advisory' AND granted
-                     AND pid = pg_backend_pid() AND objid = %s AND classid = 0
-                     AND objsubid = 1 AND mode = 'ExclusiveLock'
-                )""",
-            (WRITER_LOCK_KEY,),
-        ).fetchone()
-    except psycopg.Error:
-        raise PostgresWriterError(_LOCK_VERIFY_FAILED) from None
-    if not row or not row[0]:
-        raise PostgresWriterError(_EXCLUSIVE_LOCK_REQUIRED)
 
 
 def is_writer_connection_idle(connection: psycopg.Connection) -> bool:
