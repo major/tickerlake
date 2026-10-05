@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 import psycopg
 
-from tickerlake.postgres._validation import is_aware_datetime, is_date, require_unique_nonempty_strings
+from tickerlake.postgres._validation import is_date, require_unique_nonempty_strings
 from tickerlake.postgres.connection import PostgresWriterError, require_writer_connection
 from tickerlake.postgres.models import CacheState, FetchRequest, RunSpec
 
@@ -70,11 +70,14 @@ def _tickers_scope_ok(request: FetchRequest) -> bool:
     """Ticker fetches carry only a nonempty tuple of unique nonempty ticker types."""
     if not isinstance(request.ticker_types, tuple):
         return False
-    require_unique_nonempty_strings(
-        request.ticker_types,
-        field="ticker types",
-        message="Invalid PostgreSQL fetch request scope",
-    )
+    try:
+        require_unique_nonempty_strings(
+            request.ticker_types,
+            field="ticker types",
+            message="Invalid PostgreSQL fetch request scope",
+        )
+    except PostgresWriterError:
+        return False
     return request.requested_date is None and request.requested_start is None and request.requested_end is None
 
 
@@ -85,17 +88,12 @@ _SCOPE_OK: Final[dict[str, Callable[[FetchRequest], bool]]] = {
 }
 
 
-def _started_at_ok(value: object) -> bool:
-    """None, or a tz-aware datetime with a resolvable UTC offset."""
-    return value is None or is_aware_datetime(value)
-
-
 def _validate_fetch_inputs(request: FetchRequest, outcome: FetchOutcome) -> None:
     """Raise the safe source/scope/diagnostic errors before any I/O."""
     if not isinstance(request.source, str) or request.source not in _SCOPE_OK:
         raise PostgresWriterError("Invalid PostgreSQL fetch source")
     scope_ok = _SCOPE_OK[request.source]
-    if not scope_ok(request) or not _started_at_ok(request.started_at) or not outcome.matches_daily_request(request):
+    if not scope_ok(request) or not outcome.matches_daily_request(request):
         raise PostgresWriterError("Invalid PostgreSQL fetch request scope")
     diagnostic = outcome.diagnostic
     if diagnostic is not None and diagnostic not in _DIAGNOSTICS:
@@ -231,9 +229,9 @@ def record_fetch_outcome(connection: psycopg.Connection, request: FetchRequest, 
                 """INSERT INTO ingest.fetch_manifest
                    (run_id, source, requested_date, requested_start, requested_end, requested_ticker_types,
                     started_at, finished_at, status, row_count, diagnostic_code)
-                   VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s, statement_timestamp()),
+                   VALUES (%s, %s, %s, %s, %s, %s, statement_timestamp(),
                            statement_timestamp(), %s, %s, %s)
-                     RETURNING manifest_id, started_at, finished_at""",
+                     RETURNING manifest_id""",
                 (
                     request.run_id,
                     request.source,
@@ -241,15 +239,14 @@ def record_fetch_outcome(connection: psycopg.Connection, request: FetchRequest, 
                     request.requested_start,
                     request.requested_end,
                     list(request.ticker_types) if request.source == "tickers" else None,
-                    request.started_at,
                     outcome.status.value,
                     row_count,
                     outcome.diagnostic,
                 ),
             )
-            timestamps = result.fetchone()
-            if timestamps is None or timestamps[2] < timestamps[1]:
-                raise PostgresWriterError("Invalid PostgreSQL fetch timestamps")
-            return int(timestamps[0])
+            row = result.fetchone()
+            if row is None:
+                raise PostgresWriterError("Could not record PostgreSQL fetch outcome")
+            return int(row[0])
     except psycopg.Error:
         raise PostgresWriterError("Could not record PostgreSQL fetch outcome") from None

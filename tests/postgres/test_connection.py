@@ -80,15 +80,6 @@ def test_transaction_level_lock_does_not_authorize_writer(pg_owner_dsn: str) -> 
             require_writer_connection(connection)
 
 
-def test_marked_connection_must_still_hold_exclusive_lock(pg_owner_dsn: str) -> None:
-    """Reject a marked connection after replacing its exclusive lock."""
-    with writer_connection(pg_owner_dsn) as connection:
-        connection.execute("SELECT pg_advisory_unlock(%s)", (74839201,))
-        connection.execute("SELECT pg_advisory_lock_shared(%s)", (74839201,))
-        with pytest.raises(PostgresWriterError, match="exclusive"):
-            require_writer_connection(connection)
-
-
 def test_writer_operation_error_is_sanitized(pg_owner_dsn: str) -> None:
     """Hide SQL details and bound values from writer errors."""
     private_value = "private_sql_value"

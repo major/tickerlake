@@ -13,7 +13,7 @@ from tests.postgres.test_publication import _stage_one
 from tickerlake.postgres import connection as writer_module
 from tickerlake.postgres.connection import PostgresWriterError, writer_connection
 from tickerlake.postgres.publication import (
-    PublicationOutcomeUnknown,
+    PublicationOutcomeUnknownError,
     publish_staged,
     resolve_publication,
 )
@@ -65,7 +65,7 @@ def test_lost_commit_ack_resolves_to_published(pg_migrated_database, register_pr
     with writer_connection(pg_migrated_database.owner_dsn) as connection:
         run_id, context = _stage_one(connection, target)
         proxy = register_proxy_writer(connection, lose_ack=True)
-        with pytest.raises(PublicationOutcomeUnknown) as raised:
+        with pytest.raises(PublicationOutcomeUnknownError) as raised:
             publish_staged(proxy, context)
         assert raised.value.run_id == run_id
 
@@ -79,7 +79,7 @@ def test_failure_before_commit_resolves_as_not_published(pg_migrated_database, r
         proxy = register_proxy_writer(connection, fail_before_commit=True)
         with pytest.raises(PostgresWriterError) as raised:
             publish_staged(proxy, context)
-        assert not isinstance(raised.value, PublicationOutcomeUnknown)
+        assert not isinstance(raised.value, PublicationOutcomeUnknownError)
 
     result = resolve_publication(pg_migrated_database.owner_dsn, run_id)
     assert not result.published
@@ -104,8 +104,8 @@ def test_superseded_publication_still_resolves_as_published(pg_migrated_database
 
 def test_resolution_contention_and_unknown_run_remain_unresolved(pg_migrated_database) -> None:
     """A missing run or unavailable writer lock is not reported as a rollback."""
-    with pytest.raises(PublicationOutcomeUnknown):
+    with pytest.raises(PublicationOutcomeUnknownError):
         resolve_publication(pg_migrated_database.owner_dsn, uuid4())
-    with writer_connection(pg_migrated_database.owner_dsn), pytest.raises(PublicationOutcomeUnknown):
+    with writer_connection(pg_migrated_database.owner_dsn), pytest.raises(PublicationOutcomeUnknownError):
         # The live advisory lock prevents a fresh resolver from reading a possibly changing marker.
         resolve_publication(pg_migrated_database.owner_dsn, uuid4())

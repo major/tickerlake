@@ -85,10 +85,10 @@ class BackfillError(PostgresWriterError):
 class BackfillIncompleteError(BackfillError):
     """Raised when requested closed sessions did not all return populated data."""
 
-    def __init__(self, outcomes: list[FetchOutcome]) -> None:
-        """Build a safe summary from the daily outcomes that blocked publication."""
-        self.outcomes = tuple(outcomes)
-        super().__init__(f"Backfill closed sessions did not all populate: {_outcome_summary(outcomes)}")
+    def __init__(self, summary: str) -> None:
+        """Carry a precomputed summary of the outcomes that blocked publication."""
+        self.summary = summary
+        super().__init__(f"Backfill closed sessions did not all populate: {summary}")
 
 
 def _outcome_summary(outcomes: list[FetchOutcome]) -> str:
@@ -229,10 +229,9 @@ def _fetch_daily(
         store_daily_outcome(connection, FetchRequest(run_id=run_id, source="daily", requested_date=day), outcome)
         if not outcome.is_populated():
             rejected.append(outcome)
-        del previous, outcome
     if rejected:
         _fail_known(connection, run_id, _INCOMPLETE_FAILURE_CODE)
-        raise BackfillIncompleteError(rejected)
+        raise BackfillIncompleteError(_outcome_summary(rejected))
 
 
 def _store_tickers(
@@ -249,7 +248,6 @@ def _store_tickers(
     if not outcome.is_populated():
         _fail_known(connection, run_id, _KNOWN_FAILURE_CODE)
         raise BackfillError(f"{_SAFE_TICKERS_UNPOPULATED}: {outcome.status.value}")
-    del previous, outcome
 
 
 def _store_splits(
@@ -270,7 +268,6 @@ def _store_splits(
         if not outcome.is_accepted():
             _fail_known(connection, run_id, _KNOWN_FAILURE_CODE)
             raise BackfillError(f"{_SAFE_SPLITS_UNPOPULATED}: {outcome.status.value}")
-        del previous, outcome
 
 
 def _fetch_reference_and_publish(

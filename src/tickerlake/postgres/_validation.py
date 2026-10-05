@@ -16,11 +16,6 @@ def is_date(value: object) -> TypeGuard[date]:
     return isinstance(value, date) and not isinstance(value, datetime)
 
 
-def is_aware_datetime(value: object) -> TypeGuard[datetime]:
-    """Return True only for a datetime with a tzinfo that resolves an offset."""
-    return isinstance(value, datetime) and value.tzinfo is not None and value.utcoffset() is not None
-
-
 def require_unique_nonempty_strings(
     values: Sequence[object],
     *,
