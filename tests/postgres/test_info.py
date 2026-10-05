@@ -33,10 +33,8 @@ def _seed(dsn: str) -> object:
         connection.execute(
             """INSERT INTO ingest.run
                (run_id, target_date, requested_start, requested_end, input_revision,
-                code_version, schema_version, transform_version, state,
-                started_at, ended_at, published_at)
-               VALUES (%s, %s, %s, %s, %s, 'code', 'schema', 'transform', 'published',
-                       now(), now(), now())""",
+                version, state, started_at, ended_at, published_at)
+               VALUES (%s, %s, %s, %s, %s, 'code', 'published', now(), now(), now())""",
             (
                 run_id,
                 datetime.date(2024, 1, 5),
@@ -48,13 +46,13 @@ def _seed(dsn: str) -> object:
         connection.execute(
             """UPDATE ingest.cache_state
                SET input_revision = 1, retained_start = %s, retained_end = %s
-               WHERE singleton = true""",
+               WHERE cache_state_id = 1""",
             (datetime.date(2024, 1, 2), datetime.date(2024, 1, 5)),
         )
         connection.execute(
             """INSERT INTO market.publication_state
-               (singleton, published_session, published_at, run_id, ticker_count)
-               VALUES (true, %s, now(), %s, %s)""",
+               (publication_state_id, published_session, published_at, run_id, ticker_count)
+               VALUES (1, %s, now(), %s, %s)""",
             (datetime.date(2024, 1, 5), run_id, 1),
         )
         with connection.cursor() as cursor:
@@ -71,7 +69,7 @@ def _seed(dsn: str) -> object:
             cursor.executemany(
                 """INSERT INTO ingest.split_event
                    (ticker_id, execution_date, split_from, split_to, adjustment_factor, adjustment_type)
-                   VALUES (%s, %s, 2, 1, 0.5, 'split')""",
+                   VALUES (%s, %s, 2, 1, 0.5, 'forward')""",
                 [
                     (ticker_id, datetime.date(2024, 1, 3)),
                     (ticker_id, datetime.date(2024, 1, 4)),
@@ -95,9 +93,7 @@ def test_collect_info_reports_seeded_state(pg_migrated_database) -> None:
         ("ingest", "ticker_reference"),
         ("ingest", "run"),
         ("ingest", "cache_state"),
-        ("market", "adjusted_daily"),
-        ("market", "adjusted_weekly"),
-        ("market", "adjusted_monthly"),
+        ("market", "adjusted_bars"),
         ("market", "ticker"),
         ("market", "latest_daily"),
         ("market", "publication_state"),

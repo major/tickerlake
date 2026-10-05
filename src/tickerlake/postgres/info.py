@@ -36,9 +36,7 @@ _KNOWN_TABLES: Final = (
     ("ingest", "ticker_reference"),
     ("ingest", "run"),
     ("ingest", "cache_state"),
-    ("market", "adjusted_daily"),
-    ("market", "adjusted_weekly"),
-    ("market", "adjusted_monthly"),
+    ("market", "adjusted_bars"),
     ("market", "ticker"),
     ("market", "latest_daily"),
     ("market", "publication_state"),
@@ -152,7 +150,7 @@ def _read_table_counts(connection: psycopg.Connection) -> dict[tuple[str, str], 
 def _read_publication(connection: psycopg.Connection) -> PublicationInfo | None:
     """Return the published generation, or ``None`` when nothing was published."""
     row = connection.execute(
-        "SELECT run_id, published_session, published_at FROM market.publication_state WHERE singleton = true"
+        "SELECT run_id, published_session, published_at FROM market.publication_state WHERE publication_state_id = 1"
     ).fetchone()
     if row is None:
         return None

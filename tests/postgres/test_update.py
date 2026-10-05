@@ -53,15 +53,11 @@ def _config(database_url: str, start: date, end: date) -> Config:
 
 
 def _request(target: date):
-    return backfill_module.BackfillRequest(
-        code_version="update-test", schema_version="1", transform_version="1", target=target
-    )
+    return backfill_module.BackfillRequest(version="update-test", target=target)
 
 
 def _update_request(target: date | None = None):
-    return backfill_module.BackfillRequest(
-        code_version="update-test", schema_version="1", transform_version="1", target=target
-    )
+    return backfill_module.BackfillRequest(version="update-test", target=target)
 
 
 def _query(database_url: str, query: str, params: tuple[object, ...] = ()) -> list[tuple[object, ...]]:
@@ -71,9 +67,9 @@ def _query(database_url: str, query: str, params: tuple[object, ...] = ()) -> li
 
 def _public_snapshot(database_url: str) -> dict[str, list[tuple[object, ...]]]:
     queries = {
-        "daily": "SELECT * FROM market.adjusted_daily ORDER BY ticker_id,date",
-        "weekly": "SELECT * FROM market.adjusted_weekly ORDER BY ticker_id,date",
-        "monthly": "SELECT * FROM market.adjusted_monthly ORDER BY ticker_id,date",
+        "daily": "SELECT * FROM market.adjusted_bars WHERE period='daily' ORDER BY ticker_id,date",
+        "weekly": "SELECT * FROM market.adjusted_bars WHERE period='weekly' ORDER BY ticker_id,date",
+        "monthly": "SELECT * FROM market.adjusted_bars WHERE period='monthly' ORDER BY ticker_id,date",
         "latest": "SELECT * FROM market.latest_daily ORDER BY ticker_id",
         "ticker": "SELECT * FROM market.ticker ORDER BY ticker_id",
         "publication": "SELECT * FROM market.publication_state",
@@ -144,7 +140,7 @@ def test_update_refreshes_five_cached_sessions_preserves_gaps_and_retained_bound
     cached = tuple(day for day in sessions if day not in omitted)
     for day in cached:
         _seed_date(dsn, massive, day)
-    retained = _query(dsn, "SELECT retained_start,retained_end FROM ingest.cache_state WHERE singleton=true")[0]
+    retained = _query(dsn, "SELECT retained_start,retained_end FROM ingest.cache_state WHERE cache_state_id=1")[0]
 
     target = sessions[-1]
     config = _config(dsn, sessions[-10], target)
@@ -164,7 +160,9 @@ def test_update_refreshes_five_cached_sessions_preserves_gaps_and_retained_bound
     assert sessions[-8] not in massive.daily_calls
     assert sessions[-3] in massive.daily_calls
     assert all(day in massive.daily_calls for day in expected_window)
-    assert _query(dsn, "SELECT retained_start,retained_end FROM ingest.cache_state WHERE singleton=true")[0] == retained
+    assert (
+        _query(dsn, "SELECT retained_start,retained_end FROM ingest.cache_state WHERE cache_state_id=1")[0] == retained
+    )
     assert _query(
         dsn,
         "SELECT requested_date,status FROM ingest.fetch_manifest WHERE source='daily' "
@@ -183,7 +181,7 @@ def test_rejected_refresh_keeps_publication_but_persists_accepted_neighbor_revis
     massive.daily = {day: _rows(day) for day in sessions}
     backfill_module.backfill(_config(dsn, sessions[0], sessions[-1]), _request(sessions[-1]), now=NOW)
     snapshot_before = _public_snapshot(dsn)
-    revision_before = _query(dsn, "SELECT input_revision FROM ingest.cache_state WHERE singleton=true")[0][0]
+    revision_before = _query(dsn, "SELECT input_revision FROM ingest.cache_state WHERE cache_state_id=1")[0][0]
     failed_day = sessions[-3]
     accepted_days = (sessions[-5], sessions[-4], sessions[-2], sessions[-1])
     raw_failed_before = _query(dsn, "SELECT * FROM ingest.raw_daily WHERE date=%s ORDER BY ticker_id", (failed_day,))
@@ -219,7 +217,7 @@ def test_rejected_refresh_keeps_publication_but_persists_accepted_neighbor_revis
         "SELECT DISTINCT close FROM ingest.raw_daily WHERE date = ANY(%s) ORDER BY close",
         (list(accepted_days),),
     ) == [(13.0,)]
-    assert _query(dsn, "SELECT input_revision FROM ingest.cache_state WHERE singleton=true")[0][0] == (
+    assert _query(dsn, "SELECT input_revision FROM ingest.cache_state WHERE cache_state_id=1")[0][0] == (
         revision_before + len(accepted_days)
     )
 
@@ -257,7 +255,7 @@ def test_update_correction_matches_full_rebuild(pg_migrated_database, tmp_path, 
     ) == [(31.0,)]
     rows = _query(
         dsn,
-        "SELECT date, close FROM market.adjusted_daily WHERE ticker_id=%s ORDER BY date",
+        "SELECT date, close FROM market.adjusted_bars WHERE period='daily' AND ticker_id=%s ORDER BY date",
         (active_id,),
     )
     expected_closes = [close_by_day[day] for day in (*sessions, newly_cached)]
@@ -266,16 +264,16 @@ def test_update_correction_matches_full_rebuild(pg_migrated_database, tmp_path, 
         assert actual == pytest.approx(expected)
 
     product_queries = {
-        "daily": "SELECT * FROM market.adjusted_daily ORDER BY ticker_id,date",
-        "weekly": "SELECT * FROM market.adjusted_weekly ORDER BY ticker_id,date",
-        "monthly": "SELECT * FROM market.adjusted_monthly ORDER BY ticker_id,date",
+        "daily": "SELECT * FROM market.adjusted_bars WHERE period='daily' ORDER BY ticker_id,date",
+        "weekly": "SELECT * FROM market.adjusted_bars WHERE period='weekly' ORDER BY ticker_id,date",
+        "monthly": "SELECT * FROM market.adjusted_bars WHERE period='monthly' ORDER BY ticker_id,date",
         "latest": "SELECT * FROM market.latest_daily ORDER BY ticker_id",
         "ticker": "SELECT * FROM market.ticker ORDER BY ticker_id",
         "publication": "SELECT published_session FROM market.publication_state",
     }
     published = {name: _query(dsn, query) for name, query in product_queries.items()}
     state_before = _query(
-        dsn, "SELECT input_revision,retained_start,retained_end FROM ingest.cache_state WHERE singleton=true"
+        dsn, "SELECT input_revision,retained_start,retained_end FROM ingest.cache_state WHERE cache_state_id=1"
     )[0]
     published_session = _query(dsn, "SELECT published_session FROM market.publication_state")[0][0]
     with writer_connection(dsn) as connection:
@@ -286,9 +284,7 @@ def test_update_correction_matches_full_rebuild(pg_migrated_database, tmp_path, 
                 target=published_session,
                 requested_start=sessions[0],
                 requested_end=newly_cached,
-                code_version="equivalence",
-                schema_version="1",
-                transform_version="1",
+                version="equivalence",
             ),
         )
         rebuild_cache(connection, run_id, ticker_types=("CS",), batch_size=7)
@@ -296,6 +292,8 @@ def test_update_correction_matches_full_rebuild(pg_migrated_database, tmp_path, 
 
     assert {name: _query(dsn, query) for name, query in product_queries.items()} == published
     assert (
-        _query(dsn, "SELECT input_revision,retained_start,retained_end FROM ingest.cache_state WHERE singleton=true")[0]
+        _query(dsn, "SELECT input_revision,retained_start,retained_end FROM ingest.cache_state WHERE cache_state_id=1")[
+            0
+        ]
         == state_before
     )

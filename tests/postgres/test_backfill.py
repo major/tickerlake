@@ -11,9 +11,7 @@ The frozen API under test, owned by a separate production lane, is::
 
     @dataclass(frozen=True, slots=True, kw_only=True)
     class BackfillRequest:
-        code_version: str
-        schema_version: str
-        transform_version: str
+        version: str
         target: datetime.date | None = None
         correction_range: tuple[datetime.date, datetime.date] | None = None
 
@@ -109,7 +107,7 @@ def _split_record(day: date, symbol: str = "ACTIVE") -> dict[str, object]:
         "split_from": 2.0,
         "split_to": 1.0,
         "historical_adjustment_factor": 0.5,
-        "adjustment_type": "split",
+        "adjustment_type": "forward",
     }
 
 
@@ -239,9 +237,7 @@ def _request(
     correction_range: tuple[date, date] | None = None,
 ) -> BackfillRequest:
     return BackfillRequest(
-        code_version="code-1",
-        schema_version="schema-1",
-        transform_version="transform-1",
+        version="code-1",
         target=target,
         correction_range=correction_range,
     )
@@ -264,9 +260,9 @@ def _public_snapshot(database_url: str) -> tuple[list[tuple[object, ...]], ...]:
     can assert the public generation survived a blocked or failed run.
     """
     queries = (
-        "SELECT * FROM market.adjusted_daily ORDER BY ticker_id, date",
-        "SELECT * FROM market.adjusted_weekly ORDER BY ticker_id, date",
-        "SELECT * FROM market.adjusted_monthly ORDER BY ticker_id, date",
+        "SELECT * FROM market.adjusted_bars WHERE period = 'daily' ORDER BY ticker_id, date",
+        "SELECT * FROM market.adjusted_bars WHERE period = 'weekly' ORDER BY ticker_id, date",
+        "SELECT * FROM market.adjusted_bars WHERE period = 'monthly' ORDER BY ticker_id, date",
         "SELECT * FROM market.latest_daily ORDER BY ticker_id",
         "SELECT * FROM market.publication_state ORDER BY run_id",
         "SELECT * FROM market.ticker ORDER BY ticker_id",
@@ -277,7 +273,7 @@ def _public_snapshot(database_url: str) -> tuple[list[tuple[object, ...]], ...]:
 
 def _cache_revision(database_url: str) -> int:
     """Return the current private ingest cache input revision."""
-    return int(_rows(database_url, "SELECT input_revision FROM ingest.cache_state WHERE singleton = true")[0][0])
+    return int(_rows(database_url, "SELECT input_revision FROM ingest.cache_state WHERE cache_state_id = 1")[0][0])
 
 
 def _raw_close(database_url: str, ticker_id: object, day: date) -> float:
@@ -349,12 +345,12 @@ def test_fresh_bootstrap_fetches_every_closed_session_and_publishes_target(
 
     accepted = _rows(
         dsn,
-        """SELECT s.date, s.row_count, m.status, m.requested_date, m.row_count
+        """SELECT s.date, m.row_count, m.status, m.requested_date
            FROM ingest.raw_session s JOIN ingest.fetch_manifest m USING (manifest_id)
            ORDER BY s.date""",
     )
     assert [row[0] for row in accepted] == list(SESSIONS)
-    assert all(row[1] > 0 and row[2] == "populated" and row[3] == row[0] and row[4] == row[1] for row in accepted)
+    assert all(row[1] > 0 and row[2] == "populated" and row[3] == row[0] for row in accepted)
 
     manifest_sources = dict(_rows(dsn, "SELECT source, count(*) FROM ingest.fetch_manifest GROUP BY source"))
     assert manifest_sources["daily"] == len(SESSIONS)
@@ -371,8 +367,8 @@ def test_fresh_bootstrap_fetches_every_closed_session_and_publishes_target(
 
     history = _rows(
         dsn,
-        """SELECT t.symbol, count(*) FROM market.adjusted_daily d JOIN market.ticker t USING (ticker_id)
-           GROUP BY t.symbol ORDER BY t.symbol""",
+        """SELECT t.symbol, count(*) FROM market.adjusted_bars d JOIN market.ticker t USING (ticker_id)
+           WHERE d.period = 'daily' GROUP BY t.symbol ORDER BY t.symbol""",
     )
     assert dict(history) == {"ACTIVE": 4, "INACTIVE": 4, "UNKNOWN": 4}
     assert _rows(dsn, "SELECT count(*) FROM ingest.split_event") == [(0,)]
@@ -417,14 +413,13 @@ def test_run_records_versions_and_requested_bounds(pg_migrated_database, tmp_pat
 
     row = _rows(
         dsn,
-        """SELECT target_date, requested_start, requested_end, code_version, schema_version,
-                  transform_version, state
+        """SELECT target_date, requested_start, requested_end, version, state
            FROM ingest.run WHERE run_id = %s""",
         (result.run_id,),
     )[0]
     assert row[0] == SESSION_TARGET
-    assert row[3:6] == ("code-1", "schema-1", "transform-1")
-    assert row[6] == "published"
+    assert row[3] == "code-1"
+    assert row[4] == "published"
     assert row[1] is not None
     assert row[2] is not None
     assert row[1] <= min(massive.daily_calls)
@@ -498,7 +493,9 @@ def test_correction_refetches_explicit_range_including_cached_dates(
     )
     assert updated[0][0] == pytest.approx(11.5)
     published_correction = _rows(
-        dsn, "SELECT close FROM market.adjusted_daily WHERE ticker_id = %s AND date = %s", (active_id, CORRECTION_END)
+        dsn,
+        "SELECT close FROM market.adjusted_bars WHERE period = 'daily' AND ticker_id = %s AND date = %s",
+        (active_id, CORRECTION_END),
     )
     assert published_correction[0][0] == pytest.approx(11.5)
     assert _rows(dsn, "SELECT published_session FROM market.publication_state") == [(SESSION_TARGET,)]
@@ -521,7 +518,7 @@ def test_correction_target_must_have_existing_acceptance(
 
     assert massive.daily_calls == list(CORRECTION_SESSIONS)
     assert _rows(dsn, "SELECT count(*) FROM market.publication_state") == [(0,)]
-    assert _rows(dsn, "SELECT count(*) FROM market.adjusted_daily") == [(0,)]
+    assert _rows(dsn, "SELECT count(*) FROM market.adjusted_bars") == [(0,)]
     assert _rows(dsn, "SELECT count(*) FROM ingest.raw_session WHERE date = %s", (SESSION_TARGET,)) == [(0,)]
 
 
@@ -735,7 +732,7 @@ def test_split_coverage_uses_exact_contiguous_calendar_year_windows(
         now=AFTER_CLOSE,
     )
 
-    retained = _rows(dsn, "SELECT retained_start, retained_end FROM ingest.cache_state WHERE singleton = true")[0]
+    retained = _rows(dsn, "SELECT retained_start, retained_end FROM ingest.cache_state WHERE cache_state_id = 1")[0]
     existing_end = _rows(dsn, "SELECT max(execution_date) FROM ingest.split_event")[0][0]
     assert existing_end == future_event
     assert existing_end > retained[1], "the latest known event must sit outside retained raw bounds"
@@ -860,14 +857,11 @@ def test_too_many_ticker_types_is_rejected_before_client_and_writes(
     """More ticker types than the provider scope allows is rejected before any client or write."""
     dsn = pg_migrated_database.owner_dsn
     baseline = _mutation_snapshot(dsn)
+    # Config only accepts canonical ticker types, so bypass it by mutating the
+    # field after construction to exercise the backfill scope guard.
     too_many = [f"T{index:02d}" for index in range(21)]
-    config = Config(
-        api_key="test-key",
-        database_url=dsn,
-        start_date=SESSION_START,
-        end_date=SESSION_TARGET,
-        ticker_types=too_many,
-    )
+    config = _config(dsn)
+    config.ticker_types = too_many
 
     with pytest.raises(BackfillError, match="ticker types"):
         backfill_module.backfill(config, _request(), now=AFTER_CLOSE)
@@ -936,7 +930,7 @@ def test_unknown_commit_propagates_without_marking_the_run_failed(
     assert caught.value.run_id is not None
     assert _rows(dsn, "SELECT state, failure_code FROM ingest.run") == [("running", None)]
     assert _rows(dsn, "SELECT count(*) FROM market.publication_state") == [(0,)]
-    assert _rows(dsn, "SELECT count(*) FROM market.adjusted_daily") == [(0,)]
+    assert _rows(dsn, "SELECT count(*) FROM market.adjusted_bars") == [(0,)]
 
 
 def test_second_writer_cannot_acquire_lock_during_fetch(

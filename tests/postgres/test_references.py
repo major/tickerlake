@@ -30,9 +30,7 @@ def _run(database: object) -> tuple[psycopg.Connection, object, object]:
             target=date(2025, 1, 10),
             requested_start=date(2025, 1, 1),
             requested_end=date(2025, 1, 10),
-            code_version="test",
-            schema_version="1",
-            transform_version="1",
+            version="test",
         ),
     )
     return connection, run_id, manager
@@ -62,10 +60,8 @@ def test_ticker_scope_noop_and_change_revision(pg_migrated_database: object) -> 
         assert state.input_revision == 1
         assert state.retained_start is None
         assert state.retained_end is None
-        identity = conn.execute(
-            "SELECT ticker_id, name, active, screen_eligible FROM market.ticker WHERE symbol='AAA'"
-        ).fetchone()
-        assert identity[1:] == (None, None, False)
+        identity = conn.execute("SELECT ticker_id, name, active FROM market.ticker WHERE symbol='AAA'").fetchone()
+        assert identity[1:] == (None, None)
         assert store_ticker_outcome(conn, request, _outcome(FetchStatus.populated, initial)) == 1
         assert read_cache_state(conn).input_revision == 1
 
@@ -145,7 +141,7 @@ def test_split_scope_preserves_other_dates_and_uses_full_event_identity(pg_migra
         frame = _split_frame(
             [
                 ("AAA", date(2025, 1, 2), 2.0, 1.0, 0.5, None),
-                ("AAA", date(2025, 1, 2), 3.0, 1.0, 1 / 3, "cash"),
+                ("AAA", date(2025, 1, 2), 3.0, 1.0, 1 / 3, "forward"),
             ]
         )
         assert store_split_outcome(conn, window, _outcome(FetchStatus.populated, frame)) == 1
@@ -183,8 +179,8 @@ def test_populated_ticker_replacement_removes_omitted_private_member_only(pg_mig
         for symbol, ticker_type in (("AAA", "CS"), ("BBB", "CS"), ("CCC", "ETF")):
             ticker_ids[symbol] = conn.execute(
                 "INSERT INTO market.ticker "
-                "(symbol, name, ticker_type, primary_exchange, cik, active, screen_eligible) "
-                "VALUES (%s, %s, %s, 'XNAS', 'public-cik', true, true) RETURNING ticker_id",
+                "(symbol, name, ticker_type, primary_exchange, cik, active) "
+                "VALUES (%s, %s, %s, 'XNAS', 'public-cik', true) RETURNING ticker_id",
                 (symbol, f"Public {symbol}", ticker_type),
             ).fetchone()[0]
             conn.execute(
@@ -222,7 +218,7 @@ def test_populated_ticker_replacement_removes_omitted_private_member_only(pg_mig
         )
 
         before_public = conn.execute(
-            "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active, screen_eligible "
+            "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active "
             "FROM market.ticker ORDER BY ticker_id"
         ).fetchall()
         before_bars = conn.execute(
@@ -249,7 +245,7 @@ def test_populated_ticker_replacement_removes_omitted_private_member_only(pg_mig
         assert read_cache_state(conn).retained_end == before_state.retained_end
         assert (
             conn.execute(
-                "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active, screen_eligible "
+                "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active "
                 "FROM market.ticker ORDER BY ticker_id"
             ).fetchall()
             == before_public
@@ -284,8 +280,8 @@ def test_populated_split_replacement_removes_omitted_window_events_only(pg_migra
         for symbol in ("AAA", "BBB"):
             ticker_ids[symbol] = conn.execute(
                 "INSERT INTO market.ticker "
-                "(symbol, name, ticker_type, primary_exchange, cik, active, screen_eligible) "
-                "VALUES (%s, %s, 'CS', 'XNAS', 'public-cik', true, true) RETURNING ticker_id",
+                "(symbol, name, ticker_type, primary_exchange, cik, active) "
+                "VALUES (%s, %s, 'CS', 'XNAS', 'public-cik', true) RETURNING ticker_id",
                 (symbol, f"Public {symbol}"),
             ).fetchone()[0]
         conn.execute(
@@ -308,7 +304,7 @@ def test_populated_split_replacement_removes_omitted_window_events_only(pg_migra
         )
         assert store_split_outcome(conn, window, _outcome(FetchStatus.populated, old_window)) == 1
         before_public = conn.execute(
-            "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active, screen_eligible "
+            "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active "
             "FROM market.ticker ORDER BY ticker_id"
         ).fetchall()
         before_outside = conn.execute(
@@ -322,7 +318,7 @@ def test_populated_split_replacement_removes_omitted_window_events_only(pg_migra
         replacement = _split_frame(
             [
                 ("AAA", date(2025, 1, 2), 4.0, 1.0, 0.25, None),
-                ("AAA", date(2025, 1, 4), 2.0, 1.0, 0.5, "cash"),
+                ("AAA", date(2025, 1, 4), 2.0, 1.0, 0.5, "forward"),
             ]
         )
         assert store_split_outcome(conn, window, _outcome(FetchStatus.populated, replacement)) == _REVISION_TWO
@@ -344,11 +340,11 @@ def test_populated_split_replacement_removes_omitted_window_events_only(pg_migra
             "ORDER BY t.symbol, e.execution_date"
         ).fetchall() == [
             ("AAA", date(2025, 1, 2), 4.0, 1.0, 0.25, None),
-            ("AAA", date(2025, 1, 4), 2.0, 1.0, 0.5, "cash"),
+            ("AAA", date(2025, 1, 4), 2.0, 1.0, 0.5, "forward"),
         ]
         assert (
             conn.execute(
-                "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active, screen_eligible "
+                "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active "
                 "FROM market.ticker ORDER BY ticker_id"
             ).fetchall()
             == before_public
@@ -394,10 +390,10 @@ def test_nonpopulated_outcomes_keep_references_and_revision(pg_migrated_database
         )
         conn.execute(
             "UPDATE market.ticker SET name='Public name', ticker_type='CS', primary_exchange='XNAS', "
-            "cik='public-cik', active=true, screen_eligible=true WHERE symbol='AAA'"
+            "cik='public-cik', active=true WHERE symbol='AAA'"
         )
         before_public = conn.execute(
-            "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active, screen_eligible "
+            "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active "
             "FROM market.ticker ORDER BY ticker_id"
         ).fetchall()
         before_tickers = conn.execute(
@@ -430,7 +426,7 @@ def test_nonpopulated_outcomes_keep_references_and_revision(pg_migrated_database
         assert read_cache_state(conn) == before_state
         assert (
             conn.execute(
-                "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active, screen_eligible "
+                "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active "
                 "FROM market.ticker ORDER BY ticker_id"
             ).fetchall()
             == before_public
@@ -501,13 +497,13 @@ def test_corrupt_staged_rows_roll_back_all_reference_effects(
         )
         conn.execute(
             "UPDATE market.ticker SET name='Public name', ticker_type='CS', primary_exchange='XNAS', "
-            "cik='public-cik', active=true, screen_eligible=true WHERE symbol='AAA'"
+            "cik='public-cik', active=true WHERE symbol='AAA'"
         )
 
         def snapshot() -> tuple[object, ...]:
             return (
                 conn.execute(
-                    "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active, screen_eligible "
+                    "SELECT ticker_id, symbol, name, ticker_type, primary_exchange, cik, active "
                     "FROM market.ticker ORDER BY ticker_id"
                 ).fetchall(),
                 conn.execute(

@@ -17,9 +17,7 @@ class RunSpec:
     target: date
     requested_start: date | None
     requested_end: date | None
-    code_version: str
-    schema_version: str
-    transform_version: str
+    version: str
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

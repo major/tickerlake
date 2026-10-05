@@ -10,10 +10,9 @@ import psycopg
 from psycopg import sql
 
 from tickerlake.postgres._schema import (
-    BASE_COLUMNS,
-    PERIOD_COLUMNS,
     PERIOD_FLAG_NULL_CHECK,
     PERIOD_TRUNC_SQL,
+    PRODUCT_COLUMNS,
     PUBLICATION_TABLES,
     STAGE_KINDS,
     STAGE_NAMES,
@@ -30,11 +29,8 @@ if TYPE_CHECKING:
     from tickerlake.postgres.products import ProductBatch
 
 _STAGES: dict[str, str] = {kind: f"publication_{kind}_stage" for kind in STAGE_KINDS}
-_STAGE_COLUMNS: dict[str, tuple[str, ...]] = {
-    "daily": BASE_COLUMNS,
-    "weekly": PERIOD_COLUMNS,
-    "monthly": PERIOD_COLUMNS,
-}
+_STAGE_COLUMNS: dict[str, tuple[str, ...]] = dict.fromkeys(STAGE_KINDS, PRODUCT_COLUMNS)
+_KEY_COLUMNS: tuple[str, ...] = ("period", "ticker_id", "date")
 _SAFE = "Invalid PostgreSQL publication staging data"
 _IDLE_REQUIRED = "PostgreSQL publication requires an idle writer connection"
 _CONTEXT_MISMATCH = "PostgreSQL publication context does not match its staged build"
@@ -46,6 +42,7 @@ _PREPARE_FAILED = "Could not prepare PostgreSQL publication stages"
 _STAGE_FAILED = "Could not stage PostgreSQL product batch"
 _PUBLISH_FAILED = "Could not publish PostgreSQL products"
 _PRODUCT_TYPES: dict[str, LiteralString] = {
+    "period": "text",
     "ticker_id": "integer",
     "date": "date",
     "open": "real",
@@ -114,7 +111,7 @@ def _verify_staged_context(connection: psycopg.Connection, context: BuildContext
     try:
         row = connection.execute(
             """SELECT run_id,input_revision,retained_start,retained_end,target_session,ticker_types
-               FROM pg_temp.publication_context WHERE singleton=true"""
+               FROM pg_temp.publication_context WHERE context_id=1"""
         ).fetchone()
     except psycopg.Error:
         raise PostgresWriterError(_CONTEXT_MISMATCH) from None
@@ -148,7 +145,7 @@ def prepare_publication(
     row = connection.execute(
         """SELECT r.target_date, r.input_revision, c.input_revision, c.retained_start, c.retained_end
            FROM ingest.run r CROSS JOIN ingest.cache_state c
-           WHERE r.run_id = %s AND r.state = 'running' AND c.singleton = true""",
+           WHERE r.run_id = %s AND r.state = 'running' AND c.cache_state_id = 1""",
         (run_id,),
     ).fetchone()
     if row is None or row[1] is None or row[1] != row[2]:
@@ -157,10 +154,10 @@ def prepare_publication(
     accepted = connection.execute(
         """SELECT 1 FROM ingest.raw_session s
            JOIN ingest.fetch_manifest m USING (manifest_id)
-           WHERE s.date = %s AND s.input_revision <= %s AND s.row_count > 0
-             AND m.source = 'daily' AND m.status = 'populated' AND m.row_count = s.row_count
+           WHERE s.date = %s
+             AND m.source = 'daily' AND m.status = 'populated'
              AND m.requested_date = s.date""",
-        (target, revision),
+        (target,),
     ).fetchone()
     if accepted is None:
         raise PostgresWriterError(_TARGET_UNACCEPTED)
@@ -186,7 +183,7 @@ def prepare_publication(
         )
         connection.execute(
             """CREATE TEMP TABLE publication_context (
-                   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+                   context_id integer PRIMARY KEY DEFAULT 1 CHECK (context_id = 1),
                    run_id uuid NOT NULL, input_revision bigint NOT NULL,
                    retained_start date, retained_end date, target_session date NOT NULL,
                    ticker_types text[] NOT NULL
@@ -194,8 +191,8 @@ def prepare_publication(
         )
         connection.execute(
             """INSERT INTO pg_temp.publication_context
-               (singleton,run_id,input_revision,retained_start,retained_end,target_session,ticker_types)
-               VALUES (true,%s,%s,%s,%s,%s,%s)""",
+               (context_id,run_id,input_revision,retained_start,retained_end,target_session,ticker_types)
+               VALUES (1,%s,%s,%s,%s,%s,%s)""",
             (run_id, revision, retained_start, retained_end, target, list(types)),
         )
         for kind, name in _STAGES.items():
@@ -204,7 +201,7 @@ def prepare_publication(
                 sql.SQL("{} {}{} ").format(
                     sql.Identifier(column),
                     sql.SQL(_PRODUCT_TYPES[column]),
-                    sql.SQL(" NOT NULL") if column in {"ticker_id", "date"} else sql.SQL(""),
+                    sql.SQL(" NOT NULL") if column in {"period", "ticker_id", "date"} else sql.SQL(""),
                 )
                 for column in columns
             )
@@ -382,12 +379,12 @@ def _validate_stages(connection: psycopg.Connection, context: BuildContext) -> N
     _require_key_match(connection, "publication_monthly_stage", monthly, (start, end, start, end))
     _validate_staged_metadata(connection)
     target_rows = connection.execute(
-        """SELECT count(*), s.row_count FROM ingest.raw_daily r
+        """SELECT count(*) FROM ingest.raw_daily r
            JOIN ingest.raw_session s ON s.date=r.date
-           WHERE r.date=%s GROUP BY s.row_count""",
+           WHERE r.date=%s""",
         (context.target_session,),
     ).fetchone()
-    if target_rows is None or target_rows[0] <= 0 or target_rows[0] != target_rows[1]:
+    if target_rows is None or target_rows[0] <= 0:
         _fail()
 
 
@@ -399,7 +396,7 @@ def _commit_is_known_rollback(connection: psycopg.Connection, run_id: UUID) -> b
         require_writer_connection(connection)
         row = connection.execute(
             """SELECT r.state,p.run_id FROM ingest.run r
-               LEFT JOIN market.publication_state p ON p.singleton=true
+               LEFT JOIN market.publication_state p ON p.publication_state_id=1
                WHERE r.run_id=%s""",
             (run_id,),
         ).fetchone()
@@ -412,14 +409,14 @@ def _verify_run_state(connection: psycopg.Connection, context: BuildContext) -> 
     """Validate the locked cache, run, and accepted raw session state."""
     row = connection.execute(
         """SELECT c.input_revision, r.input_revision, r.state, r.target_date FROM ingest.cache_state c
-           JOIN ingest.run r ON r.run_id=%s WHERE c.singleton=true FOR UPDATE OF c,r""",
+           JOIN ingest.run r ON r.run_id=%s WHERE c.cache_state_id=1 FOR UPDATE OF c,r""",
         (context.run_id,),
     ).fetchone()
     accepted = connection.execute(
         """SELECT 1 FROM ingest.raw_session s JOIN ingest.fetch_manifest m USING(manifest_id)
-           WHERE s.date=%s AND s.input_revision<=%s AND s.row_count>0 AND m.status='populated'
-             AND m.source='daily' AND m.requested_date=s.date AND m.row_count=s.row_count""",
-        (context.target_session, context.input_revision),
+           WHERE s.date=%s AND m.status='populated'
+             AND m.source='daily' AND m.requested_date=s.date""",
+        (context.target_session,),
     ).fetchone()
     if (
         row is None
@@ -435,23 +432,26 @@ def _verify_run_state(connection: psycopg.Connection, context: BuildContext) -> 
 def _publish_kind(connection: psycopg.Connection, kind: str, table: str, context: BuildContext) -> None:
     """Copy one product kind into its production table and prune out-of-scope rows."""
     columns = _STAGE_COLUMNS[kind]
+    mutable = tuple(column for column in columns if column not in _KEY_COLUMNS)
     table_identifier = sql.Identifier(*table.split("."))
     stage_identifier = sql.Identifier("pg_temp", _STAGES[kind])
     names = sql.SQL(",").join(sql.Identifier(column) for column in columns)
+    key = sql.SQL(",").join(sql.Identifier(column) for column in _KEY_COLUMNS)
     assignments = sql.SQL(",").join(
-        sql.SQL("{}=EXCLUDED.{}").format(sql.Identifier(column), sql.Identifier(column)) for column in columns[2:]
+        sql.SQL("{}=EXCLUDED.{}").format(sql.Identifier(column), sql.Identifier(column)) for column in mutable
     )
-    prior_values = sql.SQL(",").join(sql.SQL("target.{}").format(sql.Identifier(column)) for column in columns[2:])
-    staged_values = sql.SQL(",").join(sql.SQL("EXCLUDED.{}").format(sql.Identifier(column)) for column in columns[2:])
+    prior_values = sql.SQL(",").join(sql.SQL("target.{}").format(sql.Identifier(column)) for column in mutable)
+    staged_values = sql.SQL(",").join(sql.SQL("EXCLUDED.{}").format(sql.Identifier(column)) for column in mutable)
     connection.execute(
         sql.SQL(
             """INSERT INTO {table} AS target ({columns}) SELECT {columns} FROM {stage}
-               ON CONFLICT (ticker_id,date) DO UPDATE SET {assignments}
+               ON CONFLICT ({key}) DO UPDATE SET {assignments}
                WHERE ROW({prior}) IS DISTINCT FROM ROW({desired})"""
         ).format(
             table=table_identifier,
             columns=names,
             stage=stage_identifier,
+            key=key,
             assignments=assignments,
             prior=prior_values,
             desired=staged_values,
@@ -461,11 +461,12 @@ def _publish_kind(connection: psycopg.Connection, kind: str, table: str, context
         sql.SQL(
             """DELETE FROM {table} AS target USING pg_temp.publication_scope AS scope
                WHERE scope.complete AND target.ticker_id=scope.ticker_id
+                 AND target.period=%s
                  AND target.date BETWEEN {lower} AND %s
                  AND NOT EXISTS (SELECT 1 FROM {stage} AS staged
                                  WHERE staged.ticker_id=target.ticker_id AND staged.date=target.date)"""
         ).format(table=table_identifier, lower=sql.SQL(PERIOD_TRUNC_SQL[kind]), stage=stage_identifier),
-        (context.retained_start or context.target_session, context.retained_end or context.target_session),
+        (kind, context.retained_start or context.target_session, context.retained_end or context.target_session),
     )
 
 
@@ -504,9 +505,9 @@ def _record_publication(connection: psycopg.Connection, context: BuildContext) -
     """Record the publication marker and mark the run as published."""
     count = connection.execute("SELECT count(*) FROM pg_temp.publication_scope WHERE complete").fetchone()
     connection.execute(
-        """INSERT INTO market.publication_state(singleton,published_session,published_at,run_id,ticker_count)
-           VALUES(true,%s,statement_timestamp(),%s,%s)
-           ON CONFLICT(singleton) DO UPDATE SET published_session=EXCLUDED.published_session,
+        """INSERT INTO market.publication_state(publication_state_id,published_session,published_at,run_id,ticker_count)
+           VALUES(1,%s,statement_timestamp(),%s,%s)
+           ON CONFLICT(publication_state_id) DO UPDATE SET published_session=EXCLUDED.published_session,
              published_at=EXCLUDED.published_at,run_id=EXCLUDED.run_id,ticker_count=EXCLUDED.ticker_count""",
         (context.target_session, context.run_id, count[0] if count else 0),
     )
@@ -528,13 +529,10 @@ def publish_staged(connection: psycopg.Connection, context: BuildContext) -> Pub
             _validate_stages(connection, context)
             connection.execute(
                 """UPDATE market.ticker t SET name=i.name,ticker_type=i.ticker_type,
-                     primary_exchange=i.primary_exchange,cik=i.cik,active=i.active,
-                     screen_eligible=(i.active IS TRUE AND i.ticker_type=ANY(%s))
+                     primary_exchange=i.primary_exchange,cik=i.cik,active=i.active
                    FROM pg_temp.publication_ticker_stage i WHERE t.ticker_id=i.ticker_id
-                     AND ROW(t.name,t.ticker_type,t.primary_exchange,t.cik,t.active,t.screen_eligible)
-                         IS DISTINCT FROM ROW(i.name,i.ticker_type,i.primary_exchange,i.cik,i.active,
-                           (i.active IS TRUE AND i.ticker_type=ANY(%s)))""",
-                (list(context.ticker_types), list(context.ticker_types)),
+                     AND ROW(t.name,t.ticker_type,t.primary_exchange,t.cik,t.active)
+                         IS DISTINCT FROM ROW(i.name,i.ticker_type,i.primary_exchange,i.cik,i.active)""",
             )
             for kind, table in PUBLICATION_TABLES.items():
                 _publish_kind(connection, kind, table, context)
@@ -562,7 +560,9 @@ def resolve_publication(database_url: str, run_id: UUID) -> PublicationResolutio
             ).fetchone()
             if run is None:
                 raise PublicationOutcomeUnknown(run_id)
-            marker = connection.execute("SELECT run_id FROM market.publication_state WHERE singleton=true").fetchone()
+            marker = connection.execute(
+                "SELECT run_id FROM market.publication_state WHERE publication_state_id=1"
+            ).fetchone()
             return PublicationResolution(
                 published=run[0] == "published", is_current=bool(marker and marker[0] == run_id)
             )

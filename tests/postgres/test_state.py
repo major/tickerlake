@@ -24,9 +24,7 @@ def _spec() -> RunSpec:
         target=date(2025, 1, 3),
         requested_start=date(2025, 1, 2),
         requested_end=date(2025, 1, 3),
-        code_version="code",
-        schema_version="1",
-        transform_version="1",
+        version="1",
     )
 
 
@@ -80,7 +78,7 @@ def test_nullable_revision_and_manifest_ids(pg_owner_dsn: str) -> None:
         assert first > 0
         assert second > first
         assert connection.execute(
-            "SELECT input_revision FROM ingest.cache_state WHERE singleton = true"
+            "SELECT input_revision FROM ingest.cache_state WHERE cache_state_id = 1"
         ).fetchone() == (1,)
 
 
@@ -144,7 +142,7 @@ def test_ticker_scopes_persist_and_statement_timestamps(pg_owner_dsn: str) -> No
         assert records[1][3].tzinfo is not None
         assert records[1][3].utcoffset() == timedelta(0)
         assert connection.execute(
-            "SELECT input_revision FROM ingest.cache_state WHERE singleton = true"
+            "SELECT input_revision FROM ingest.cache_state WHERE cache_state_id = 1"
         ).fetchone() == (0,)
 
 
@@ -156,9 +154,7 @@ def test_run_date_bounds_reject_non_dates(pg_owner_dsn: str) -> None:
             target=date(2025, 1, 3),
             requested_start="bad",
             requested_end="bad",
-            code_version="code",
-            schema_version="1",
-            transform_version="1",
+            version="1",
         )  # type: ignore[arg-type]
         with pytest.raises(PostgresWriterError, match="date range"):
             start_run(connection, invalid)

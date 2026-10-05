@@ -9,6 +9,10 @@ from psycopg.conninfo import conninfo_to_dict
 
 DATABASE_URL_DEFAULT = "postgresql://localhost/tickerlake"
 
+# Canonical ticker types accepted by the market.ticker CHECK constraint.
+# Keep in sync with the ARRAY literal in migrations/0001_foundation.sql.
+_ALLOWED_TICKER_TYPES: tuple[str, ...] = ("CS", "ETF", "ETV", "ETN", "ADRC")
+
 
 def _default_start_date() -> datetime.date:
     """Return today minus 10 years, falling back to Feb 28 on leap-day edge."""
@@ -41,11 +45,14 @@ class Config:
     api_key: str = field(default="", repr=False)
     start_date: datetime.date = field(default_factory=_default_start_date)
     end_date: datetime.date = field(default_factory=lambda: datetime.datetime.now(tz=datetime.UTC).date())
-    ticker_types: list[str] = field(default_factory=lambda: ["CS", "ETF", "ETV", "ETN", "ADRC"])
+    ticker_types: list[str] = field(default_factory=lambda: list(_ALLOWED_TICKER_TYPES))
     database_url: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         """Validate and normalize configuration after initialization."""
+        if not all(ticker_type in _ALLOWED_TICKER_TYPES for ticker_type in self.ticker_types):
+            message = "unsupported ticker type"
+            raise ValueError(message)
         if not self.api_key:
             self.api_key = os.environ.get("MASSIVE_API_KEY", "")
         if self.database_url is None:

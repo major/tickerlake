@@ -86,11 +86,27 @@ def test_schema_contract_and_access_grants(pg_owner_dsn: str, pg_etl_dsn: str, p
             "WHERE table_schema = 'ingest' AND table_name = 'raw_session' ORDER BY ordinal_position"
         ).fetchall() == [
             ("date", "date", "NO"),
-            ("input_revision", "bigint", "NO"),
             ("manifest_id", "bigint", "NO"),
-            ("row_count", "bigint", "NO"),
         ]
-        expected_public_columns = [
+        assert connection.execute(
+            "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+            "WHERE table_schema = 'market' AND table_name = 'adjusted_bars' ORDER BY ordinal_position"
+        ).fetchall() == [
+            ("period", "text", "NO"),
+            ("ticker_id", "integer", "NO"),
+            ("date", "date", "NO"),
+            ("open", "real", "NO"),
+            ("high", "real", "NO"),
+            ("low", "real", "NO"),
+            ("close", "real", "NO"),
+            ("volume", "double precision", "NO"),
+            ("left_truncated", "boolean", "NO"),
+            ("calendar_closed", "boolean", "NO"),
+        ]
+        assert connection.execute(
+            "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+            "WHERE table_schema = 'market' AND table_name = 'latest_daily' ORDER BY ordinal_position"
+        ).fetchall() == [
             ("ticker_id", "integer", "NO"),
             ("date", "date", "NO"),
             ("open", "real", "NO"),
@@ -99,21 +115,11 @@ def test_schema_contract_and_access_grants(pg_owner_dsn: str, pg_etl_dsn: str, p
             ("close", "real", "NO"),
             ("volume", "double precision", "NO"),
         ]
-        for table in ("adjusted_daily", "adjusted_weekly", "adjusted_monthly", "latest_daily"):
-            columns = connection.execute(
-                "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
-                "WHERE table_schema = 'market' AND table_name = %s ORDER BY ordinal_position",
-                (table,),
-            ).fetchall()
-            expected = expected_public_columns.copy()
-            if table in {"adjusted_weekly", "adjusted_monthly"}:
-                expected.extend([("left_truncated", "boolean", "NO"), ("calendar_closed", "boolean", "NO")])
-            assert columns == expected
         assert connection.execute(
             "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
             "WHERE table_schema = 'market' AND table_name = 'publication_state' ORDER BY ordinal_position"
         ).fetchall() == [
-            ("singleton", "boolean", "NO"),
+            ("publication_state_id", "integer", "NO"),
             ("published_session", "date", "NO"),
             ("published_at", "timestamp with time zone", "NO"),
             ("run_id", "uuid", "NO"),
@@ -150,12 +156,13 @@ def test_schema_contract_and_access_grants(pg_owner_dsn: str, pg_etl_dsn: str, p
             "INSERT INTO market.ticker (symbol) VALUES ('grant-check') RETURNING ticker_id"
         ).fetchone()[0]
         etl.execute(
-            "INSERT INTO market.adjusted_daily (ticker_id, date, open, high, low, close, volume) "
-            "VALUES (%s, '2025-01-02', 1, 1, 1, 1, 0)",
+            "INSERT INTO market.adjusted_bars "
+            "(period, ticker_id, date, open, high, low, close, volume, left_truncated, calendar_closed) "
+            "VALUES ('daily', %s, '2025-01-02', 1, 1, 1, 1, 0, false, false)",
             (ticker,),
         )
-        etl.execute("UPDATE market.adjusted_daily SET close = 2, high = 2 WHERE ticker_id = %s", (ticker,))
-        etl.execute("DELETE FROM market.adjusted_daily WHERE ticker_id = %s", (ticker,))
+        etl.execute("UPDATE market.adjusted_bars SET close = 2, high = 2 WHERE ticker_id = %s", (ticker,))
+        etl.execute("DELETE FROM market.adjusted_bars WHERE ticker_id = %s", (ticker,))
         etl.execute("DELETE FROM market.ticker WHERE ticker_id = %s", (ticker,))
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             etl.execute(
@@ -174,8 +181,8 @@ def test_schema_contract_and_access_grants(pg_owner_dsn: str, pg_etl_dsn: str, p
             reader.execute("INSERT INTO market.ticker (symbol) VALUES ('reader-write')")
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             reader.execute(
-                "INSERT INTO market.publication_state (singleton, published_session, published_at, run_id) "
-                "VALUES (true, '2025-01-02', now(), '00000000-0000-0000-0000-000000000000')"
+                "INSERT INTO market.publication_state (published_session, published_at, run_id, ticker_count) "
+                "VALUES ('2025-01-02', now(), '00000000-0000-0000-0000-000000000000', 0)"
             )
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             reader.execute("SELECT count(*) FROM ingest.schema_migration")
@@ -203,9 +210,7 @@ def test_numeric_domains_and_ohlc_function_back_affected_columns(pg_owner_dsn: s
         }
         for schema, table in (
             ("ingest", "raw_daily"),
-            ("market", "adjusted_daily"),
-            ("market", "adjusted_weekly"),
-            ("market", "adjusted_monthly"),
+            ("market", "adjusted_bars"),
             ("market", "latest_daily"),
         ):
             columns = connection.execute(
@@ -351,17 +356,25 @@ def test_adjusted_products_reject_invalid_numeric_values(pg_owner_dsn: str, colu
         ticker_id = connection.execute(
             "INSERT INTO market.ticker (symbol) VALUES ('CHECK') RETURNING ticker_id"
         ).fetchone()[0]
-        for table in ("adjusted_daily", "adjusted_weekly", "adjusted_monthly", "latest_daily"):
-            columns = "ticker_id, date, open, high, low, close, volume"
-            values = "%s, '2025-01-02', 9, 11, 8, 10, 1"
-            if table in {"adjusted_weekly", "adjusted_monthly"}:
-                columns += ", left_truncated, calendar_closed"
-                values += ", false, false"
+        for table, period in (
+            ("adjusted_bars", "daily"),
+            ("adjusted_bars", "weekly"),
+            ("adjusted_bars", "monthly"),
+            ("latest_daily", None),
+        ):
+            if period is None:
+                columns = "ticker_id, date, open, high, low, close, volume"
+                values = "%s, '2025-01-02', 9, 11, 8, 10, 1"
+                params = (ticker_id,)
+            else:
+                columns = "period, ticker_id, date, open, high, low, close, volume, left_truncated, calendar_closed"
+                values = "%s, %s, '2025-01-02', 9, 11, 8, 10, 1, false, false"
+                params = (period, ticker_id)
             connection.execute(
                 sql.SQL("INSERT INTO market.{} ({}) VALUES ({})").format(
                     sql.Identifier(table), sql.SQL(columns), sql.SQL(values)
                 ),
-                (ticker_id,),
+                params,
             )
             with pytest.raises(psycopg.errors.CheckViolation):
                 connection.execute(
@@ -376,7 +389,7 @@ def test_adjusted_products_reject_invalid_numeric_values(pg_owner_dsn: str, colu
             )
 
 
-@pytest.mark.parametrize("table", ["adjusted_daily", "adjusted_weekly", "adjusted_monthly", "latest_daily"])
+@pytest.mark.parametrize("table", ["adjusted_bars", "latest_daily"])
 def test_adjusted_products_reject_invalid_ohlc_relationships(pg_owner_dsn: str, table: str) -> None:
     """Each published table enforces high and low OHLC bounds."""
     with writer_connection(pg_owner_dsn) as connection:
@@ -384,11 +397,12 @@ def test_adjusted_products_reject_invalid_ohlc_relationships(pg_owner_dsn: str, 
         ticker_id = connection.execute(
             "INSERT INTO market.ticker (symbol) VALUES ('OHLC') RETURNING ticker_id"
         ).fetchone()[0]
-        columns = "ticker_id, date, open, high, low, close, volume"
-        values = "%s, '2025-01-02', 9, 11, 8, 10, 1"
-        if table in {"adjusted_weekly", "adjusted_monthly"}:
-            columns += ", left_truncated, calendar_closed"
-            values += ", false, false"
+        if table == "adjusted_bars":
+            columns = "period, ticker_id, date, open, high, low, close, volume, left_truncated, calendar_closed"
+            values = "'daily', %s, '2025-01-02', 9, 11, 8, 10, 1, false, false"
+        else:
+            columns = "ticker_id, date, open, high, low, close, volume"
+            values = "%s, '2025-01-02', 9, 11, 8, 10, 1"
         connection.execute(
             sql.SQL("INSERT INTO market.{} ({}) VALUES ({})").format(
                 sql.Identifier(table), sql.SQL(columns), sql.SQL(values)

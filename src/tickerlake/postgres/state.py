@@ -118,31 +118,28 @@ def start_run(connection: psycopg.Connection, spec: RunSpec) -> UUID:
     require_writer_connection(connection)
     if not is_date(spec.target) or not _valid_range(spec.requested_start, spec.requested_end, optional=True):
         raise PostgresWriterError("Invalid PostgreSQL run date range")
-    if any(
-        not isinstance(value, str) or not value.strip()
-        for value in (spec.code_version, spec.schema_version, spec.transform_version)
-    ):
+    if not isinstance(spec.version, str) or not spec.version.strip():
         raise PostgresWriterError("Invalid PostgreSQL run version")
     run_id = uuid4()
     try:
         with connection.transaction():
-            row = connection.execute("SELECT input_revision FROM ingest.cache_state WHERE singleton = true").fetchone()
+            row = connection.execute(
+                "SELECT input_revision FROM ingest.cache_state WHERE cache_state_id = 1"
+            ).fetchone()
             if row is None:
                 raise PostgresWriterError("PostgreSQL cache state is unavailable")
             connection.execute(
                 """INSERT INTO ingest.run
                    (run_id, target_date, requested_start, requested_end, input_revision,
-                    code_version, schema_version, transform_version, state, started_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'running', now())""",
+                    version, state, started_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, 'running', now())""",
                 (
                     run_id,
                     spec.target,
                     spec.requested_start,
                     spec.requested_end,
                     row[0],
-                    spec.code_version,
-                    spec.schema_version,
-                    spec.transform_version,
+                    spec.version,
                 ),
             )
     except psycopg.Error:
@@ -155,7 +152,9 @@ def capture_run_inputs(connection: psycopg.Connection, run_id: UUID) -> int:
     require_writer_connection(connection)
     try:
         with connection.transaction():
-            row = connection.execute("SELECT input_revision FROM ingest.cache_state WHERE singleton = true").fetchone()
+            row = connection.execute(
+                "SELECT input_revision FROM ingest.cache_state WHERE cache_state_id = 1"
+            ).fetchone()
             if row is None:
                 raise PostgresWriterError("PostgreSQL cache state is unavailable")
             result = connection.execute(
@@ -195,7 +194,7 @@ def read_cache_state(connection: psycopg.Connection) -> CacheState:
     """Read cache state without requiring writer-lock ownership."""
     try:
         row = connection.execute(
-            "SELECT input_revision, retained_start, retained_end FROM ingest.cache_state WHERE singleton = true"
+            "SELECT input_revision, retained_start, retained_end FROM ingest.cache_state WHERE cache_state_id = 1"
         ).fetchone()
     except psycopg.Error:
         raise PostgresWriterError("Could not read PostgreSQL cache state") from None
@@ -217,7 +216,7 @@ def advance_cache_revision(connection: psycopg.Connection, accepted_date: date |
                      WHEN retained_start IS NULL THEN %s::date ELSE LEAST(retained_start, %s::date) END,
                    retained_end = CASE WHEN %s::date IS NULL THEN retained_end
                      WHEN retained_end IS NULL THEN %s::date ELSE GREATEST(retained_end, %s::date) END
-                   WHERE singleton = true RETURNING input_revision""",
+                   WHERE cache_state_id = 1 RETURNING input_revision""",
                 (accepted_date, accepted_date, accepted_date, accepted_date, accepted_date, accepted_date),
             ).fetchone()
             if row is None:

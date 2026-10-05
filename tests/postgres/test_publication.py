@@ -28,9 +28,7 @@ def _start(connection, target: date):
             target=target,
             requested_start=None,
             requested_end=None,
-            code_version="test",
-            schema_version="1",
-            transform_version="test",
+            version="test",
         ),
     )
 
@@ -171,7 +169,7 @@ def test_prepare_requires_run_and_cache_revision_to_match(pg_migrated_database) 
     """A stale run snapshot is rejected before temporary stages are created."""
     with writer_connection(pg_migrated_database.owner_dsn) as connection:
         run_id = _start(connection, date(2024, 1, 2))
-        connection.execute("UPDATE ingest.cache_state SET input_revision=input_revision+1 WHERE singleton=true")
+        connection.execute("UPDATE ingest.cache_state SET input_revision=input_revision+1 WHERE cache_state_id=1")
         with pytest.raises(PostgresWriterError, match="revisions do not agree"):
             prepare_publication(connection, run_id, ticker_types=("CS",))
 
@@ -187,8 +185,9 @@ def test_invalid_staged_product_rolls_back_every_publication_write(pg_migrated_d
             publish_staged(connection, context)
 
         for period in ("daily", "weekly", "monthly"):
-            query = sql.SQL("SELECT count(*) FROM market.{}").format(sql.Identifier(f"adjusted_{period}"))
-            assert connection.execute(query).fetchone() == (0,)
+            assert connection.execute(
+                "SELECT count(*) FROM market.adjusted_bars WHERE period = %s", (period,)
+            ).fetchone() == (0,)
         assert connection.execute("SELECT count(*) FROM market.latest_daily").fetchone() == (0,)
         assert connection.execute("SELECT count(*) FROM market.publication_state").fetchone() == (0,)
         assert connection.execute("SELECT state FROM ingest.run WHERE run_id=%s", (run_id,)).fetchone() == ("running",)
@@ -200,16 +199,16 @@ def test_incomplete_scope_cannot_delete_existing_history(pg_migrated_database) -
         run_id, context = _stage_one(connection, date(2024, 1, 2))
         ticker_id = connection.execute("SELECT ticker_id FROM market.ticker WHERE symbol='TEST'").fetchone()[0]
         connection.execute(
-            """INSERT INTO market.adjusted_monthly
-               (ticker_id,date,open,high,low,close,volume,left_truncated,calendar_closed)
-               VALUES (%s,'2024-01-03',1,1,1,1,0,false,false)""",
+            """INSERT INTO market.adjusted_bars
+               (period,ticker_id,date,open,high,low,close,volume,left_truncated,calendar_closed)
+               VALUES ('monthly',%s,'2024-01-03',1,1,1,1,0,false,false)""",
             (ticker_id,),
         )
         connection.execute("UPDATE pg_temp.publication_scope SET complete=false WHERE ticker_id=%s", (ticker_id,))
         with pytest.raises(PostgresWriterError):
             publish_staged(connection, context)
         assert connection.execute(
-            "SELECT count(*) FROM market.adjusted_monthly WHERE ticker_id=%s AND date='2024-01-03'",
+            "SELECT count(*) FROM market.adjusted_bars WHERE period='monthly' AND ticker_id=%s AND date='2024-01-03'",
             (ticker_id,),
         ).fetchone() == (1,)
         assert connection.execute("SELECT state FROM ingest.run WHERE run_id=%s", (run_id,)).fetchone() == ("running",)
@@ -227,17 +226,16 @@ def test_missing_period_product_is_rejected_without_removing_published_rows(
     with writer_connection(pg_migrated_database.owner_dsn) as connection:
         _first_run, first_context = _stage_one(connection, target)
         publish_staged(connection, first_context)
-        table = sql.Identifier(f"adjusted_{period}")
         stage = sql.Identifier(f"publication_{period}_stage")
-        select = sql.SQL("SELECT * FROM market.{} ORDER BY ticker_id,date").format(table)
-        before = connection.execute(select).fetchall()
+        select = "SELECT * FROM market.adjusted_bars WHERE period = %s ORDER BY ticker_id,date"
+        before = connection.execute(select, (period,)).fetchall()
 
         run_id, context = _stage_one(connection, target)
         connection.execute(sql.SQL("DELETE FROM pg_temp.{} WHERE date=%s").format(stage), (period_key,))
         with pytest.raises(PostgresWriterError):
             publish_staged(connection, context)
 
-        assert connection.execute(select).fetchall() == before
+        assert connection.execute(select, (period,)).fetchall() == before
         assert connection.execute("SELECT state FROM ingest.run WHERE run_id=%s", (run_id,)).fetchone() == ("running",)
 
 
@@ -275,7 +273,7 @@ def test_staged_metadata_corruption_cannot_change_reference_or_published_generat
             connection.execute("SELECT * FROM market.ticker ORDER BY ticker_id").fetchall(),
             tuple(
                 connection.execute(
-                    sql.SQL("SELECT * FROM market.{}").format(sql.Identifier(f"adjusted_{kind}"))
+                    "SELECT * FROM market.adjusted_bars WHERE period = %s ORDER BY ticker_id, date", (kind,)
                 ).fetchall()
                 for kind in ("daily", "weekly", "monthly")
             ),
@@ -292,7 +290,7 @@ def test_staged_metadata_corruption_cannot_change_reference_or_published_generat
             connection.execute("SELECT * FROM market.ticker ORDER BY ticker_id").fetchall(),
             tuple(
                 connection.execute(
-                    sql.SQL("SELECT * FROM market.{}").format(sql.Identifier(f"adjusted_{kind}"))
+                    "SELECT * FROM market.adjusted_bars WHERE period = %s ORDER BY ticker_id, date", (kind,)
                 ).fetchall()
                 for kind in ("daily", "weekly", "monthly")
             ),
@@ -311,7 +309,7 @@ def test_new_validated_inputs_after_staging_reject_stale_generation(pg_migrated_
         publish_staged(connection, first_context)
         _stale_run, stale_context = _stage_one(connection, target)
         before = (
-            connection.execute("SELECT * FROM market.adjusted_daily").fetchall(),
+            connection.execute("SELECT * FROM market.adjusted_bars WHERE period='daily'").fetchall(),
             connection.execute("SELECT * FROM market.latest_daily").fetchall(),
             connection.execute("SELECT * FROM market.publication_state").fetchall(),
         )
@@ -364,7 +362,7 @@ def test_new_validated_inputs_after_staging_reject_stale_generation(pg_migrated_
             publish_staged(connection, stale_context)
 
         assert (
-            connection.execute("SELECT * FROM market.adjusted_daily").fetchall(),
+            connection.execute("SELECT * FROM market.adjusted_bars WHERE period='daily'").fetchall(),
             connection.execute("SELECT * FROM market.latest_daily").fetchall(),
             connection.execute("SELECT * FROM market.publication_state").fetchall(),
         ) == before
@@ -378,7 +376,9 @@ def test_late_failure_rolls_back_metadata_and_product_tables(pg_migrated_databas
         publish_staged(connection, first_context)
         run_id, context = _stage_one(connection, target, name="Changed")
         period_rows = tuple(
-            connection.execute(sql.SQL("SELECT * FROM market.{}").format(sql.Identifier(f"adjusted_{kind}"))).fetchall()
+            connection.execute(
+                "SELECT * FROM market.adjusted_bars WHERE period = %s ORDER BY ticker_id, date", (kind,)
+            ).fetchall()
             for kind in ("daily", "weekly", "monthly")
         )
         before = (
@@ -403,7 +403,7 @@ def test_late_failure_rolls_back_metadata_and_product_tables(pg_migrated_databas
             connection.execute("SELECT * FROM market.ticker ORDER BY ticker_id").fetchall(),
             tuple(
                 connection.execute(
-                    sql.SQL("SELECT * FROM market.{}").format(sql.Identifier(f"adjusted_{kind}"))
+                    "SELECT * FROM market.adjusted_bars WHERE period = %s ORDER BY ticker_id, date", (kind,)
                 ).fetchall()
                 for kind in ("daily", "weekly", "monthly")
             ),
@@ -426,31 +426,37 @@ def test_period_keys_before_and_after_target_are_retained_and_obsolete_month_rem
         _run_id, _context = _stage_one(connection, target, future=True, prior_history=False)
         ticker_id = connection.execute("SELECT ticker_id FROM market.ticker WHERE symbol='TEST'").fetchone()[0]
         connection.execute(
-            """INSERT INTO market.adjusted_monthly
-               (ticker_id,date,open,high,low,close,volume,left_truncated,calendar_closed)
-               VALUES (%s,'2024-01-01',1,1,1,1,0,false,false),
-                      (%s,'2024-02-01',1,1,1,1,0,false,false),
-                      (%s,'2090-01-01',1,1,1,1,0,false,false)""",
+            """INSERT INTO market.adjusted_bars
+               (period,ticker_id,date,open,high,low,close,volume,left_truncated,calendar_closed)
+               VALUES ('monthly',%s,'2024-01-01',1,1,1,1,0,false,false),
+                      ('monthly',%s,'2024-02-01',1,1,1,1,0,false,false),
+                      ('monthly',%s,'2090-01-01',1,1,1,1,0,false,false)""",
             (ticker_id, ticker_id, ticker_id),
         )
         publish_staged(connection, _context)
         assert connection.execute(
-            "SELECT count(*) FROM market.adjusted_weekly WHERE ticker_id=%s AND date='2024-01-01'", (ticker_id,)
+            "SELECT count(*) FROM market.adjusted_bars WHERE period='weekly' AND ticker_id=%s AND date='2024-01-01'",
+            (ticker_id,),
         ).fetchone() == (1,)
         assert connection.execute(
-            "SELECT count(*) FROM market.adjusted_monthly WHERE ticker_id=%s AND date='2024-02-01'", (ticker_id,)
+            "SELECT count(*) FROM market.adjusted_bars WHERE period='monthly' AND ticker_id=%s AND date='2024-02-01'",
+            (ticker_id,),
         ).fetchone() == (1,)
         assert connection.execute(
-            "SELECT count(*) FROM market.adjusted_monthly WHERE ticker_id=%s AND date='2024-01-03'", (ticker_id,)
+            "SELECT count(*) FROM market.adjusted_bars WHERE period='monthly' AND ticker_id=%s AND date='2024-01-03'",
+            (ticker_id,),
         ).fetchone() == (0,)
         assert connection.execute(
-            "SELECT count(*) FROM market.adjusted_monthly WHERE ticker_id=%s AND date='2024-01-01'", (ticker_id,)
+            "SELECT count(*) FROM market.adjusted_bars WHERE period='monthly' AND ticker_id=%s AND date='2024-01-01'",
+            (ticker_id,),
         ).fetchone() == (0,)
         assert connection.execute(
-            "SELECT count(*) FROM market.adjusted_monthly WHERE ticker_id=%s AND date='2090-01-01'", (ticker_id,)
+            "SELECT count(*) FROM market.adjusted_bars WHERE period='monthly' AND ticker_id=%s AND date='2090-01-01'",
+            (ticker_id,),
         ).fetchone() == (1,)
         assert connection.execute(
-            "SELECT count(*) FROM market.adjusted_daily WHERE ticker_id=%s AND date='2024-02-01'", (ticker_id,)
+            "SELECT count(*) FROM market.adjusted_bars WHERE period='daily' AND ticker_id=%s AND date='2024-02-01'",
+            (ticker_id,),
         ).fetchone() == (1,)
         assert connection.execute(
             "SELECT date FROM market.latest_daily WHERE ticker_id=%s", (ticker_id,)
@@ -473,11 +479,9 @@ def test_latest_is_exact_target_eligible_projection_but_history_keeps_other_symb
             "SELECT t.symbol FROM market.latest_daily l JOIN market.ticker t USING(ticker_id) ORDER BY t.symbol"
         ).fetchall()
         assert latest_symbols == [("TEST",)]
-        assert connection.execute("SELECT screen_eligible FROM market.ticker WHERE symbol='UNKNOWN'").fetchone() == (
-            False,
-        )
+        assert connection.execute("SELECT active FROM market.ticker WHERE symbol='UNKNOWN'").fetchone() == (None,)
         histories = connection.execute(
-            "SELECT t.symbol,count(*) FROM market.adjusted_daily d JOIN market.ticker t USING(ticker_id) "
-            "GROUP BY t.symbol ORDER BY t.symbol"
+            "SELECT t.symbol,count(*) FROM market.adjusted_bars d JOIN market.ticker t USING(ticker_id) "
+            "WHERE d.period='daily' GROUP BY t.symbol ORDER BY t.symbol"
         ).fetchall()
         assert histories == [("INACTIVE", 1), ("OUTSIDE", 1), ("TEST", 2)]
