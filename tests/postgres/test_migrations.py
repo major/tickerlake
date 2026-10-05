@@ -294,7 +294,7 @@ def test_failing_migration_rolls_back_ddl_and_ledger_row(pg_owner_dsn: str, monk
 
     monkeypatch.setattr(migrations.resources, "files", lambda _: Directory())
     with writer_connection(pg_owner_dsn) as connection:
-        with pytest.raises(PostgresWriterError, match="migrations"):
+        with pytest.raises(psycopg.Error):
             apply_migrations(connection)
 
         assert connection.execute("SELECT to_regclass('ingest.partial_migration')").fetchone() == (None,)

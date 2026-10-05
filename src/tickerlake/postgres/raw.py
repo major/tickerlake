@@ -28,10 +28,6 @@ def _invalid() -> PostgresWriterError:
     return PostgresWriterError(_SAFE)
 
 
-def _storage_error() -> PostgresWriterError:
-    return PostgresWriterError("Could not store daily fetch outcome")
-
-
 def _validate_symbols(frame: pl.DataFrame) -> None:
     tickers = frame.get_column("ticker")
     if tickers.null_count() or any(not item.strip() for item in tickers.to_list()):
@@ -135,58 +131,53 @@ def store_daily_outcome(
     requested_date = request.requested_date
     if requested_date is None:
         raise _invalid()
-    try:
-        with connection.transaction():
-            manifest_id = None
-            if outcome.is_populated():
-                connection.execute("DROP TABLE IF EXISTS pg_temp.raw_stage")
-                connection.execute(
-                    """CREATE TEMP TABLE raw_stage (
-                           date date NOT NULL, symbol text NOT NULL,
-                           open real NOT NULL, high real NOT NULL, low real NOT NULL,
-                           close real NOT NULL, volume double precision NOT NULL
-                       ) ON COMMIT DROP"""
-                )
-                copying.copy_frame(connection, "raw_stage", frame, _COLUMNS)
-                staged = connection.execute(
-                    """SELECT count(*), count(*) FILTER (WHERE date IS DISTINCT FROM %s),
-                              count(DISTINCT symbol)
-                       FROM pg_temp.raw_stage""",
-                    (requested_date,),
-                ).fetchone()
-                if staged is None or staged[0] != frame.height or staged[1] != 0 or staged[2] != frame.height:
-                    raise _invalid()
-                connection.execute(
-                    """INSERT INTO market.ticker (symbol)
-                       SELECT DISTINCT symbol FROM pg_temp.raw_stage
-                       ON CONFLICT (symbol) DO NOTHING"""
-                )
-                changed = _changed(connection, requested_date)
-                if changed:
-                    connection.execute("DELETE FROM ingest.raw_daily WHERE date = %s", (requested_date,))
-                    connection.execute(
-                        """INSERT INTO ingest.raw_daily
-                               (date, ticker_id, open, high, low, close, volume)
-                           SELECT s.date, t.ticker_id, s.open, s.high, s.low, s.close, s.volume
-                           FROM pg_temp.raw_stage s JOIN market.ticker t USING (symbol)"""
-                    )
-            else:
-                changed = False
-            revision = (
-                advance_cache_revision(connection, requested_date)
-                if changed
-                else read_cache_state(connection).input_revision
+    with connection.transaction():
+        manifest_id = None
+        if outcome.is_populated():
+            connection.execute("DROP TABLE IF EXISTS pg_temp.raw_stage")
+            connection.execute(
+                """CREATE TEMP TABLE raw_stage (
+                       date date NOT NULL, symbol text NOT NULL,
+                       open real NOT NULL, high real NOT NULL, low real NOT NULL,
+                       close real NOT NULL, volume double precision NOT NULL
+                   ) ON COMMIT DROP"""
             )
-            manifest_id = record_fetch_outcome(connection, request, outcome)
-            if outcome.is_populated():
+            copying.copy_frame(connection, "raw_stage", frame, _COLUMNS)
+            staged = connection.execute(
+                """SELECT count(*), count(*) FILTER (WHERE date IS DISTINCT FROM %s),
+                          count(DISTINCT symbol)
+                   FROM pg_temp.raw_stage""",
+                (requested_date,),
+            ).fetchone()
+            if staged is None or staged[0] != frame.height or staged[1] != 0 or staged[2] != frame.height:
+                raise _invalid()
+            connection.execute(
+                """INSERT INTO market.ticker (symbol)
+                   SELECT DISTINCT symbol FROM pg_temp.raw_stage
+                   ON CONFLICT (symbol) DO NOTHING"""
+            )
+            changed = _changed(connection, requested_date)
+            if changed:
+                connection.execute("DELETE FROM ingest.raw_daily WHERE date = %s", (requested_date,))
                 connection.execute(
-                    """INSERT INTO ingest.raw_session (date, manifest_id)
-                       VALUES (%s, %s)
-                       ON CONFLICT (date) DO UPDATE SET manifest_id = EXCLUDED.manifest_id""",
-                    (requested_date, manifest_id),
+                    """INSERT INTO ingest.raw_daily
+                           (date, ticker_id, open, high, low, close, volume)
+                       SELECT s.date, t.ticker_id, s.open, s.high, s.low, s.close, s.volume
+                       FROM pg_temp.raw_stage s JOIN market.ticker t USING (symbol)"""
                 )
-            return revision
-    except PostgresWriterError:
-        raise
-    except psycopg.Error:
-        raise _storage_error() from None
+        else:
+            changed = False
+        revision = (
+            advance_cache_revision(connection, requested_date)
+            if changed
+            else read_cache_state(connection).input_revision
+        )
+        manifest_id = record_fetch_outcome(connection, request, outcome)
+        if outcome.is_populated():
+            connection.execute(
+                """INSERT INTO ingest.raw_session (date, manifest_id)
+                   VALUES (%s, %s)
+                   ON CONFLICT (date) DO UPDATE SET manifest_id = EXCLUDED.manifest_id""",
+                (requested_date, manifest_id),
+            )
+        return revision

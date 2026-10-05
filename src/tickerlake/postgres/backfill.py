@@ -62,6 +62,7 @@ _SAFE_CORRECTION: Final = "Backfill correction range must be two ordered dates"
 _SAFE_BATCH: Final = "Backfill batch size must be a positive integer"
 _SAFE_NOW: Final = "Backfill now must be a timezone-aware datetime"
 _SAFE_UPDATE: Final = "Update has no closed sessions to fetch"
+_SAFE_BACKFILL: Final = "PostgreSQL backfill failed"
 _SAFE_TICKERS_UNPOPULATED: Final = "Backfill ticker reference did not populate"
 _SAFE_SPLITS_UNPOPULATED: Final = "Backfill split coverage did not populate"
 _CORRECTION_PAIR_SIZE: Final = 2
@@ -298,7 +299,7 @@ def _fetch_reference_and_publish(
         raise
     except BackfillError:
         raise
-    except PostgresWriterError:
+    except PostgresWriterError, psycopg.Error:
         _fail_known(connection, run_id, _KNOWN_FAILURE_CODE)
         raise
 
@@ -327,6 +328,8 @@ def backfill(
         ValueError: If Massive credentials are missing.
         BackfillError: If inputs are invalid or the actionable range is empty.
         BackfillIncompleteError: If any requested closed session is not populated.
+        PostgresWriterError: If any PostgreSQL operation fails; the underlying
+            ``psycopg.Error`` is chained via ``from``.
         PublicationOutcomeUnknownError: Propagated unchanged when a COMMIT is unresolved.
     """
     database_url = _validate_config(config)
@@ -341,10 +344,13 @@ def backfill(
     if client is None:
         client = SdkMassiveClient(config)
 
-    with writer_connection(database_url) as connection:
-        return _fetch_reference_and_publish(
-            config, request, (connection, client), (selected, target), batch_size=batch_size
-        )
+    try:
+        with writer_connection(database_url) as connection:
+            return _fetch_reference_and_publish(
+                config, request, (connection, client), (selected, target), batch_size=batch_size
+            )
+    except psycopg.Error as error:
+        raise PostgresWriterError(_SAFE_BACKFILL) from error
 
 
 def update(
@@ -370,17 +376,20 @@ def update(
     target = resolve_closed_target(request.target if request.target is not None else config.end_date, now=now)
     if client is None:
         client = SdkMassiveClient(config)
-    with writer_connection(database_url) as connection:
-        # Scope depends on durable raw history, so choose it only after taking the
-        # same writer lock used by backfill and publication.
-        recent_dates = read_latest_raw_dates(connection, target)
-        if recent_dates:
-            selected = get_closed_sessions(min(recent_dates), target, now=now)
-        else:
-            selected = _selected_dates(config, request, target, now=now)
-        if not selected:
-            raise BackfillError(_SAFE_UPDATE)
+    try:
+        with writer_connection(database_url) as connection:
+            # Scope depends on durable raw history, so choose it only after taking the
+            # same writer lock used by backfill and publication.
+            recent_dates = read_latest_raw_dates(connection, target)
+            if recent_dates:
+                selected = get_closed_sessions(min(recent_dates), target, now=now)
+            else:
+                selected = _selected_dates(config, request, target, now=now)
+            if not selected:
+                raise BackfillError(_SAFE_UPDATE)
 
-        return _fetch_reference_and_publish(
-            config, request, (connection, client), (selected, target), batch_size=batch_size
-        )
+            return _fetch_reference_and_publish(
+                config, request, (connection, client), (selected, target), batch_size=batch_size
+            )
+    except psycopg.Error as error:
+        raise PostgresWriterError(_SAFE_BACKFILL) from error

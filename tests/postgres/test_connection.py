@@ -80,14 +80,13 @@ def test_transaction_level_lock_does_not_authorize_writer(pg_owner_dsn: str) -> 
             require_writer_connection(connection)
 
 
-def test_writer_operation_error_is_sanitized(pg_owner_dsn: str) -> None:
-    """Hide SQL details and bound values from writer errors."""
+def test_writer_operation_error_propagates_raw(pg_owner_dsn: str) -> None:
+    """Writer-body errors propagate as psycopg.Error; sanitization is at the CLI boundary."""
     private_value = "private_sql_value"
-    with pytest.raises(PostgresWriterError) as error, writer_connection(pg_owner_dsn) as connection:
+    with pytest.raises(psycopg.Error) as error, writer_connection(pg_owner_dsn) as connection:
         connection.execute("SELECT %s FROM missing_table", (private_value,))
-    assert private_value not in str(error.value)
-    assert "missing_table" not in str(error.value)
-    assert isinstance(error.value.__context__, psycopg.Error)
+    assert isinstance(error.value, psycopg.Error)
+    # Raw psycopg message is preserved (sanitization is at the CLI boundary, not here).
 
 
 def test_is_writer_connection_idle_when_open_and_idle() -> None:
