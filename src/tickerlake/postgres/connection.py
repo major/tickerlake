@@ -15,10 +15,7 @@ _ACTIVE_WRITERS: set[int] = set()
 
 _INVALID_DATABASE_URL = "PostgreSQL database URL must be a nonblank string"
 _INVALID_DATABASE_URL_FORMAT = "PostgreSQL database URL is invalid"
-_CONNECTION_FAILED = "Could not connect to PostgreSQL"
-_LOCK_ACQUIRE_FAILED = "Could not acquire PostgreSQL writer lock"
 _ANOTHER_WRITER_ACTIVE = "Another PostgreSQL writer is active"
-_WRITER_OPERATION_FAILED = "PostgreSQL writer operation failed"
 _LIVE_AUTOCOMMIT_REQUIRED = "A live autocommit writer connection is required"
 _LOCK_NOT_HELD = "PostgreSQL writer lock is not held"
 
@@ -37,25 +34,16 @@ def writer_connection(database_url: str) -> Iterator[psycopg.Connection]:
     except psycopg.ProgrammingError, TypeError, ValueError:
         raise PostgresWriterError(_INVALID_DATABASE_URL_FORMAT) from None
 
-    try:
-        connection = psycopg.connect(database_url, autocommit=True)
-    except psycopg.Error:
-        raise PostgresWriterError(_CONNECTION_FAILED) from None
+    connection = psycopg.connect(database_url, autocommit=True)
 
     locked = False
     try:
-        try:
-            row = connection.execute("SELECT pg_try_advisory_lock(%s)", (WRITER_LOCK_KEY,)).fetchone()
-        except psycopg.Error:
-            raise PostgresWriterError(_LOCK_ACQUIRE_FAILED) from None
+        row = connection.execute("SELECT pg_try_advisory_lock(%s)", (WRITER_LOCK_KEY,)).fetchone()
         locked = bool(row and row[0])
         if not locked:
             raise PostgresWriterError(_ANOTHER_WRITER_ACTIVE)
         _ACTIVE_WRITERS.add(id(connection))
-        try:
-            yield connection
-        except psycopg.Error:
-            raise PostgresWriterError(_WRITER_OPERATION_FAILED) from None
+        yield connection
     finally:
         _ACTIVE_WRITERS.discard(id(connection))
         if locked and not connection.closed:

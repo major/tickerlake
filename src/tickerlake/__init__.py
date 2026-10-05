@@ -62,6 +62,10 @@ def _dispatch_etl(parser: argparse.ArgumentParser, config: Config, command: str)
     try:
         {"backfill": pipeline.backfill, "update": pipeline.update, "info": pipeline.info}[command](config)
     except (ValueError, BackfillError, PostgresWriterError) as err:
+        # Log the chained cause (psycopg.Error, _validation failures, etc.) before
+        # printing the safe one-line message; without this Pick 2's wrap-with-cause
+        # pattern would never surface in operator-visible logs.
+        logging.getLogger(__name__).exception("%s failed", command)
         parser.error(str(err))
 
 

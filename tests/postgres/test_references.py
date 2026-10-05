@@ -586,7 +586,7 @@ def test_invalid_frame_and_sql_failure_roll_back_everything(
             raise psycopg.OperationalError("token=secret")
 
         monkeypatch.setattr(references, "advance_cache_revision", fail_after_revision)
-        with pytest.raises(PostgresWriterError, match="store PostgreSQL reference") as error:
+        with pytest.raises(psycopg.OperationalError, match="token=secret"):
             store_ticker_outcome(
                 conn,
                 request,
@@ -595,7 +595,6 @@ def test_invalid_frame_and_sql_failure_roll_back_everything(
                     _ticker_frame([("AAA", "Alpha", "CS", None, None, True)]),
                 ),
             )
-        assert error.value.__cause__ is None
         assert read_cache_state(conn).input_revision == 0
         assert conn.execute("SELECT count(*) FROM market.ticker").fetchone() == (0,)
         assert conn.execute("SELECT count(*) FROM ingest.fetch_manifest").fetchone() == (0,)

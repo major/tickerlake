@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from tickerlake.postgres.models import CacheState
 
 _INVALID_DATABASE_URL: Final = "PostgreSQL database URL must be a nonblank string"
-_CONNECTION_FAILED: Final = "Could not connect to PostgreSQL"
+_INVALID_DATABASE_URL_FORMAT: Final = "PostgreSQL database URL is invalid"
 _READ_FAILED: Final = "Could not read PostgreSQL database info"
 
 # User-owned tables reported by ``info``, in display order. Row counts come
@@ -88,24 +88,21 @@ def collect_info(database_url: str) -> DatabaseInfo:
     try:
         conninfo_to_dict(database_url)
     except psycopg.ProgrammingError, TypeError, ValueError:
-        raise PostgresWriterError(_INVALID_DATABASE_URL) from None
+        raise PostgresWriterError(_INVALID_DATABASE_URL_FORMAT) from None
 
     try:
         connection = psycopg.connect(database_url)
-    except psycopg.Error:
-        raise PostgresWriterError(_CONNECTION_FAILED) from None
-
-    try:
-        connection.read_only = True
-        with connection.transaction():
-            schemas = _read_schemas(connection)
-            table_counts = _read_table_counts(connection)
-            publication = _read_publication(connection)
-            cache = read_cache_state(connection)
-    except psycopg.Error:
-        raise PostgresWriterError(_READ_FAILED) from None
-    finally:
-        connection.close()
+        try:
+            connection.read_only = True
+            with connection.transaction():
+                schemas = _read_schemas(connection)
+                table_counts = _read_table_counts(connection)
+                publication = _read_publication(connection)
+                cache = read_cache_state(connection)
+        finally:
+            connection.close()
+    except psycopg.Error as error:
+        raise PostgresWriterError(_READ_FAILED) from error
 
     tables = tuple(
         TableInfo(schema=schema, table_name=table_name, row_count=table_counts.get((schema, table_name), 0))

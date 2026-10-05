@@ -24,7 +24,6 @@ _STAGE_NAMES = STAGE_NAMES | {
 _UNSUPPORTED_STAGE = "Unsupported PostgreSQL staging table"
 _INVALID_COLUMNS = "PostgreSQL staging columns must be unique and nonempty"
 _MISSING_COLUMNS = "PostgreSQL staging columns are missing from the frame"
-_COPY_FAILED = "Could not copy rows to PostgreSQL staging table"
 
 
 def copy_frame(
@@ -47,9 +46,6 @@ def copy_frame(
         sql.Identifier("pg_temp", stage_name),
         sql.SQL(", ").join(sql.Identifier(name) for name in columns),
     )
-    try:
-        with connection.cursor() as cursor, cursor.copy(statement) as copy:
-            for row in frame.select(columns).iter_rows():
-                copy.write_row(row)
-    except psycopg.Error:
-        raise PostgresWriterError(_COPY_FAILED) from None
+    with connection.cursor() as cursor, cursor.copy(statement) as copy:
+        for row in frame.select(columns).iter_rows():
+            copy.write_row(row)

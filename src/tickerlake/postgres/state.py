@@ -5,8 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Final
 from uuid import UUID, uuid4
 
-import psycopg
-
 from tickerlake.postgres._validation import is_date, require_unique_nonempty_strings
 from tickerlake.postgres.connection import PostgresWriterError, require_writer_connection
 from tickerlake.postgres.models import CacheState, FetchRequest, RunSpec
@@ -17,6 +15,8 @@ from tickerlake.postgres.models import CacheState, FetchRequest, RunSpec
 if TYPE_CHECKING:
     from collections.abc import Callable
     from datetime import date
+
+    import psycopg
 
     from tickerlake.outcomes import FetchOutcome
 
@@ -108,51 +108,41 @@ def start_run(connection: psycopg.Connection, spec: RunSpec) -> UUID:
     if not isinstance(spec.version, str) or not spec.version.strip():
         raise PostgresWriterError("Invalid PostgreSQL run version")
     run_id = uuid4()
-    try:
-        with connection.transaction():
-            row = connection.execute(
-                "SELECT input_revision FROM ingest.cache_state WHERE cache_state_id = 1"
-            ).fetchone()
-            if row is None:
-                raise PostgresWriterError("PostgreSQL cache state is unavailable")
-            connection.execute(
-                """INSERT INTO ingest.run
-                   (run_id, target_date, requested_start, requested_end, input_revision,
-                    version, state, started_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, 'running', now())""",
-                (
-                    run_id,
-                    spec.target,
-                    spec.requested_start,
-                    spec.requested_end,
-                    row[0],
-                    spec.version,
-                ),
-            )
-    except psycopg.Error:
-        raise PostgresWriterError("Could not start PostgreSQL run") from None
+    with connection.transaction():
+        row = connection.execute("SELECT input_revision FROM ingest.cache_state WHERE cache_state_id = 1").fetchone()
+        if row is None:
+            raise PostgresWriterError("PostgreSQL cache state is unavailable")
+        connection.execute(
+            """INSERT INTO ingest.run
+               (run_id, target_date, requested_start, requested_end, input_revision,
+                version, state, started_at)
+               VALUES (%s, %s, %s, %s, %s, %s, 'running', now())""",
+            (
+                run_id,
+                spec.target,
+                spec.requested_start,
+                spec.requested_end,
+                row[0],
+                spec.version,
+            ),
+        )
     return run_id
 
 
 def capture_run_inputs(connection: psycopg.Connection, run_id: UUID) -> int:
     """Capture the latest cache revision for a still-running run."""
     require_writer_connection(connection)
-    try:
-        with connection.transaction():
-            row = connection.execute(
-                "SELECT input_revision FROM ingest.cache_state WHERE cache_state_id = 1"
-            ).fetchone()
-            if row is None:
-                raise PostgresWriterError("PostgreSQL cache state is unavailable")
-            result = connection.execute(
-                "UPDATE ingest.run SET input_revision = %s WHERE run_id = %s AND state = 'running'",
-                (row[0], run_id),
-            )
-            if result.rowcount != 1:
-                raise PostgresWriterError("PostgreSQL run is not running")
-            return int(row[0])
-    except psycopg.Error:
-        raise PostgresWriterError("Could not capture PostgreSQL run inputs") from None
+    with connection.transaction():
+        row = connection.execute("SELECT input_revision FROM ingest.cache_state WHERE cache_state_id = 1").fetchone()
+        if row is None:
+            raise PostgresWriterError("PostgreSQL cache state is unavailable")
+        result = connection.execute(
+            "UPDATE ingest.run SET input_revision = %s WHERE run_id = %s AND state = 'running'",
+            (row[0], run_id),
+        )
+        if result.rowcount != 1:
+            raise PostgresWriterError("PostgreSQL run is not running")
+        return int(row[0])
 
 
 def fail_run(connection: psycopg.Connection, run_id: UUID, reason_code: str) -> None:
@@ -164,27 +154,21 @@ def fail_run(connection: psycopg.Connection, run_id: UUID, reason_code: str) -> 
 
 def _set_terminal(connection: psycopg.Connection, run_id: UUID, state: str, code: str | None) -> None:
     require_writer_connection(connection)
-    try:
-        with connection.transaction():
-            result = connection.execute(
-                """UPDATE ingest.run SET state = %s, failure_code = %s, ended_at = now()
-                   WHERE run_id = %s AND state = 'running'""",
-                (state, code, run_id),
-            )
-            if result.rowcount != 1:
-                raise PostgresWriterError("PostgreSQL run is not running")
-    except psycopg.Error:
-        raise PostgresWriterError("Could not finish PostgreSQL run") from None
+    with connection.transaction():
+        result = connection.execute(
+            """UPDATE ingest.run SET state = %s, failure_code = %s, ended_at = now()
+               WHERE run_id = %s AND state = 'running'""",
+            (state, code, run_id),
+        )
+        if result.rowcount != 1:
+            raise PostgresWriterError("PostgreSQL run is not running")
 
 
 def read_cache_state(connection: psycopg.Connection) -> CacheState:
     """Read cache state without requiring writer-lock ownership."""
-    try:
-        row = connection.execute(
-            "SELECT input_revision, retained_start, retained_end FROM ingest.cache_state WHERE cache_state_id = 1"
-        ).fetchone()
-    except psycopg.Error:
-        raise PostgresWriterError("Could not read PostgreSQL cache state") from None
+    row = connection.execute(
+        "SELECT input_revision, retained_start, retained_end FROM ingest.cache_state WHERE cache_state_id = 1"
+    ).fetchone()
     if row is None:
         raise PostgresWriterError("PostgreSQL cache state is unavailable")
     return CacheState(input_revision=row[0], retained_start=row[1], retained_end=row[2])
@@ -195,22 +179,19 @@ def advance_cache_revision(connection: psycopg.Connection, accepted_date: date |
     require_writer_connection(connection)
     if accepted_date is not None and not is_date(accepted_date):
         raise PostgresWriterError("Invalid PostgreSQL accepted date")
-    try:
-        with connection.transaction():
-            row = connection.execute(
-                """UPDATE ingest.cache_state SET input_revision = input_revision + 1,
-                   retained_start = CASE WHEN %s::date IS NULL THEN retained_start
-                     WHEN retained_start IS NULL THEN %s::date ELSE LEAST(retained_start, %s::date) END,
-                   retained_end = CASE WHEN %s::date IS NULL THEN retained_end
-                     WHEN retained_end IS NULL THEN %s::date ELSE GREATEST(retained_end, %s::date) END
-                   WHERE cache_state_id = 1 RETURNING input_revision""",
-                (accepted_date, accepted_date, accepted_date, accepted_date, accepted_date, accepted_date),
-            ).fetchone()
-            if row is None:
-                raise PostgresWriterError("PostgreSQL cache state is unavailable")
-            return int(row[0])
-    except psycopg.Error:
-        raise PostgresWriterError("Could not advance PostgreSQL cache revision") from None
+    with connection.transaction():
+        row = connection.execute(
+            """UPDATE ingest.cache_state SET input_revision = input_revision + 1,
+               retained_start = CASE WHEN %s::date IS NULL THEN retained_start
+                 WHEN retained_start IS NULL THEN %s::date ELSE LEAST(retained_start, %s::date) END,
+               retained_end = CASE WHEN %s::date IS NULL THEN retained_end
+                 WHEN retained_end IS NULL THEN %s::date ELSE GREATEST(retained_end, %s::date) END
+               WHERE cache_state_id = 1 RETURNING input_revision""",
+            (accepted_date, accepted_date, accepted_date, accepted_date, accepted_date, accepted_date),
+        ).fetchone()
+        if row is None:
+            raise PostgresWriterError("PostgreSQL cache state is unavailable")
+        return int(row[0])
 
 
 def record_fetch_outcome(connection: psycopg.Connection, request: FetchRequest, outcome: FetchOutcome) -> int:
@@ -218,35 +199,32 @@ def record_fetch_outcome(connection: psycopg.Connection, request: FetchRequest, 
     require_writer_connection(connection)
     _validate_fetch_inputs(request, outcome)
     row_count = outcome.frame.height
-    try:
-        with connection.transaction():
-            running = connection.execute(
-                "SELECT 1 FROM ingest.run WHERE run_id = %s AND state = 'running'", (request.run_id,)
-            ).fetchone()
-            if running is None:
-                raise PostgresWriterError("PostgreSQL run is not running")
-            result = connection.execute(
-                """INSERT INTO ingest.fetch_manifest
-                   (run_id, source, requested_date, requested_start, requested_end, requested_ticker_types,
-                    started_at, finished_at, status, row_count, diagnostic_code)
-                   VALUES (%s, %s, %s, %s, %s, %s, statement_timestamp(),
-                           statement_timestamp(), %s, %s, %s)
-                     RETURNING manifest_id""",
-                (
-                    request.run_id,
-                    request.source,
-                    request.requested_date,
-                    request.requested_start,
-                    request.requested_end,
-                    list(request.ticker_types) if request.source == "tickers" else None,
-                    outcome.status.value,
-                    row_count,
-                    outcome.diagnostic,
-                ),
-            )
-            row = result.fetchone()
-            if row is None:
-                raise PostgresWriterError("Could not record PostgreSQL fetch outcome")
-            return int(row[0])
-    except psycopg.Error:
-        raise PostgresWriterError("Could not record PostgreSQL fetch outcome") from None
+    with connection.transaction():
+        running = connection.execute(
+            "SELECT 1 FROM ingest.run WHERE run_id = %s AND state = 'running'", (request.run_id,)
+        ).fetchone()
+        if running is None:
+            raise PostgresWriterError("PostgreSQL run is not running")
+        result = connection.execute(
+            """INSERT INTO ingest.fetch_manifest
+               (run_id, source, requested_date, requested_start, requested_end, requested_ticker_types,
+                started_at, finished_at, status, row_count, diagnostic_code)
+               VALUES (%s, %s, %s, %s, %s, %s, statement_timestamp(),
+                       statement_timestamp(), %s, %s, %s)
+                 RETURNING manifest_id""",
+            (
+                request.run_id,
+                request.source,
+                request.requested_date,
+                request.requested_start,
+                request.requested_end,
+                list(request.ticker_types) if request.source == "tickers" else None,
+                outcome.status.value,
+                row_count,
+                outcome.diagnostic,
+            ),
+        )
+        row = result.fetchone()
+        if row is None:
+            raise PostgresWriterError("Could not record PostgreSQL fetch outcome")
+        return int(row[0])

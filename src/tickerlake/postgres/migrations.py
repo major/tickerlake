@@ -22,7 +22,6 @@ _ERRORS = {
     "unknown": "Database has an unknown PostgreSQL migration version",
     "checksum": "Applied PostgreSQL migration checksum does not match",
     "order": "PostgreSQL migration order is invalid",
-    "apply": "Could not apply PostgreSQL migrations",
 }
 
 
@@ -58,43 +57,38 @@ def apply_migrations(connection: psycopg.Connection) -> None:
     require_writer_connection(connection)
     migrations = _migration_files()
 
-    try:
-        with connection.transaction():
-            connection.execute("CREATE SCHEMA IF NOT EXISTS ingest")
-            connection.execute(
-                """CREATE TABLE IF NOT EXISTS ingest.schema_migration (
+    with connection.transaction():
+        connection.execute("CREATE SCHEMA IF NOT EXISTS ingest")
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS ingest.schema_migration (
                        version integer PRIMARY KEY,
                        filename text NOT NULL UNIQUE,
                        checksum text NOT NULL CHECK (checksum ~ '^[0-9a-f]{64}$'),
                        applied_at timestamptz NOT NULL DEFAULT now()
                    )"""
-            )
-            applied_rows = connection.execute(
-                "SELECT version, filename, checksum FROM ingest.schema_migration ORDER BY version"
-            ).fetchall()
-            applied = {int(row[0]): (row[1], row[2]) for row in applied_rows}
-            if sorted(applied) != list(range(1, len(applied) + 1)):
-                _fail("history")
-            known = {version: (name, hashlib.sha256(sql).hexdigest()) for version, name, sql in migrations}
-            if any(version not in known for version in applied):
-                _fail("unknown")
-            for version, prior in applied.items():
-                if prior != known[version]:
-                    _fail("checksum")
+        )
+        applied_rows = connection.execute(
+            "SELECT version, filename, checksum FROM ingest.schema_migration ORDER BY version"
+        ).fetchall()
+        applied = {int(row[0]): (row[1], row[2]) for row in applied_rows}
+        if sorted(applied) != list(range(1, len(applied) + 1)):
+            _fail("history")
+        known = {version: (name, hashlib.sha256(sql).hexdigest()) for version, name, sql in migrations}
+        if any(version not in known for version in applied):
+            _fail("unknown")
+        for version, prior in applied.items():
+            if prior != known[version]:
+                _fail("checksum")
 
-            next_version = len(applied) + 1
-            for version, filename, sql in migrations[next_version - 1 :]:
-                if version != next_version:
-                    _fail("order")
-                # The migration text comes only from UTF-8-validated packaged resources, never user input.
-                trusted_migration: LiteralString = cast("LiteralString", sql.decode("utf-8"))
-                connection.execute(pg_sql.SQL(trusted_migration))
-                connection.execute(
-                    "INSERT INTO ingest.schema_migration (version, filename, checksum) VALUES (%s, %s, %s)",
-                    (version, filename, hashlib.sha256(sql).hexdigest()),
-                )
-                next_version += 1
-    except PostgresWriterError:
-        raise
-    except psycopg.Error:
-        _fail("apply")
+        next_version = len(applied) + 1
+        for version, filename, sql in migrations[next_version - 1 :]:
+            if version != next_version:
+                _fail("order")
+            # The migration text comes only from UTF-8-validated packaged resources, never user input.
+            trusted_migration: LiteralString = cast("LiteralString", sql.decode("utf-8"))
+            connection.execute(pg_sql.SQL(trusted_migration))
+            connection.execute(
+                "INSERT INTO ingest.schema_migration (version, filename, checksum) VALUES (%s, %s, %s)",
+                (version, filename, hashlib.sha256(sql).hexdigest()),
+            )
+            next_version += 1

@@ -186,23 +186,18 @@ def _store(
         _fail("Non-populated reference outcome must have an empty frame")
 
     changed = False
-    try:
-        with connection.transaction():
-            if outcome.is_populated():
-                changed = (
-                    _store_tickers(connection, request, outcome.frame)
-                    if source == "tickers"
-                    else _store_splits(connection, request, outcome.frame)
-                )
-            revision = advance_cache_revision(connection) if changed else None
-            record_fetch_outcome(connection, request, outcome)
-            if revision is None:
-                revision = read_cache_state(connection).input_revision
-            return revision
-    except PostgresWriterError:
-        raise
-    except psycopg.Error:
-        _fail("Could not store PostgreSQL reference outcome")
+    with connection.transaction():
+        if outcome.is_populated():
+            changed = (
+                _store_tickers(connection, request, outcome.frame)
+                if source == "tickers"
+                else _store_splits(connection, request, outcome.frame)
+            )
+        revision = advance_cache_revision(connection) if changed else None
+        record_fetch_outcome(connection, request, outcome)
+        if revision is None:
+            revision = read_cache_state(connection).input_revision
+        return revision
 
 
 def _store_tickers(connection: psycopg.Connection, request: FetchRequest, frame: pl.DataFrame) -> bool:

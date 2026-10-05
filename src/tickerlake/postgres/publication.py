@@ -38,8 +38,6 @@ _TYPES_SEQUENCE = "Ticker types must be a sequence"
 _TYPES_INVALID = "Ticker types must be unique nonempty strings"
 _REVISION_MISMATCH = "PostgreSQL run and cache revisions do not agree"
 _TARGET_UNACCEPTED = "Target session has no accepted populated raw evidence"
-_PREPARE_FAILED = "Could not prepare PostgreSQL publication stages"
-_STAGE_FAILED = "Could not stage PostgreSQL product batch"
 _PUBLISH_FAILED = "Could not publish PostgreSQL products"
 _PRODUCT_TYPES: dict[str, LiteralString] = {
     "period": "text",
@@ -104,13 +102,10 @@ def _require_idle_writer(connection: psycopg.Connection) -> None:
 
 
 def _verify_staged_context(connection: psycopg.Connection, context: BuildContext) -> None:
-    try:
-        row = connection.execute(
-            """SELECT run_id,input_revision,retained_start,retained_end,target_session,ticker_types
-               FROM pg_temp.publication_context WHERE context_id=1"""
-        ).fetchone()
-    except psycopg.Error:
-        raise PostgresWriterError(_CONTEXT_MISMATCH) from None
+    row = connection.execute(
+        """SELECT run_id,input_revision,retained_start,retained_end,target_session,ticker_types
+           FROM pg_temp.publication_context WHERE context_id=1"""
+    ).fetchone()
     if (
         row is None
         or row[0] != context.run_id
@@ -157,63 +152,60 @@ def prepare_publication(
     ).fetchone()
     if accepted is None:
         raise PostgresWriterError(_TARGET_UNACCEPTED)
-    try:
-        for name in (*STAGE_NAMES, "publication_ticker_stage", "publication_scope", "publication_context"):
-            connection.execute(sql.SQL("DROP TABLE IF EXISTS pg_temp.{}").format(sql.Identifier(name)))
-        connection.execute(
-            """CREATE TEMP TABLE publication_ticker_stage (
-                   ticker_id integer PRIMARY KEY, symbol text NOT NULL UNIQUE,
-                   name text, ticker_type text, primary_exchange text, cik text, active boolean
-               ) ON COMMIT PRESERVE ROWS"""
-        )
-        connection.execute(
-            """INSERT INTO pg_temp.publication_ticker_stage
-               (ticker_id,symbol,name,ticker_type,primary_exchange,cik,active)
-               SELECT t.ticker_id,t.symbol,r.name,r.ticker_type,r.primary_exchange,r.cik,r.active
-               FROM market.ticker t LEFT JOIN ingest.ticker_reference r USING(ticker_id)
-               ORDER BY t.ticker_id"""
-        )
-        connection.execute(
-            "CREATE TEMP TABLE publication_scope (ticker_id integer PRIMARY KEY, complete boolean NOT NULL) "
-            "ON COMMIT PRESERVE ROWS"
-        )
-        connection.execute(
-            """CREATE TEMP TABLE publication_context (
-                   context_id integer PRIMARY KEY DEFAULT 1 CHECK (context_id = 1),
-                   run_id uuid NOT NULL, input_revision bigint NOT NULL,
-                   retained_start date, retained_end date, target_session date NOT NULL,
-                   ticker_types text[] NOT NULL
-               ) ON COMMIT PRESERVE ROWS"""
-        )
-        connection.execute(
-            """INSERT INTO pg_temp.publication_context
-               (context_id,run_id,input_revision,retained_start,retained_end,target_session,ticker_types)
-               VALUES (1,%s,%s,%s,%s,%s,%s)""",
-            (run_id, revision, retained_start, retained_end, target, list(types)),
-        )
-        for kind, name in _STAGES.items():
-            columns = _STAGE_COLUMNS[kind]
-            definitions = sql.SQL(", ").join(
-                sql.SQL("{} {}{} ").format(
-                    sql.Identifier(column),
-                    sql.SQL(_PRODUCT_TYPES[column]),
-                    sql.SQL(" NOT NULL") if column in {"period", "ticker_id", "date"} else sql.SQL(""),
-                )
-                for column in columns
+    for name in (*STAGE_NAMES, "publication_ticker_stage", "publication_scope", "publication_context"):
+        connection.execute(sql.SQL("DROP TABLE IF EXISTS pg_temp.{}").format(sql.Identifier(name)))
+    connection.execute(
+        """CREATE TEMP TABLE publication_ticker_stage (
+               ticker_id integer PRIMARY KEY, symbol text NOT NULL UNIQUE,
+               name text, ticker_type text, primary_exchange text, cik text, active boolean
+           ) ON COMMIT PRESERVE ROWS"""
+    )
+    connection.execute(
+        """INSERT INTO pg_temp.publication_ticker_stage
+           (ticker_id,symbol,name,ticker_type,primary_exchange,cik,active)
+           SELECT t.ticker_id,t.symbol,r.name,r.ticker_type,r.primary_exchange,r.cik,r.active
+           FROM market.ticker t LEFT JOIN ingest.ticker_reference r USING(ticker_id)
+           ORDER BY t.ticker_id"""
+    )
+    connection.execute(
+        "CREATE TEMP TABLE publication_scope (ticker_id integer PRIMARY KEY, complete boolean NOT NULL) "
+        "ON COMMIT PRESERVE ROWS"
+    )
+    connection.execute(
+        """CREATE TEMP TABLE publication_context (
+               context_id integer PRIMARY KEY DEFAULT 1 CHECK (context_id = 1),
+               run_id uuid NOT NULL, input_revision bigint NOT NULL,
+               retained_start date, retained_end date, target_session date NOT NULL,
+               ticker_types text[] NOT NULL
+           ) ON COMMIT PRESERVE ROWS"""
+    )
+    connection.execute(
+        """INSERT INTO pg_temp.publication_context
+           (context_id,run_id,input_revision,retained_start,retained_end,target_session,ticker_types)
+           VALUES (1,%s,%s,%s,%s,%s,%s)""",
+        (run_id, revision, retained_start, retained_end, target, list(types)),
+    )
+    for kind, name in _STAGES.items():
+        columns = _STAGE_COLUMNS[kind]
+        definitions = sql.SQL(", ").join(
+            sql.SQL("{} {}{} ").format(
+                sql.Identifier(column),
+                sql.SQL(_PRODUCT_TYPES[column]),
+                sql.SQL(" NOT NULL") if column in {"period", "ticker_id", "date"} else sql.SQL(""),
             )
-            connection.execute(
-                sql.SQL("CREATE TEMP TABLE {} ({}) ON COMMIT PRESERVE ROWS").format(sql.Identifier(name), definitions)
-            )
-        return BuildContext(
-            run_id=run_id,
-            input_revision=revision,
-            retained_start=retained_start,
-            retained_end=retained_end,
-            target_session=target,
-            ticker_types=tuple(types),
+            for column in columns
         )
-    except psycopg.Error:
-        raise PostgresWriterError(_PREPARE_FAILED) from None
+        connection.execute(
+            sql.SQL("CREATE TEMP TABLE {} ({}) ON COMMIT PRESERVE ROWS").format(sql.Identifier(name), definitions)
+        )
+    return BuildContext(
+        run_id=run_id,
+        input_revision=revision,
+        retained_start=retained_start,
+        retained_end=retained_end,
+        target_session=target,
+        ticker_types=tuple(types),
+    )
 
 
 def stage_batch(
@@ -226,33 +218,28 @@ def stage_batch(
     _require_idle_writer(connection)
     _verify_staged_context(connection, context)
     ids, copied = _checked_batch(connection, identities, products)
-    try:
-        with connection.transaction():
-            connection.execute(
-                """INSERT INTO pg_temp.publication_scope (ticker_id, complete)
-                   SELECT ticker_id, false FROM pg_temp.publication_ticker_stage WHERE ticker_id = ANY(%s)
-                   ON CONFLICT (ticker_id) DO UPDATE SET complete = false""",
+    with connection.transaction():
+        connection.execute(
+            """INSERT INTO pg_temp.publication_scope (ticker_id, complete)
+               SELECT ticker_id, false FROM pg_temp.publication_ticker_stage WHERE ticker_id = ANY(%s)
+               ON CONFLICT (ticker_id) DO UPDATE SET complete = false""",
+            (ids,),
+        )
+        for kind, frame in copied:
+            copy_frame(connection, _STAGES[kind], frame, _STAGE_COLUMNS[kind])
+            flags = sql.SQL(" OR left_truncated IS NULL OR calendar_closed IS NULL") if kind != "daily" else sql.SQL("")
+            invalid = connection.execute(
+                sql.SQL(
+                    """SELECT 1 FROM {} WHERE ticker_id=ANY(%s) AND
+                       (open IS NULL OR high IS NULL OR low IS NULL OR close IS NULL
+                        OR volume IS NULL OR volume < 0
+                        {flags}) LIMIT 1"""
+                ).format(sql.Identifier("pg_temp", _STAGES[kind]), flags=flags),
                 (ids,),
-            )
-            for kind, frame in copied:
-                copy_frame(connection, _STAGES[kind], frame, _STAGE_COLUMNS[kind])
-                flags = (
-                    sql.SQL(" OR left_truncated IS NULL OR calendar_closed IS NULL") if kind != "daily" else sql.SQL("")
-                )
-                invalid = connection.execute(
-                    sql.SQL(
-                        """SELECT 1 FROM {} WHERE ticker_id=ANY(%s) AND
-                           (open IS NULL OR high IS NULL OR low IS NULL OR close IS NULL
-                            OR volume IS NULL OR volume < 0
-                            {flags}) LIMIT 1"""
-                    ).format(sql.Identifier("pg_temp", _STAGES[kind]), flags=flags),
-                    (ids,),
-                ).fetchone()
-                if invalid is not None:
-                    _fail()
-            connection.execute("UPDATE pg_temp.publication_scope SET complete=true WHERE ticker_id=ANY(%s)", (ids,))
-    except psycopg.Error:
-        raise PostgresWriterError(_STAGE_FAILED) from None
+            ).fetchone()
+            if invalid is not None:
+                _fail()
+        connection.execute("UPDATE pg_temp.publication_scope SET complete=true WHERE ticker_id=ANY(%s)", (ids,))
 
 
 def _checked_batch(
@@ -541,9 +528,9 @@ def publish_staged(connection: psycopg.Connection, context: BuildContext) -> Pub
     except psycopg.Error as error:
         if commit_started:
             if _commit_is_known_rollback(connection, context.run_id):
-                raise PostgresWriterError(_PUBLISH_FAILED) from None
+                raise PostgresWriterError(_PUBLISH_FAILED) from error
             raise PublicationOutcomeUnknownError(context.run_id) from error
-        raise PostgresWriterError(_PUBLISH_FAILED) from None
+        raise PostgresWriterError(_PUBLISH_FAILED) from error
 
 
 def resolve_publication(database_url: str, run_id: UUID) -> PublicationResolution:
@@ -562,7 +549,7 @@ def resolve_publication(database_url: str, run_id: UUID) -> PublicationResolutio
             return PublicationResolution(
                 published=run[0] == "published", is_current=bool(marker and marker[0] == run_id)
             )
-    except PostgresWriterError as error:
+    except (PostgresWriterError, psycopg.Error) as error:
         if isinstance(error, PublicationOutcomeUnknownError):
             raise
         raise PublicationOutcomeUnknownError(run_id) from error

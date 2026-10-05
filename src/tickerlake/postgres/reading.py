@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, LiteralString, NoReturn
 
 import polars as pl
-import psycopg
 
 from tickerlake.extract import DAILY_AGGS_SCHEMA, SPLITS_SCHEMA, TICKERS_SCHEMA
 from tickerlake.postgres._validation import is_date, require_unique_nonempty_strings
@@ -14,6 +13,8 @@ from tickerlake.postgres.connection import PostgresWriterError
 if TYPE_CHECKING:
     import datetime
     from collections.abc import Mapping, Sequence
+
+    import psycopg
 
 _MAX_BATCH = 1000
 _MAX_REFERENCE_TYPES = 20
@@ -33,12 +34,9 @@ def _empty(schema: Mapping[str, FrameSchemaValue], columns: tuple[str, ...]) -> 
 def _query(
     connection: psycopg.Connection, statement: LiteralString, params: tuple[object, ...]
 ) -> list[tuple[object, ...]]:
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute(statement, params)
-            return cursor.fetchall()
-    except psycopg.Error:
-        _fail("Could not read PostgreSQL market data")
+    with connection.cursor() as cursor:
+        cursor.execute(statement, params)
+        return cursor.fetchall()
 
 
 def _frame(
@@ -76,15 +74,12 @@ def read_latest_raw_dates(connection: psycopg.Connection, target: datetime.date)
     """Read at most the five latest distinct raw dates no later than target."""
     if not is_date(target):
         _fail("Daily target must be a date")
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT DISTINCT date FROM ingest.raw_daily WHERE date <= %s ORDER BY date DESC LIMIT 5",
-                (target,),
-            )
-            rows = cursor.fetchall()
-    except psycopg.Error:
-        _fail("Could not read PostgreSQL market data")
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT DISTINCT date FROM ingest.raw_daily WHERE date <= %s ORDER BY date DESC LIMIT 5",
+            (target,),
+        )
+        rows = cursor.fetchall()
     dates = [row[0] for row in rows]
     if any(not is_date(value) for value in dates):
         _fail("Stored daily dates must be dates")
