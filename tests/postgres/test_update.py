@@ -10,6 +10,7 @@ import psycopg
 import pytest
 
 from tickerlake.calendar import get_closed_sessions
+from tickerlake.client import DailyAgg, SplitRecord, TickerRecord
 from tickerlake.config import Config
 from tickerlake.postgres import backfill as backfill_module
 from tickerlake.postgres.connection import writer_connection
@@ -25,20 +26,20 @@ NOW = datetime.datetime(2026, 1, 2, 22, 0, tzinfo=datetime.UTC)
 SYMBOLS = ("ACTIVE", "INACTIVE")
 
 
-def _row(day: date, symbol: str, close: float = 11.0) -> dict[str, object]:
+def _row(day: date, symbol: str, close: float = 11.0) -> DailyAgg:
     timestamp = datetime.datetime(day.year, day.month, day.day, tzinfo=datetime.UTC).timestamp() * 1000
-    return {
-        "timestamp": float(int(timestamp)),
-        "ticker": symbol,
-        "open": close - 1.0,
-        "high": close + 1.0,
-        "low": close - 2.0,
-        "close": close,
-        "volume": 100.0,
-    }
+    return DailyAgg(
+        ticker=symbol,
+        open=close - 1.0,
+        high=close + 1.0,
+        low=close - 2.0,
+        close=close,
+        volume=100.0,
+        timestamp=int(timestamp),
+    )
 
 
-def _rows(day: date, close: float = 11.0) -> list[dict[str, object]]:
+def _rows(day: date, close: float = 11.0) -> list[DailyAgg]:
     return [_row(day, symbol, close) for symbol in SYMBOLS]
 
 
@@ -82,42 +83,40 @@ def _public_snapshot(database_url: str) -> dict[str, list[tuple[object, ...]]]:
 class FakeMassiveClient:
     """Provider fake for raw daily bars and the reference data used by ingestion."""
 
-    daily: dict[date, list[dict[str, object]]] = field(default_factory=dict)
+    daily: dict[date, list[DailyAgg]] = field(default_factory=dict)
     failed_dates: set[date] = field(default_factory=set)
     daily_calls: list[date] = field(default_factory=list)
 
-    def fetch_daily_aggs(self, day: date) -> list[dict[str, object]]:
+    def fetch_daily_aggs(self, day: date) -> list[DailyAgg]:
         """Return the configured day's raw bars or raise a transport failure."""
         self.daily_calls.append(day)
         if day in self.failed_dates:
             raise RuntimeError
         return self.daily.get(day, [])
 
-    def fetch_splits(self, start_date: date, end_date: date) -> list[dict[str, object]]:
+    def fetch_splits(self, start_date: date, end_date: date) -> list[SplitRecord]:
         """Return no split events for this test provider."""
         return []
 
-    def fetch_tickers(self, types: list[str]) -> list[dict[str, object]]:
+    def fetch_tickers(self, types: list[str]) -> list[TickerRecord]:
         """Return the two test securities for the requested type."""
         return [
-            {
-                "ticker": symbol,
-                "name": symbol.title(),
-                "type": types[0],
-                "primary_exchange": "X",
-                "cik": None,
-                "active": symbol == "ACTIVE",
-            }
+            TickerRecord(
+                ticker=symbol,
+                name=symbol.title(),
+                type=types[0],
+                primary_exchange="X",
+                cik=None,
+                active=symbol == "ACTIVE",
+            )
             for symbol in SYMBOLS
         ]
 
 
 @pytest.fixture
-def massive(monkeypatch: pytest.MonkeyPatch) -> FakeMassiveClient:
-    """Install a recording provider fake at the external Massive boundary."""
-    provider = FakeMassiveClient()
-    monkeypatch.setattr(backfill_module, "MassiveClient", lambda _config: provider)
-    return provider
+def massive() -> FakeMassiveClient:
+    """Provide a recording provider fake at the external Massive boundary."""
+    return FakeMassiveClient()
 
 
 def _seed_date(
@@ -127,7 +126,7 @@ def _seed_date(
     close: float = 11.0,
 ) -> None:
     massive.daily = {day: _rows(day, close)}
-    backfill_module.backfill(_config(database_url, day, day), _request(day), now=NOW)
+    backfill_module.backfill(_config(database_url, day, day), _request(day), now=NOW, client=massive)
 
 
 def test_update_refreshes_five_cached_sessions_preserves_gaps_and_retained_bounds(
@@ -148,7 +147,7 @@ def test_update_refreshes_five_cached_sessions_preserves_gaps_and_retained_bound
     # dates inside the trailing calendar interval.
     massive.daily = {day: _rows(day, 12.0) for day in sessions}
     massive.daily_calls.clear()
-    backfill_module.update(config, _update_request(target), now=NOW)
+    backfill_module.update(config, _update_request(target), now=NOW, client=massive)
 
     expected_window = tuple(day for day in cached if day >= sessions[-6])
     expected_fetch = tuple(day for day in sessions if sessions[-6] <= day <= target)
@@ -179,7 +178,7 @@ def test_rejected_refresh_keeps_publication_but_persists_accepted_neighbor_revis
     dsn = pg_migrated_database.owner_dsn
     sessions = tuple(get_closed_sessions(datetime.date(2024, 1, 2), datetime.date(2024, 1, 17), now=NOW))
     massive.daily = {day: _rows(day) for day in sessions}
-    backfill_module.backfill(_config(dsn, sessions[0], sessions[-1]), _request(sessions[-1]), now=NOW)
+    backfill_module.backfill(_config(dsn, sessions[0], sessions[-1]), _request(sessions[-1]), now=NOW, client=massive)
     snapshot_before = _public_snapshot(dsn)
     revision_before = _query(dsn, "SELECT input_revision FROM ingest.cache_state WHERE cache_state_id=1")[0][0]
     failed_day = sessions[-3]
@@ -189,7 +188,7 @@ def test_rejected_refresh_keeps_publication_but_persists_accepted_neighbor_revis
     massive.failed_dates = {failed_day}
 
     with pytest.raises(backfill_module.BackfillIncompleteError):
-        backfill_module.update(_config(dsn, sessions[0], sessions[-1]), _update_request(), now=NOW)
+        backfill_module.update(_config(dsn, sessions[0], sessions[-1]), _update_request(), now=NOW, client=massive)
 
     failed_run = _query(
         dsn, "SELECT run_id,failure_code FROM ingest.run WHERE state='failed' ORDER BY started_at DESC LIMIT 1"
@@ -228,7 +227,9 @@ def test_update_correction_matches_full_rebuild(pg_migrated_database, tmp_path, 
     sessions = tuple(get_closed_sessions(datetime.date(2023, 1, 3), datetime.date(2023, 10, 31), now=NOW))
     close_by_day = {day: 20.0 + index / 20 for index, day in enumerate(sessions)}
     massive.daily = {day: _rows(day, close) for day, close in close_by_day.items()}
-    backfill_module.backfill(_config(dsn, sessions[0], sessions[-1]), _request(sessions[-1]), now=NOW, batch_size=37)
+    backfill_module.backfill(
+        _config(dsn, sessions[0], sessions[-1]), _request(sessions[-1]), now=NOW, batch_size=37, client=massive
+    )
 
     corrected = sessions[-3]
     newly_cached = sessions[-1] + datetime.timedelta(days=1)
@@ -240,7 +241,7 @@ def test_update_correction_matches_full_rebuild(pg_migrated_database, tmp_path, 
     close_by_day[newly_cached] = 31.0
     massive.daily = {day: _rows(day, close) for day, close in close_by_day.items()}
     config = _config(dsn, sessions[0], newly_cached)
-    backfill_module.update(config, _update_request(newly_cached), now=NOW)
+    backfill_module.update(config, _update_request(newly_cached), now=NOW, client=massive)
 
     active_id = _query(dsn, "SELECT ticker_id FROM market.ticker WHERE symbol='ACTIVE'")[0][0]
     assert _query(
