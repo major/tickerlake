@@ -165,9 +165,10 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
+          load: true
 
       - name: Smoke test container image
         run: |
-          docker run --rm "${{ steps.meta.outputs.image }}:latest" --help
-          docker run --rm --entrypoint id "${{ steps.meta.outputs.image }}:latest"
+          docker run --rm "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" --help
+          docker run --rm --entrypoint id "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
