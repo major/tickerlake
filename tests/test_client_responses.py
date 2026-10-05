@@ -3,46 +3,16 @@
 # ruff: noqa: D103
 
 import datetime
-import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
-from urllib3.response import HTTPResponse
 
-from tickerlake.client import SdkMassiveClient
-from tickerlake.config import Config
+from tests.conftest import FakeTransport, response
 from tickerlake.extract import extract_daily_aggs, extract_splits, extract_tickers
 from tickerlake.outcomes import FetchStatus
 
-
-class FakeTransport:
-    """Serve queued HTTP responses through urllib3's request boundary."""
-
-    def __init__(self, responses: list[HTTPResponse]) -> None:
-        """Store response sequence and begin recording requests."""
-        self.responses = iter(responses)
-        self.requests: list[tuple[str, str, dict[str, Any] | None]] = []
-
-    def request(self, method: str, url: str, *, fields: dict[str, Any] | None, headers: Any) -> HTTPResponse:
-        """Return the next response from the deterministic queue."""
-        del headers
-        self.requests.append((method, url, fields))
-        return next(self.responses)
-
-
-def response(payload: Any, *, status: int = 200) -> HTTPResponse:
-    """Create a real urllib3 response with a JSON body."""
-    body = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
-    return HTTPResponse(body=body, status=status)
-
-
-@pytest.fixture
-def client_and_transport(tmp_path: Any) -> tuple[SdkMassiveClient, FakeTransport]:
-    config = Config(api_key="test-key")
-    client = SdkMassiveClient(config)
-    transport = FakeTransport([])
-    client._client.client = transport  # noqa: SLF001
-    return client, transport
+if TYPE_CHECKING:
+    from tickerlake.client import SdkMassiveClient
 
 
 def test_daily_aggs_parses_two_pages_and_uses_raw_endpoint_flags(
