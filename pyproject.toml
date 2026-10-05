@@ -9,7 +9,7 @@ authors = [
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "exchange-calendars>=4.13.2",
-    "massive>=2.4.0",
+    "massive>=2.8,<3",
     "polars>=1.39.0",
     "psycopg[binary]>=3.3",
     "rich>=14.0.0",

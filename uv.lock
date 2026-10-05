@@ -772,7 +772,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "exchange-calendars", specifier = ">=4.13.2" },
-    { name = "massive", specifier = ">=2.4.0" },
+    { name = "massive", specifier = ">=2.8,<3" },
     { name = "polars", specifier = ">=1.39.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3" },
     { name = "rich", specifier = ">=14.0.0" },
