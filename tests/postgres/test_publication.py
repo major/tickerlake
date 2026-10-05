@@ -261,15 +261,14 @@ def test_reprepared_staging_context_cannot_publish_another_run(pg_migrated_datab
             publish_staged(connection, replace(context_b, target_session=date(2024, 1, 3)))
 
 
-def test_staged_metadata_corruption_cannot_change_reference_or_published_generation(pg_migrated_database) -> None:
-    """The publication rejects tampered metadata stages without changing durable metadata."""
+def test_tampered_publication_scope_rejects_publish_and_preserves_state(pg_migrated_database) -> None:
+    """The publication rejects a tampered scope table without changing durable state."""
     target = date(2024, 1, 2)
     with writer_connection(pg_migrated_database.owner_dsn) as connection:
         _first_run, first_context = _stage_one(connection, target)
         publish_staged(connection, first_context)
         run_id, context = _stage_one(connection, target, name="Legitimate refresh")
         before = (
-            connection.execute("SELECT * FROM ingest.ticker_reference ORDER BY ticker_id").fetchall(),
             connection.execute("SELECT * FROM market.ticker ORDER BY ticker_id").fetchall(),
             tuple(
                 connection.execute(
@@ -280,13 +279,11 @@ def test_staged_metadata_corruption_cannot_change_reference_or_published_generat
             connection.execute("SELECT * FROM market.latest_daily").fetchall(),
             connection.execute("SELECT * FROM market.publication_state").fetchall(),
         )
-        connection.execute("UPDATE pg_temp.publication_ticker_stage SET name='Tampered' WHERE symbol='TEST'")
-
+        # Tamper: mark every staged ticker as NOT complete so the incomplete check fails.
+        connection.execute("UPDATE pg_temp.publication_scope SET complete = false")
         with pytest.raises(PostgresWriterError):
             publish_staged(connection, context)
-
         after = (
-            connection.execute("SELECT * FROM ingest.ticker_reference ORDER BY ticker_id").fetchall(),
             connection.execute("SELECT * FROM market.ticker ORDER BY ticker_id").fetchall(),
             tuple(
                 connection.execute(
@@ -387,7 +384,6 @@ def test_late_failure_rolls_back_metadata_and_product_tables(pg_migrated_databas
             connection.execute("SELECT * FROM market.latest_daily").fetchall(),
             connection.execute("SELECT * FROM market.publication_state").fetchall(),
             connection.execute("SELECT * FROM ingest.run ORDER BY started_at,run_id").fetchall(),
-            connection.execute("SELECT * FROM ingest.ticker_reference ORDER BY ticker_id").fetchall(),
         )
         connection.execute(
             """CREATE FUNCTION pg_temp.reject_publication() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -410,7 +406,6 @@ def test_late_failure_rolls_back_metadata_and_product_tables(pg_migrated_databas
             connection.execute("SELECT * FROM market.latest_daily").fetchall(),
             connection.execute("SELECT * FROM market.publication_state").fetchall(),
             connection.execute("SELECT * FROM ingest.run ORDER BY started_at,run_id").fetchall(),
-            connection.execute("SELECT * FROM ingest.ticker_reference ORDER BY ticker_id").fetchall(),
         )
         assert after == before
         assert connection.execute("SELECT state FROM ingest.run WHERE run_id=%s", (first_run,)).fetchone() == (

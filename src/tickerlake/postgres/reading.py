@@ -177,9 +177,10 @@ def read_ticker_reference(connection: psycopg.Connection, ticker_types: Sequence
     )
     rows = _query(
         connection,
-        """SELECT t.symbol, r.name, r.ticker_type, r.primary_exchange, r.cik, r.active
-           FROM ingest.ticker_reference AS r JOIN market.ticker AS t USING (ticker_id)
-           WHERE r.ticker_type = ANY(%s) ORDER BY t.symbol, r.ticker_type""",
+        """SELECT symbol, name, ticker_type, primary_exchange, cik, active
+           FROM market.ticker
+           WHERE ticker_type = ANY(%s)
+           ORDER BY symbol, ticker_type""",
         (types,),
     )
     return _frame(rows, TICKERS_SCHEMA, ("ticker", "name", "type", "primary_exchange", "cik", "active"))

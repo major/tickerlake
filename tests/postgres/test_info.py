@@ -90,7 +90,6 @@ def test_collect_info_reports_seeded_state(pg_migrated_database) -> None:
     assert {(table.schema, table.table_name) for table in result.tables} == {
         ("ingest", "raw_daily"),
         ("ingest", "split_event"),
-        ("ingest", "ticker_reference"),
         ("ingest", "run"),
         ("ingest", "cache_state"),
         ("market", "adjusted_bars"),

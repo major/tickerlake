@@ -688,7 +688,7 @@ def test_ticker_metadata_shrink_blocks_and_preserves_references(
     dsn = pg_migrated_database.owner_dsn
     _bootstrap(dsn, massive)
     before = _public_snapshot(dsn)
-    assert _rows(dsn, "SELECT count(*) FROM ingest.ticker_reference") == [(2,)]
+    assert _rows(dsn, "SELECT count(*) FROM market.ticker WHERE ticker_type IS NOT NULL") == [(2,)]
 
     massive.ticker_override = lambda types: _ticker_records(types)[:1]
 
@@ -696,7 +696,7 @@ def test_ticker_metadata_shrink_blocks_and_preserves_references(
         backfill_module.backfill(_config(dsn), _request(), now=AFTER_CLOSE, client=massive)
 
     assert _public_snapshot(dsn) == before
-    assert _rows(dsn, "SELECT count(*) FROM ingest.ticker_reference") == [(2,)]
+    assert _rows(dsn, "SELECT count(*) FROM market.ticker WHERE ticker_type IS NOT NULL") == [(2,)]
 
 
 # ---------------------------------------------------------------------------
