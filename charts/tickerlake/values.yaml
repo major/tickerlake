@@ -12,7 +12,7 @@ image:
   # -- to use your own (for example ghcr.io/you/tickerlake).
   repository: ghcr.io/major/tickerlake
   # -- Container image tag. When empty the chart falls back to .Chart.AppVersion.
-  tag: "@sha256:9bab5f63934bfea55f92bf39ed19e7eb94bf7f6287fb149d595c92378b9c9922"
+  tag: "@sha256:0d344ee59d3e3c2971bd4f4c8f1ceec4dad691f12aaa4377de1bbb35ac15c224"
   # -- Image pull policy for the CronJob container.
   pullPolicy: IfNotPresent
 
